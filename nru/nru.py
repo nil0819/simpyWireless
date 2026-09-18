@@ -26,6 +26,47 @@ from common.packet import pick_traffic_class
 # Rashed-Step 15.A-09-18-2026-start
 from ran.protocol.channel_access import LbtChannelAccess, generate_backoff_slots as _lbt_generate_backoff_slots
 # Rashed-Step 15.A-09-18-2026-end
+# Rashed-Step 15.D-09-18-2026-start
+from enum import Enum
+# Rashed-Step 15.D-09-18-2026-end
+
+
+# Rashed-Step 15.D-09-18-2026-start
+class NruDeploymentMode(Enum):
+    """
+    Which real-world NR-U deployment this gNB/UE pair is modeling - see
+    "Project details/Step pre_15.txt" Section 4's "Bidirectional
+    uplink/downlink channel access" subsection for the full background
+    on both modes.
+
+    STANDALONE_MULTIFIRE (the default, per Rashed's confirmed decision,
+      2026-09-18): both downlink AND uplink live entirely in the
+      unlicensed band, both LBT-gated (Cat-4). Fully functional as of
+      Step 15.C - Gnb's downlink LBT (already existed) and NrUE's
+      uplink LBT (Step 15.C, via the shared
+      ran.protocol.channel_access.LbtChannelAccess both now use) are
+      exactly this mode; no mode-specific branching is needed anywhere
+      in Gnb/NrUE, since STANDALONE_MULTIFIRE *is* "both directions use
+      LBT", which is simply how this simulator's NR-U already behaves.
+
+    LAA_ANCHORED: downlink in the unlicensed band (still LBT-gated -
+      real LAA's DL is a Cat-4 LBT burst too, same as MultiFire's),
+      uplink in a LICENSED anchor cell instead (grant-based, no LBT at
+      all) - a fundamentally different uplink mechanism from
+      STANDALONE_MULTIFIRE's, not a variant of it. Recognized here as a
+      real enum value so config/CLI code can start referring to it, but
+      NOT wired to any functional behavior yet - it needs an anchor
+      licensed-NR gNB and the Section 6 orchestrator-unification
+      prerequisite (simulation.py/simulation_nr.py currently build
+      completely separate Channel objects), neither of which exists as
+      of Step 15.D. Selecting it and actually trying to use NrUE's
+      LBT-based uplink (Step 15.C) raises NotImplementedError instead
+      of silently giving you MultiFire-shaped behavior under an
+      LAA_ANCHORED label - see NrUE.__post_init__ in nru/ue.py.
+    """
+    STANDALONE_MULTIFIRE = "standalone_multifire"
+    LAA_ANCHORED = "laa_anchored"
+# Rashed-Step 15.D-09-18-2026-end
 
 
 # Rashed-Step 5.D-02-06-2026-start
@@ -139,6 +180,17 @@ class Config_NR:
     bandwidth_mhz: float = 20.0
     noise_figure_db: float = 7.0
     # Rashed-Step 5.C-02-06-2026-end
+
+    # Rashed-Step 15.D-09-18-2026-start
+    # Which real-world NR-U deployment this config models - see
+    # NruDeploymentMode's own docstring above. STANDALONE_MULTIFIRE
+    # (default, per Rashed's confirmed decision, 2026-09-18) is fully
+    # functional as of Step 15.C. LAA_ANCHORED is recognized but not yet
+    # wired to anything - see NrUE.__post_init__ in nru/ue.py for the
+    # guard that raises NotImplementedError rather than silently
+    # misbehaving if it's selected with uplink_enabled=True.
+    deployment_mode: NruDeploymentMode = NruDeploymentMode.STANDALONE_MULTIFIRE
+    # Rashed-Step 15.D-09-18-2026-end
 
 
 
@@ -290,6 +342,28 @@ class Gnb:
         self.pos = pos
         self.ue_list = ue_list
         # Rashed-Step 1.C_2-12-26-2025-end
+        # Rashed-Step 15.D-09-18-2026-start
+        # Surfaced onto self for visibility/future use (e.g. a later
+        # sub-step's scheduler/RRC orchestration reading it directly off
+        # the gNB) - no branching on it here, since Gnb's existing
+        # downlink LBT behavior is already correct for both
+        # STANDALONE_MULTIFIRE and (eventually) LAA_ANCHORED's downlink
+        # side (real LAA's DL is Cat-4-LBT-gated too, same as
+        # MultiFire's - the two modes only actually differ on uplink).
+        self.deployment_mode = config_nr.deployment_mode
+        # Rashed-Step 15.D-09-18-2026-end
+        # Rashed-Step 15.C-09-18-2026-start
+        # Back-reference each associated UE to this gNB object, mirroring
+        # wifi.WiFi.__init__'s sta.ap = self (Step 15.B) - a UE whose
+        # uplink_enabled=True (see nru/ue.py's NrUE) can then compute a
+        # real rx_pos/sinr target and read this gNB's live
+        # next_sync_slot_boundry for its own LBT gap-wait, without this
+        # simulator needing a second, independent per-UE sync process.
+        # No-op for every UE that doesn't use uplink, i.e. byte-identical
+        # to every pre-15.C run.
+        for ue in self.ue_list:
+            ue.gnb = self
+        # Rashed-Step 15.C-09-18-2026-end
         # Rashed-Step 5.G-02-06-2026-start
         self.mobility = mobility
         # Rashed-Step 5.G-02-06-2026-end
