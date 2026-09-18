@@ -34,6 +34,12 @@ from nr.nr import Config_NRL
 @click.option("--rate-adapt", "rate_adapt", is_flag=True, default=False, help="Enable AHEAD-OF-TIME rate adaptation (Step 13.E.3): MCS is chosen from the UE's last-measured SINR BEFORE this slot's real SINR is known, instead of the default oracle/post-hoc pick (which already has perfect real-time channel knowledge and can only fail below MCS0). A wrong ahead-of-time guess is a genuine failure (DROPPED) here. Default (unset/False) = the pre-13.E.3 oracle behavior, byte-identical to every earlier run.")
 @click.option("--rate-adapt-ml-model", "rate_adapt_ml_model", type=str, default=None, help="Path to a trained SINR-prediction model (ml/train_sinr_model.py's saved output). When set, --rate-adapt's ahead-of-time pick uses the model's PREDICTED next SINR instead of the raw last-measured value, once a UE's link has enough history. Requires --rate-adapt also set.")
 # Rashed-Step 13.E.3-08-23-2026-end
+# Rashed-Step 15.G-09-18-2026-start
+@click.option("--tdd-enabled", "tdd_enabled", is_flag=True, default=False, help="Enable licensed-NR TDD uplink scheduling (Step 15.E): run_one_slot() cycles --tdd-pattern instead of every slot being DL. Default (unset/False) = every slot stays DL, byte-identical to every pre-15.E run. Only useful combined with --ue-uplink-enabled (a 'U' slot with no uplink-capable UE simply does nothing that slot, by design).")
+@click.option("--tdd-pattern", "tdd_pattern", type=str, default="DDDU", help="TDD D/U slot pattern, cycled per slot index. Only read when --tdd-enabled is set. Default 'DDDU' matches Config_NRL.tdd_pattern's own class default.")
+@click.option("--ue-uplink-enabled", "ue_uplink_enabled", is_flag=True, default=False, help="Enable real licensed-NR uplink (Step 15.E): every UE gets a one-time SchedulingRequest timer, then becomes a standing grant-based UL candidate on 'U' slots (see nr/ue.py's NrUeLicensed class docstring). Default (unset/False) = every UE stays passive (no uplink at all), byte-identical to every pre-15.E run.")
+@click.option("--rrc-enabled", "rrc_enabled", is_flag=True, default=False, help="Enable the generic RRC attach state machine (Step 15.F) for every UE: IDLE -> CONNECTING -> CONNECTED, via a real RRCSetupRequest/RRCSetup/RRCSetupComplete exchange that reuses the SchedulingRequest->grant delay for its uplink messages (deterministic timing, unlike NR-U's LBT-contention-driven version). Requires --ue-uplink-enabled too (fails fast otherwise). Once set, the gNB's own DL/UL scheduling (Step 15.G) is gated on rrc_state==CONNECTED - see Project details/Step pre_15.txt's STEP 15 - 15.G DONE section. Default (unset/False) = every UE has no rrc_state at all, byte-identical to every pre-15.F run.")
+# Rashed-Step 15.G-09-18-2026-end
 def single_run_nr(
         runs, seed, gnb_number, ues_per_gnb, simulation_time,
         area_w, area_h, gnb_pos, ue_radius,
@@ -42,8 +48,21 @@ def single_run_nr(
         # Rashed-Step 13.E.3-08-23-2026-start
         export_packets_csv_path=None, rate_adapt=False, rate_adapt_ml_model=None,
         # Rashed-Step 13.E.3-08-23-2026-end
+        # Rashed-Step 15.G-09-18-2026-start
+        tdd_enabled=False, tdd_pattern="DDDU", ue_uplink_enabled=False, rrc_enabled=False,
+        # Rashed-Step 15.G-09-18-2026-end
 ):
     gnb_positions = parse_pos_list_nr(gnb_pos, "--gnb-pos") if gnb_pos else None
+
+    # Rashed-Step 15.G-09-18-2026-start
+    if rrc_enabled and not ue_uplink_enabled:
+        raise click.BadParameter(
+            "--rrc-enabled requires --ue-uplink-enabled to also be set "
+            "(RRC attach needs real uplink capability to send "
+            "RRCSetupRequest/RRCSetupComplete - see ran/protocol/rrc.py's "
+            "module docstring)."
+        )
+    # Rashed-Step 15.G-09-18-2026-end
 
     # Rashed-Step 13.E.3-08-23-2026-start
     if rate_adapt_ml_model and not rate_adapt:
@@ -73,6 +92,10 @@ def single_run_nr(
         rate_adapt_enabled=rate_adapt,
         sinr_predictor=sinr_predictor,
         # Rashed-Step 13.E.3-08-23-2026-end
+        # Rashed-Step 15.G-09-18-2026-start
+        tdd_enabled=tdd_enabled,
+        tdd_pattern=tdd_pattern,
+        # Rashed-Step 15.G-09-18-2026-end
     )
 
     for i in range(runs):
@@ -88,6 +111,10 @@ def single_run_nr(
             # Rashed-Step 13.E.3-08-23-2026-start
             export_packets_csv_path=export_packets_csv_path,
             # Rashed-Step 13.E.3-08-23-2026-end
+            # Rashed-Step 15.G-09-18-2026-start
+            nr_ue_uplink_enabled=ue_uplink_enabled,
+            nr_rrc_enabled=rrc_enabled,
+            # Rashed-Step 15.G-09-18-2026-end
         )
 
 

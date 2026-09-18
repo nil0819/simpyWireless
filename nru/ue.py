@@ -184,6 +184,19 @@ class NrUE:
         if self.rrc_enabled:
             self.rrc_state = RrcState.IDLE
         # Rashed-Step 15.F-09-18-2026-end
+        # Rashed-Step 15.G-09-18-2026-start
+        # "wake me up when RRC connects" event - created here (unused/
+        # None-holding attribute doesn't even exist when rrc_enabled=
+        # False) so start_uplink() below has something deterministic to
+        # yield on before it starts genuinely contending for real
+        # uplink data traffic. Fired by ran.protocol.rrc.RrcLayer.
+        # attach() the instant this UE's rrc_state actually becomes
+        # RrcState.CONNECTED (see that method's own comment) - not
+        # polled, so the gate releases on the exact same simulated tick
+        # as rrc_connected_at.
+        if self.rrc_enabled:
+            self._rrc_connected_event = self.env.event()
+        # Rashed-Step 15.G-09-18-2026-end
         self.env.process(self.start_uplink())
 
     def _make_packet(self) -> Packet:
@@ -351,6 +364,17 @@ class NrUE:
                 "UE in its own ue_list - see this class's own "
                 "docstring's WIRING section)."
             )
+        # Rashed-Step 15.G-09-18-2026-start
+        # Gate real uplink DATA traffic on RRC connection setup, when
+        # this UE opted into RRC - see __post_init__'s own comment on
+        # self._rrc_connected_event and ran/protocol/rrc.py's RrcLayer.
+        # attach()'s firing side. No-op (returns immediately) when
+        # rrc_enabled=False, exactly as before Step 15.G - this UE's
+        # uplink starts contending the instant the simulation clock
+        # starts, same as every pre-15.F/15.G run.
+        if self.rrc_enabled:
+            yield self._rrc_connected_event
+        # Rashed-Step 15.G-09-18-2026-end
         while True:
             packet = self._make_packet()
             self.transmission_to_send = self.gen_new_transmission(packet)

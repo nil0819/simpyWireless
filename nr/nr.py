@@ -32,6 +32,9 @@ from ran.protocol.channel_access import SlotScheduledAccess
 # Rashed-Step 15.F-09-18-2026-start
 from ran.protocol.rrc import RrcLayer
 # Rashed-Step 15.F-09-18-2026-end
+# Rashed-Step 15.G-09-18-2026-start
+from ran.protocol.rrc import RrcState
+# Rashed-Step 15.G-09-18-2026-end
 
 
 # ---------------------------------------------------------------------
@@ -585,7 +588,27 @@ class GnbLicensedNR:
         # Rashed-Step 15.E-09-18-2026-end
 
     def _run_dl_slot(self):
-        alloc = self._allocate_rbs()
+        # Rashed-Step 15.G-09-18-2026-start
+        # Scheduler/RRC integration: only schedule UEs that are RRC-
+        # CONNECTED (or never opted into RRC at all - getattr(...,
+        # RrcState.CONNECTED) default preserves every pre-15.F/15.G
+        # UE's existing "always eligible" behavior). Uses the new
+        # allocate_dl_for() (candidate-set-parametrized, mirrors 15.E's
+        # allocate_ul()) instead of _allocate_rbs()/allocate()'s zero-
+        # arg dispatch, so the already directly-unit-tested
+        # _round_robin_allocation()/_proportional_fair_allocation()
+        # methods themselves stay completely untouched (test/
+        # test_nr_licensed.py's direct calls keep working exactly as
+        # before - see channel_access.py's allocate_dl_for() docstring
+        # for the full reasoning). Byte-identical to the old
+        # self._allocate_rbs() call whenever no UE in ue_list has
+        # rrc_enabled=True (candidate_ues == self.ue_list in that case).
+        candidate_ues = [
+            ue for ue in self.ue_list
+            if getattr(ue, "rrc_state", RrcState.CONNECTED) is RrcState.CONNECTED
+        ]
+        alloc = self._channel_access.allocate_dl_for(self, candidate_ues)
+        # Rashed-Step 15.G-09-18-2026-end
         if not alloc:
             yield self.env.timeout(self.slot_us)
             return
@@ -713,6 +736,14 @@ class GnbLicensedNR:
         candidate_ues = [
             ue for ue in self.ue_list
             if getattr(ue, "uplink_enabled", False) and getattr(ue, "ul_ready", False)
+            # Rashed-Step 15.G-09-18-2026-start
+            # Same rrc_state==CONNECTED (or never-opted-in) filter as
+            # _run_dl_slot() above - a granted, ul_ready UE still can't
+            # actually be scheduled for real uplink data until its RRC
+            # attach has finished (see this module's own class
+            # docstring update for Step 15.G).
+            and getattr(ue, "rrc_state", RrcState.CONNECTED) is RrcState.CONNECTED
+            # Rashed-Step 15.G-09-18-2026-end
         ]
         if not candidate_ues:
             yield self.env.timeout(self.slot_us)

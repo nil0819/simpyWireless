@@ -210,4 +210,40 @@ class SlotScheduledAccess:
         )
         return rr_alloc
     # Rashed-Step 15.E-09-18-2026-end
+
+    # Rashed-Step 15.G-09-18-2026-start
+    def allocate_dl_for(self, scheduler: Any, candidate_ues: list) -> Dict[str, int]:
+        """
+        DL counterpart to allocate_ul() above, added for Step 15.G's
+        "GnbLicensedNR's scheduler starts filtering ue_list by
+        rrc_state == CONNECTED" requirement. allocate() (the zero-arg
+        dispatch, still used wherever no filtering is needed/wanted)
+        is DELIBERATELY left untouched - it still reads
+        scheduler.ue_list unconditionally via
+        _round_robin_allocation()/_proportional_fair_allocation(),
+        exactly as test/test_nr_licensed.py's existing direct calls
+        require (see this module's own class docstring and 15.E's
+        identical reasoning for not touching those two methods).
+
+        Reuses the SAME _round_robin_allocation_for()/
+        _proportional_fair_allocation_for() cores allocate_ul() already
+        reuses, against scheduler's DL-side state (scheduler._rr_
+        pointer / scheduler._pf_avg_rate / scheduler._trial_sinr_db -
+        the pre-existing DL trackers, NOT the UL-specific _ul ones), so
+        RRC-filtered DL scheduling is byte-identical to the unfiltered
+        allocate() path whenever candidate_ues == scheduler.ue_list
+        (i.e. whenever no UE in this gNB's cell has rrc_enabled=True -
+        see GnbLicensedNR._run_dl_slot()'s own getattr(ue, "rrc_state",
+        RrcState.CONNECTED) backward-compat filter).
+        """
+        if scheduler.config.scheduler == "proportional_fair":
+            return scheduler._proportional_fair_allocation_for(
+                candidate_ues, scheduler._pf_avg_rate,
+                trial_sinr_fn=scheduler._trial_sinr_db,
+            )
+        rr_alloc, scheduler._rr_pointer = scheduler._round_robin_allocation_for(
+            candidate_ues, scheduler._rr_pointer
+        )
+        return rr_alloc
+    # Rashed-Step 15.G-09-18-2026-end
 # Rashed-Step 15.A-09-18-2026-end

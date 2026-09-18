@@ -175,6 +175,10 @@ def parse_traffic_class_mix(raw_values, label: str):
 # Rashed-Step 13.E.1-08-23-2026-start
 @click.option("--wifi-rate-adapt-ml-model", "wifi_rate_adapt_ml_model", type=str, default=None, help="Same idea as --nru-rate-adapt-ml-model, for Wi-Fi. When set, Wi-Fi's rate adaptation (--wifi-rate-adapt, required alongside this flag) switches from ARF's success/fail-streak logic to a CQI-style direct MCS pick from the model's PREDICTED next SINR, once a link has enough history. Default (unset/None) = every pre-Step-13.E run's exact ARF behavior. The same model file trained for NR-U works here too (it was trained with a technology_is_wifi feature already) - no separate Wi-Fi model needed.")
 # Rashed-Step 13.E.1-08-23-2026-end
+# Rashed-Step 15.G-09-18-2026-start
+@click.option("--nru-ue-uplink-enabled", "nru_ue_uplink_enabled", is_flag=True, default=False, help="Enable real NR-U uplink (Step 15.C): every UE gets a genuine Cat-4 LBT uplink transmit path (contention-based, saturated traffic only - see nru/ue.py's NrUE class docstring). Default (unset/False) = every UE stays the passive position+label object it always was, byte-identical to every pre-15.C run.")
+@click.option("--nru-rrc-enabled", "nru_rrc_enabled", is_flag=True, default=False, help="Enable the generic RRC attach state machine (Step 15.F) for every NR-U UE: IDLE -> CONNECTING -> CONNECTED, via a real RRCSetupRequest/RRCSetup/RRCSetupComplete exchange that genuinely waits through LBT contention. Requires --nru-ue-uplink-enabled too (RRC attach needs real uplink capability - fails fast otherwise). Once set, the gNB's own downlink scheduling AND each UE's own uplink data traffic (Step 15.G) are gated on rrc_state==CONNECTED - see Project details/Step pre_15.txt's STEP 15 - 15.G DONE section. Default (unset/False) = every UE has no rrc_state at all, byte-identical to every pre-15.F run.")
+# Rashed-Step 15.G-09-18-2026-end
 
 def single_run(
         runs: int,
@@ -272,6 +276,10 @@ def single_run(
         gnb_mobility_linear_duration_s: float = 0.0,
         ue_follow_gnb_offset: str = None,
         # Rashed-Step 14.D-08-28-2026-end
+        # Rashed-Step 15.G-09-18-2026-start
+        nru_ue_uplink_enabled: bool = False,
+        nru_rrc_enabled: bool = False,
+        # Rashed-Step 15.G-09-18-2026-end
 ):
     backoffs = {key: {ap_number: 0} for key in range(wifi_cw_max + 1)}
     airtime_data = {"Station {}".format(i): 0 for i in range(1, ap_number + 1)}
@@ -367,6 +375,20 @@ def single_run(
         wifi_sinr_predictor = SinrPredictor(wifi_rate_adapt_ml_model)
     # Rashed-Step 13.E.1-08-23-2026-end
 
+    # Rashed-Step 15.G-09-18-2026-start
+    # Same fail-fast-at-the-CLI convention as the --wifi-edca/--nru-
+    # rate-adapt-ml-model guards above - NrUE.__post_init__ would raise
+    # this same ValueError anyway, but at construction time deep inside
+    # simulation.py, not here at the CLI entry point.
+    if nru_rrc_enabled and not nru_ue_uplink_enabled:
+        raise click.BadParameter(
+            "--nru-rrc-enabled requires --nru-ue-uplink-enabled to also "
+            "be set (RRC attach needs real uplink capability to send "
+            "RRCSetupRequest/RRCSetupComplete - see ran/protocol/rrc.py's "
+            "module docstring)."
+        )
+    # Rashed-Step 15.G-09-18-2026-end
+
     # Rashed-Step 8.B-08-06-2026-start
     # Rashed-Step 8.C-08-06-2026: added packet_size_bytes=... (defaults
     # to None, matching TrafficConfig's own default - unset means "use
@@ -461,6 +483,10 @@ def single_run(
                        gnb_mobility_linear_duration_s=gnb_mobility_linear_duration_s,
                        ue_follow_gnb_offset=ue_follow_gnb_offset_pos,
                        # Rashed-Step 14.D-08-28-2026-end
+                       # Rashed-Step 15.G-09-18-2026-start
+                       nru_ue_uplink_enabled=nru_ue_uplink_enabled,
+                       nru_rrc_enabled=nru_rrc_enabled,
+                       # Rashed-Step 15.G-09-18-2026-end
                        )
 
 

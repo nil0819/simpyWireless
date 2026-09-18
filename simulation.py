@@ -39,6 +39,9 @@ from common.packet import write_packet_report
 # Rashed-Step 9.D-08-07-2026-start
 from common.packet import export_packets_csv
 # Rashed-Step 9.D-08-07-2026-end
+# Rashed-Step 15.G-09-18-2026-start
+from ran.protocol.rrc import compute_connection_setup_stats
+# Rashed-Step 15.G-09-18-2026-end
 
 
 # Rashed-Step 1.D_2-12-26-2025-start
@@ -138,6 +141,19 @@ def run_simulation(
         # RelativeMobility's docstring.
         ue_follow_gnb_offset: Optional[Pos] = None,
         # Rashed-Step 14.D-08-28-2026-end
+        # Rashed-Step 15.G-09-18-2026-start
+        # Opt-in NR-U uplink (Step 15.C) + generic RRC attach (Step
+        # 15.F) for every UE this function constructs - False (default,
+        # both) means every NrUE(...) built below gets neither kwarg
+        # set at all (uplink_enabled/rrc_enabled stay at THEIR OWN
+        # False defaults), byte-identical to every pre-15.G run.
+        # nru_rrc_enabled=True requires nru_ue_uplink_enabled=True too
+        # (NrUE.__post_init__'s own fail-fast validation - see nru/
+        # ue.py), so this function doesn't duplicate that check, it
+        # just lets the ValueError surface naturally.
+        nru_ue_uplink_enabled: bool = False,
+        nru_rrc_enabled: bool = False,
+        # Rashed-Step 15.G-09-18-2026-end
 ):
     random.seed(seed)
     environment = simpy.Environment()
@@ -329,8 +345,15 @@ def run_simulation(
                 # Rashed-Step 5.A-02-06-2026-end
                 gnb_name=gnb_name,
                 # Rashed-Step 5.G-02-06-2026-start
-                mobility=ue_mobility
+                mobility=ue_mobility,
                 # Rashed-Step 5.G-02-06-2026-end
+                # Rashed-Step 15.G-09-18-2026-start
+                env=environment if nru_ue_uplink_enabled else None,
+                channel=channel if nru_ue_uplink_enabled else None,
+                config_nr=configNr if nru_ue_uplink_enabled else None,
+                uplink_enabled=nru_ue_uplink_enabled,
+                rrc_enabled=nru_rrc_enabled,
+                # Rashed-Step 15.G-09-18-2026-end
             )
             ues_for_gnb.append(ue)
             ues.append(ue)
@@ -510,6 +533,23 @@ def run_simulation(
     print(f'NRU packet throughput (Mbps): {nru_throughput_mbps}')
     print(f'NRU packet avg latency (us): {nru_pkt_stats["avg_latency_us"]}')
     # Rashed-Step 14.A-08-28-2026-end
+
+    # Rashed-Step 15.G-09-18-2026-start
+    # RRC connection-setup metrics - only printed when at least one UE
+    # actually opted into RRC (nru_rrc_enabled=True), so a default
+    # (nru_rrc_enabled=False) run's stdout is byte-identical to every
+    # pre-15.G run - see compute_connection_setup_stats()'s own
+    # docstring in ran/protocol/rrc.py for exactly what these numbers
+    # mean (and the documented "no failure mode yet" limitation on
+    # success_rate).
+    nru_rrc_stats = compute_connection_setup_stats(ues)
+    if nru_rrc_stats["attempted"] > 0:
+        print("=== NR-U RRC Connection Setup ===")
+        print(f'NRU RRC attempted: {nru_rrc_stats["attempted"]}')
+        print(f'NRU RRC connected: {nru_rrc_stats["connected"]}')
+        print(f'NRU RRC success_rate: {nru_rrc_stats["success_rate"]}')
+        print(f'NRU RRC mean connection setup latency (us): {nru_rrc_stats["mean_latency_us"]}')
+    # Rashed-Step 15.G-09-18-2026-end
 
     # Rashed-Step 12.A-08-13-2026-start
     # No longer printed directly to stdout (see below, after every

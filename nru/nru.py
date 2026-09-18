@@ -29,6 +29,9 @@ from ran.protocol.channel_access import LbtChannelAccess, generate_backoff_slots
 # Rashed-Step 15.F-09-18-2026-start
 from ran.protocol.rrc import RrcLayer
 # Rashed-Step 15.F-09-18-2026-end
+# Rashed-Step 15.G-09-18-2026-start
+from ran.protocol.rrc import RrcState
+# Rashed-Step 15.G-09-18-2026-end
 # Rashed-Step 15.D-09-18-2026-start
 from enum import Enum
 # Rashed-Step 15.D-09-18-2026-end
@@ -950,7 +953,27 @@ class Gnb:
         rs_time = 0 if gap else (self.next_sync_slot_boundry - self.env.now)
         airtime = transmission_time - rs_time
 
-        rx_ue = random.choice(self.ue_list) if self.ue_list else None
+        # Rashed-Step 15.G-09-18-2026-start
+        # Scheduler/RRC integration: only pick a downlink destination
+        # from RRC-CONNECTED UEs (or UEs that never opted into RRC at
+        # all - getattr(..., RrcState.CONNECTED) default, same
+        # backward-compat contract as everywhere else in Step 15.F/G) -
+        # mirrors licensed NR's own rrc_state==CONNECTED scheduler
+        # filter (nr.nr.GnbLicensedNR._run_dl_slot()/_run_ul_slot()),
+        # extended to NR-U per the confirmed 15.G scope decision
+        # (2026-09-18: symmetric with 15.F's generic RRC design). A
+        # cell with no rrc_enabled UEs at all sees candidate_ues ==
+        # self.ue_list, so this is byte-identical to every pre-15.G
+        # run. Falls back to rx_ue=None (same as the pre-existing empty
+        # self.ue_list case below) if every UE happens to be mid-attach
+        # right now - send_transmission() already handles that rx_ue=
+        # None case (rx_pos falls back to tx_pos).
+        candidate_ues = [
+            ue for ue in self.ue_list
+            if getattr(ue, "rrc_state", RrcState.CONNECTED) is RrcState.CONNECTED
+        ]
+        rx_ue = random.choice(candidate_ues) if candidate_ues else None
+        # Rashed-Step 15.G-09-18-2026-end
 
         tx = Transmission_NR(
             transmission_time, self.name, self.col, self.env.now, airtime, rs_time)

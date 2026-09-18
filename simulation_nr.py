@@ -20,6 +20,9 @@ from nr.ue import NrUeLicensed
 # Rashed-Step 13.E.3-08-23-2026-start
 from common.packet import export_packets_csv
 # Rashed-Step 13.E.3-08-23-2026-end
+# Rashed-Step 15.G-09-18-2026-start
+from ran.protocol.rrc import compute_connection_setup_stats
+# Rashed-Step 15.G-09-18-2026-end
 
 
 def rand_pos_near(center: Pos, radius: float) -> Pos:
@@ -64,6 +67,17 @@ def run_simulation_licensed_nr(
         # Rashed-Step 13.E.3-08-23-2026-start
         export_packets_csv_path: Optional[str] = None,
         # Rashed-Step 13.E.3-08-23-2026-end
+        # Rashed-Step 15.G-09-18-2026-start
+        # Opt-in licensed-NR uplink (Step 15.E) + generic RRC attach
+        # (Step 15.F) for every UE this function constructs - False
+        # (default, both) means every NrUeLicensed(...) built below
+        # gets neither kwarg set, byte-identical to every pre-15.E run.
+        # nr_rrc_enabled=True requires nr_ue_uplink_enabled=True too
+        # (NrUeLicensed.__post_init__'s own fail-fast validation), not
+        # duplicated here - the ValueError surfaces naturally.
+        nr_ue_uplink_enabled: bool = False,
+        nr_rrc_enabled: bool = False,
+        # Rashed-Step 15.G-09-18-2026-end
 ):
     random.seed(seed)
     environment = simpy.Environment()
@@ -110,6 +124,12 @@ def run_simulation_licensed_nr(
                 pos=ue_pos,
                 gnb_name=gnb_name,
                 mobility=ue_mobility,
+                # Rashed-Step 15.G-09-18-2026-start
+                env=environment if nr_ue_uplink_enabled else None,
+                config=config if nr_ue_uplink_enabled else None,
+                uplink_enabled=nr_ue_uplink_enabled,
+                rrc_enabled=nr_rrc_enabled,
+                # Rashed-Step 15.G-09-18-2026-end
             )
             ues_for_gnb.append(ue)
 
@@ -157,6 +177,21 @@ def run_simulation_licensed_nr(
     print(f"TOTAL: slots_ok={total_succ} slots_failed={total_fail} "
           f"slot_success_rate={overall_success_rate:.4f} throughput={overall_thr_mbps:.3f} Mbps")
 
+    # Rashed-Step 15.G-09-18-2026-start
+    # RRC connection-setup metrics - only printed when at least one UE
+    # actually opted into RRC (nr_rrc_enabled=True), so a default
+    # (nr_rrc_enabled=False) run's stdout is byte-identical to every
+    # pre-15.G run - see compute_connection_setup_stats()'s own
+    # docstring in ran/protocol/rrc.py.
+    nr_rrc_stats = compute_connection_setup_stats([ue for g in gnbs for ue in g.ue_list])
+    if nr_rrc_stats["attempted"] > 0:
+        print("=== Licensed 5G NR RRC Connection Setup ===")
+        print(f'NR RRC attempted: {nr_rrc_stats["attempted"]}')
+        print(f'NR RRC connected: {nr_rrc_stats["connected"]}')
+        print(f'NR RRC success_rate: {nr_rrc_stats["success_rate"]}')
+        print(f'NR RRC mean connection setup latency (us): {nr_rrc_stats["mean_latency_us"]}')
+    # Rashed-Step 15.G-09-18-2026-end
+
     # Rashed-Step 13.E.3-08-23-2026-start
     # Opt-in packet-level CSV export, same technology-agnostic
     # export_packets_csv() (Step 9.D) every other scenario uses - keyed
@@ -173,5 +208,13 @@ def run_simulation_licensed_nr(
         "failed_slots": total_fail,
         "slot_success_rate": overall_success_rate,
         "throughput_mbps": overall_thr_mbps,
+        # Rashed-Step 15.G-09-18-2026-start
+        # Always present (not just when attempted>0, unlike the stdout
+        # print above) so a caller (e.g. an analysis/ script) doesn't
+        # need to special-case a missing key - attempted==0/connected==0
+        # /success_rate==None/latencies_us==[]/mean_latency_us==None is
+        # itself a meaningful, valid "no UE opted into RRC" result.
+        "rrc_stats": nr_rrc_stats,
+        # Rashed-Step 15.G-09-18-2026-end
     }
 # Rashed-Step 6.B-07-31-2026-end
