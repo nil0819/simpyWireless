@@ -120,6 +120,9 @@ def save_line_figure(
     hlines: Optional[List[Tuple[float, str]]] = None,
     vlines: Optional[List[Tuple[float, str]]] = None,
     # Rashed-Step 14.B-08-28-2026-end
+    # Rashed-Step 14.L-08-31-2026-start
+    yerr: Optional[Dict[str, Sequence[float]]] = None,
+    # Rashed-Step 14.L-08-31-2026-end
 ) -> Dict[str, str]:
     """
     Draws one gridded, bordered line plot - one line per (label, y-values)
@@ -142,6 +145,12 @@ def save_line_figure(
       "shared channel" reference, or vertical markers at an
       analytically-derived sensing-range crossover distance) - purely
       additive, no effect on any existing caller that doesn't pass them.
+    yerr: optional {label: half-width-per-x-point} dict (e.g. a 95% CI
+      half-width from repeated-seed sweeps). Only series present as a key
+      in `yerr` get error bars (via ax.errorbar); every other series is
+      still drawn with plain ax.plot as before - so this is purely
+      additive and every existing caller (yerr=None, the default) is
+      byte-identical to before this parameter existed.
 
     Returns {"pdf": <path>, "jpg": <path>}.
     """
@@ -149,6 +158,21 @@ def save_line_figure(
 
     for label, y in series.items():
         style = SERIES_STYLE.get(label, {})
+        # Rashed-Step 14.L-08-31-2026-start
+        series_yerr = (yerr or {}).get(label)
+        if series_yerr is not None:
+            ax.errorbar(
+                x, y, yerr=series_yerr,
+                label=label,
+                linewidth=LINEWIDTH,
+                markersize=MARKERSIZE,
+                markeredgewidth=MARKEREDGEWIDTH,
+                markerfacecolor="white",
+                capsize=4, capthick=1.3, elinewidth=1.3,
+                **style,
+            )
+            continue
+        # Rashed-Step 14.L-08-31-2026-end
         ax.plot(
             x, y,
             label=label,

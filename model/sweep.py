@@ -47,6 +47,64 @@ def sweep_dtmc_by_w(w_values: List[int], Wo: int, ng: int, Twp_us: float, Tmcot_
     return results
 
 
+# Rashed-Step 14.L-08-31-2026-start
+def sweep_dtmc_by_w_multiseed(w_values: List[int], seeds: List[int], Wo: int, ng: int,
+                               Twp_us: float, Tmcot_us: float, sim_time_s: float,
+                               ap_cluster_radius: Optional[float] = 2.0,
+                               wifi_packet_size_bytes: Optional[int] = None,
+                               **kwargs) -> List[Dict]:
+    """
+    Rashed asked whether the DTMC-validation figure (occupancy_model_vs_
+    sim.py) could show confidence intervals - it couldn't, because
+    sweep_dtmc_by_w() above only ever runs ONE simulator seed per w value,
+    so there was no variability to report. This is the multi-seed sibling:
+    runs compare_dtmc() once per (w, seed) pair - keeping the model's
+    analytical prediction (deterministic, identical across seeds for a
+    given w) and aggregating the simulator's measured occupancy across
+    seeds into a mean + 95% CI half-width per w, per technology.
+
+    Returns one dict per w with keys: w, model_Cw, model_Cn (unchanged,
+    single analytical value), mean_measured_Cw, ci95_measured_Cw,
+    mean_measured_Cn, ci95_measured_Cn, n_seeds, plus the raw
+    measured_Cw_samples/measured_Cn_samples lists (in case a caller wants
+    the raw per-seed values instead of just mean+CI).
+    """
+    import numpy as np
+    from scipy import stats
+
+    results = []
+    for w in w_values:
+        cw_samples: List[float] = []
+        cn_samples: List[float] = []
+        model_Cw = model_Cn = None
+        for seed in seeds:
+            r = compare_dtmc(w=w, Wo=Wo, ng=ng, Twp_us=Twp_us, Tmcot_us=Tmcot_us,
+                              sim_time_s=sim_time_s, seed=seed, ap_cluster_radius=ap_cluster_radius,
+                              wifi_packet_size_bytes=wifi_packet_size_bytes, **kwargs)
+            cw_samples.append(r["measured_Cw"])
+            cn_samples.append(r["measured_Cn"])
+            model_Cw, model_Cn = r["model_Cw"], r["model_Cn"]  # deterministic - same every seed
+
+        n = len(seeds)
+        cw_arr, cn_arr = np.array(cw_samples), np.array(cn_samples)
+        # 95% CI half-width via Student's t (not a fixed 1.96 z-value) -
+        # more honest for the small seed counts (n~10) this sweep uses.
+        t_crit = stats.t.ppf(0.975, df=n - 1) if n > 1 else 0.0
+        cw_sem = cw_arr.std(ddof=1) / np.sqrt(n) if n > 1 else 0.0
+        cn_sem = cn_arr.std(ddof=1) / np.sqrt(n) if n > 1 else 0.0
+
+        results.append({
+            "w": w,
+            "model_Cw": model_Cw, "model_Cn": model_Cn,
+            "mean_measured_Cw": float(cw_arr.mean()), "ci95_measured_Cw": float(t_crit * cw_sem),
+            "mean_measured_Cn": float(cn_arr.mean()), "ci95_measured_Cn": float(t_crit * cn_sem),
+            "n_seeds": n,
+            "measured_Cw_samples": cw_samples, "measured_Cn_samples": cn_samples,
+        })
+    return results
+# Rashed-Step 14.L-08-31-2026-end
+
+
 def print_sweep_report(results: List[Dict]) -> None:
     """Pretty-prints the list returned by sweep_dtmc_by_w() as one table."""
     print(f"{'w':>2} | {'model Cn':>9} {'meas Cn':>9} {'dev Cn':>8} | "
