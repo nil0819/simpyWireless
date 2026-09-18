@@ -1,16 +1,23 @@
 # Rashed-Step 2.A-12-30-2025-start
 import math
 import random
-from typing import Tuple, Dict
+from typing import Dict
 from common.common import *
 # Rashed-Step 5.G-02-06-2026-start
 import simpy
 # Rashed-Step 5.G-02-06-2026-end
 
-Pos = Tuple[float, float]
-
-def dist(a: Pos, b: Pos) -> float:
-    return math.hypot(a[0] - b[0], a[1] - b[1])
+# Rashed-Step pre_15.B-09-18-2026-start
+# BUGFIX/CLEANUP: this used to redundantly redefine Pos/dist() here,
+# byte-identical to common.common's own Pos/dist() already brought in
+# by the `from common.common import *` above - found during the Step
+# pre_15 architecture assessment as harmless-but-confusing duplication
+# (a future maintainer could edit one copy without noticing the other
+# exists). Removed; common.common's Pos/dist() (imported via the star
+# import above) are the single source of truth now, exactly as they
+# already were everywhere else in the codebase. `Tuple` dropped from
+# the typing import above since this was its only use in this file.
+# Rashed-Step pre_15.B-09-18-2026-end
 
 
 def mw_to_dbm(mw: float) -> float:
