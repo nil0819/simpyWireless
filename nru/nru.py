@@ -26,6 +26,9 @@ from common.packet import pick_traffic_class
 # Rashed-Step 15.A-09-18-2026-start
 from ran.protocol.channel_access import LbtChannelAccess, generate_backoff_slots as _lbt_generate_backoff_slots
 # Rashed-Step 15.A-09-18-2026-end
+# Rashed-Step 15.F-09-18-2026-start
+from ran.protocol.rrc import RrcLayer
+# Rashed-Step 15.F-09-18-2026-end
 # Rashed-Step 15.D-09-18-2026-start
 from enum import Enum
 # Rashed-Step 15.D-09-18-2026-end
@@ -324,6 +327,14 @@ class Gnb:
         self._channel_access = LbtChannelAccess()
         # Rashed-Step 15.A-09-18-2026-end
 
+        # Rashed-Step 15.F-09-18-2026-start
+        # Shared, stateless RRC attach driver (see ran/protocol/rrc.py)
+        # - cheap to construct unconditionally, only actually used for
+        # UEs that opt into rrc_enabled (see the back-reference loop
+        # below).
+        self._rrc_layer = RrcLayer()
+        # Rashed-Step 15.F-09-18-2026-end
+
         env.process(self.start())  # starting simulation process
         env.process(self.sync_slot_counter())
         self.process = None  # waiting back off process
@@ -363,6 +374,19 @@ class Gnb:
         # to every pre-15.C run.
         for ue in self.ue_list:
             ue.gnb = self
+            # Rashed-Step 15.F-09-18-2026-start
+            # Kick off the RRC attach procedure for any UE that opted
+            # in (see ran/protocol/rrc.py's module docstring's SCOPE -
+            # requires uplink_enabled=True too, validated in NrUE.
+            # __post_init__). Started here, not in NrUE's own
+            # __post_init__, because attach() needs ue.gnb (just set
+            # above) and this gNB's own rrc_uplink_delay() - neither
+            # exists yet at UE-construction time (every simulation*.py
+            # caller still builds UEs BEFORE the gNB that owns them).
+            # No-op for every UE that doesn't use rrc_enabled.
+            if getattr(ue, "rrc_enabled", False):
+                env.process(self._rrc_layer.attach(self, ue))
+            # Rashed-Step 15.F-09-18-2026-end
         # Rashed-Step 15.C-09-18-2026-end
         # Rashed-Step 5.G-02-06-2026-start
         self.mobility = mobility
@@ -511,6 +535,25 @@ class Gnb:
     def wait_back_off_gap_after(self):
         yield from self._channel_access.wait(self)
     # Rashed-Step 15.A-09-18-2026-end
+
+    # Rashed-Step 15.F-09-18-2026-start
+    def rrc_uplink_delay(self, ue):
+        """
+        RRC attach's technology-specific "how long until this UE can
+        actually send an uplink RRC message" hook (see
+        ran/protocol/rrc.py's RrcLayer.attach()). Reuses the exact same
+        shared LbtChannelAccess (15.A) this gNB's own downlink and
+        NrUE's own real uplink (15.C) both use - `ue` satisfies its
+        duck-typed contract already, since rrc_enabled requires
+        uplink_enabled=True (see NrUE.__post_init__), which is what
+        wires up ue.config_nr/ue.channel/ue.cw_min/ue.cw_max/etc. in
+        the first place. A genuine, real Cat-4 LBT contention wait, not
+        an invented delay - exactly what "genuinely has to win LBT
+        contention to be sent at all" (Step pre_15.txt's 15.F SCOPE
+        RESOLVED note) means.
+        """
+        yield from self._channel_access.wait(ue)
+    # Rashed-Step 15.F-09-18-2026-end
 
 
     # Rashed-Step 3.E_2-01-12-2026-end

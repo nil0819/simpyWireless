@@ -14,6 +14,9 @@ from common.common_phy import dist, rx_power_dbm, mcs_sinr_threshold_db
 from ran.protocol.channel_access import LbtChannelAccess
 from nru.nru import Transmission_NR, NRU_MCS_SINR_THRESHOLDS_DB, NruDeploymentMode
 # Rashed-Step 15.C-09-18-2026-end
+# Rashed-Step 15.F-09-18-2026-start
+from ran.protocol.rrc import RrcState
+# Rashed-Step 15.F-09-18-2026-end
 
 @dataclass
 class NrUE:
@@ -87,6 +90,14 @@ class NrUE:
     # raises ValueError at construction - see class docstring's SCOPE.
     traffic_config: Optional[TrafficConfig] = None
     uplink_enabled: bool = False
+    # Rashed-Step 15.F-09-18-2026-start
+    # Opt-in RRC attach (see ran/protocol/rrc.py's module docstring for
+    # the full design) - requires uplink_enabled=True too (validated in
+    # __post_init__ below). False (default) means this UE has no
+    # rrc_state attribute at all, same "byte-identical when unused"
+    # convention as every other opt-in field here.
+    rrc_enabled: bool = False
+    # Rashed-Step 15.F-09-18-2026-end
 
     @property
     def next_sync_slot_boundry(self) -> float:
@@ -105,6 +116,15 @@ class NrUE:
         return self.gnb.next_sync_slot_boundry if self.gnb is not None else 0.0
 
     def __post_init__(self):
+        # Rashed-Step 15.F-09-18-2026-start
+        if self.rrc_enabled and not self.uplink_enabled:
+            raise ValueError(
+                "NrUE: rrc_enabled=True requires uplink_enabled=True "
+                "too - RRC attach genuinely needs real uplink "
+                "capability to send RRCSetupRequest/RRCSetupComplete "
+                "(see ran/protocol/rrc.py's module docstring)."
+            )
+        # Rashed-Step 15.F-09-18-2026-end
         if not self.uplink_enabled:
             return
         if self.env is None or self.channel is None or self.config_nr is None:
@@ -154,6 +174,16 @@ class NrUE:
         self._channel_access = LbtChannelAccess()
         self.channel.airtime_data_NR.setdefault(self.name, 0)
         self.channel.airtime_control_NR.setdefault(self.name, 0)
+        # Rashed-Step 15.F-09-18-2026-start
+        # Set here (construction time, before env.run() starts) so
+        # there's a genuine observable IDLE state before Gnb.__init__'s
+        # back-reference loop starts the actual attach process (which
+        # transitions IDLE -> CONNECTING as its first action once the
+        # simulation clock actually starts running) - see
+        # ran/protocol/rrc.py's RrcLayer.attach().
+        if self.rrc_enabled:
+            self.rrc_state = RrcState.IDLE
+        # Rashed-Step 15.F-09-18-2026-end
         self.env.process(self.start_uplink())
 
     def _make_packet(self) -> Packet:

@@ -29,6 +29,9 @@ from common.packet import Packet
 # Rashed-Step 15.A-09-18-2026-start
 from ran.protocol.channel_access import SlotScheduledAccess
 # Rashed-Step 15.A-09-18-2026-end
+# Rashed-Step 15.F-09-18-2026-start
+from ran.protocol.rrc import RrcLayer
+# Rashed-Step 15.F-09-18-2026-end
 
 
 # ---------------------------------------------------------------------
@@ -184,6 +187,48 @@ class Config_NRL:
     sinr_predictor: Any = None
     # Rashed-Step 13.E.3-08-23-2026-end
 
+    # Rashed-Step 15.E-09-18-2026-start
+    # Opt-in TDD uplink. False (default): every slot is scheduled as
+    # downlink exactly as before this step - run_one_slot() delegates
+    # unconditionally to _run_dl_slot() (a pure rename of this method's
+    # entire pre-15.E body, zero logic change), so every existing
+    # licensed-NR run (simulation_nr.py, singleRunNR.py, every test/
+    # test_nr_licensed.py scenario) is byte-identical whether or not
+    # any UE has its own uplink_enabled set. True: slots are scheduled
+    # per tdd_pattern below instead - see _run_ul_slot() and
+    # NrUeLicensed's own uplink_enabled field (nr/ue.py).
+    tdd_enabled: bool = False
+    # Only consulted when tdd_enabled is True. A string of 'D'/'U'
+    # characters, cycled per slot index (slot i uses
+    # tdd_pattern[i % len(tdd_pattern)]) - deliberately simplified vs.
+    # real 3GPP TDD patterns (which also have 'S'/special/flexible
+    # slots, e.g. "DDDSU") since this first cut only needs a clean UL/
+    # DL split, not sub-slot flexible symbols. 3 DL : 1 UL is a
+    # realistic-shaped, DL-heavy ratio (typical of real deployments,
+    # which usually favor DL given asymmetric traffic demand) without
+    # starving UL entirely.
+    tdd_pattern: str = "DDDU"
+    # Real UE max transmit EIRP is commonly ~23 dBm for FR1 handsets -
+    # deliberately separate from tx_power_dbm above (the gNB's OWN
+    # downlink power, 30 dBm default) since a UE is a much smaller,
+    # battery-powered radio. Shared by every UE on this gNB (no
+    # per-UE power config yet - same "one shared config for now" scope
+    # simplification as every other technology's first uplink cut).
+    ue_tx_power_dbm: float = 23.0
+    # SchedulingRequest -> first-grant-eligibility delay, modeling a
+    # real UE's initial random-access-like wait before a gNB scheduler
+    # starts actually granting it UL resources (real 3GPP SR-to-grant
+    # latency is commonly a few ms depending on SR periodicity/
+    # processing timelines - 4000us is a representative, not
+    # conformance-tested, first-cut value). Charged ONCE per UE (see
+    # NrUeLicensed._send_scheduling_request()) - after that, a
+    # saturated UE is simply a standing UL candidate every U-slot
+    # (mirrors real Configured Grant / semi-persistent scheduling,
+    # which real deployments use specifically to avoid re-running SR
+    # for every single packet of ongoing saturated traffic).
+    sr_to_grant_delay_us: float = 4000.0
+    # Rashed-Step 15.E-09-18-2026-end
+
 
 class GnbLicensedNR:
     def __init__(
@@ -237,6 +282,54 @@ class GnbLicensedNR:
         self._channel_access = SlotScheduledAccess()
         # Rashed-Step 15.A-09-18-2026-end
 
+        # Rashed-Step 15.F-09-18-2026-start
+        # Shared, stateless RRC attach driver - see
+        # ran/protocol/rrc.py's module docstring. Same single-shared-
+        # instance convention as self._channel_access above.
+        self._rrc_layer = RrcLayer()
+        # Rashed-Step 15.F-09-18-2026-end
+
+        # Rashed-Step 15.E-09-18-2026-start
+        # UL scheduler state - own rotation pointer/fairness tracker,
+        # kept separate from DL's self._rr_pointer/self._pf_avg_rate
+        # above (see SlotScheduledAccess.allocate_ul()'s own docstring
+        # for why). Cheap to construct unconditionally even when
+        # config.tdd_enabled is False (empty dict, pointer never
+        # advanced) - same "unused costs nothing" convention as every
+        # other opt-in field elsewhere in this project.
+        self._rr_pointer_ul = 0
+        self._pf_avg_rate_ul: Dict[str, float] = {}
+        self._slot_index = 0
+        self.succeeded_transmissions_ul = 0
+        self.failed_transmissions_ul = 0
+        self.bits_delivered_ul = 0
+        # Back-reference each associated UE to this gNB object, mirroring
+        # wifi.WiFi.__init__'s sta.ap = self (15.B) and nru.Gnb.__init__'s
+        # ue.gnb = self (15.C). Not actually read by 15.E's own mechanism
+        # (this gNB drives UL transmission centrally in _run_ul_slot(),
+        # unlike WiFiSTA/NrUE's autonomous-contention uplinks - see
+        # NrUeLicensed's class docstring) but wired anyway for
+        # consistency and because 15.F's RRC layer will need it. No-op
+        # for every UE that doesn't use uplink.
+        for ue in self.ue_list:
+            ue.gnb = self
+            if getattr(ue, "uplink_enabled", False):
+                self.channel.airtime_data_NRL.setdefault(ue.name, 0)
+            # Rashed-Step 15.F-09-18-2026-start
+            # Kick off RRC attach for any UE that opted in - see
+            # ran/protocol/rrc.py's module docstring and
+            # NrUeLicensed.__post_init__'s validation (requires
+            # uplink_enabled=True too). Started here, not in
+            # NrUeLicensed's own __post_init__, for the same reason as
+            # nru.Gnb's identical loop (Step 15.F there): attach()
+            # needs ue.gnb (just set above) and this gNB's own
+            # rrc_uplink_delay(), neither of which exists yet at
+            # UE-construction time.
+            if getattr(ue, "rrc_enabled", False):
+                env.process(self._rrc_layer.attach(self, ue))
+            # Rashed-Step 15.F-09-18-2026-end
+        # Rashed-Step 15.E-09-18-2026-end
+
         # Rashed-Step 13.E.3-08-23-2026-start
         self._packet_seq = 0
         # Every DATA packet this gNB has finished with (DELIVERED or
@@ -265,21 +358,35 @@ class GnbLicensedNR:
         """Equal-share OFDMA: every associated UE gets a slice of the
         slot's resource blocks, rotating which UE(s) absorb the
         remainder so nobody is shorted every single slot."""
-        n = len(self.ue_list)
+        # Rashed-Step 15.E-09-18-2026-start
+        # UPGRADE (pure refactor, zero behavior change): body extracted
+        # into _round_robin_allocation_for() below, parametrized on
+        # candidate_ues/pointer instead of hardcoding self.ue_list/
+        # self._rr_pointer, so 15.E's UL scheduler can reuse the exact
+        # same algorithm against a different candidate set and its own
+        # independent pointer - see SlotScheduledAccess.allocate_ul()'s
+        # docstring. This method is now a one-line wrapper; test/
+        # test_nr_licensed.py's direct gnb._round_robin_allocation()
+        # calls are unaffected.
+        alloc, self._rr_pointer = self._round_robin_allocation_for(self.ue_list, self._rr_pointer)
+        return alloc
+
+    def _round_robin_allocation_for(self, candidate_ues: list, pointer: int) -> Tuple[Dict[str, int], int]:
+        n = len(candidate_ues)
         if n == 0 or self.total_rbs == 0:
-            return {}
+            return {}, pointer
         base = self.total_rbs // n
         remainder = self.total_rbs % n
         alloc = {}
-        for i, ue in enumerate(self.ue_list):
+        for i, ue in enumerate(candidate_ues):
             rbs = base
             # Rotate who gets the +1 remainder RB so it averages out.
-            if remainder > 0 and ((i - self._rr_pointer) % n) < remainder:
+            if remainder > 0 and ((i - pointer) % n) < remainder:
                 rbs += 1
             if rbs > 0:
                 alloc[ue.name] = rbs
-        self._rr_pointer = (self._rr_pointer + 1) % n
-        return alloc
+        return alloc, (pointer + 1) % n
+        # Rashed-Step 15.E-09-18-2026-end
 
     def _trial_sinr_db(self, ue) -> float:
         """Estimate this UE's SINR *as if* it had the full carrier to
@@ -305,6 +412,42 @@ class GnbLicensedNR:
         )
         return self.channel.sinr_db(trial)
 
+    # Rashed-Step 15.E-09-18-2026-start
+    def _trial_sinr_db_ul(self, ue) -> float:
+        """UL counterpart to _trial_sinr_db() above - estimates this
+        UE's UPLINK SINR (UE as transmitter, this gNB as receiver, at
+        config.ue_tx_power_dbm) as if it had the whole carrier to
+        itself right now. Used only to rank UL proportional-fair
+        priority - see SlotScheduledAccess.allocate_ul()."""
+        now = self.env.now
+        trial = ActiveTx(
+            tx_id=ue.name,
+            tx_pos=ue.current_pos(),
+            tx_start=now,
+            rx_pos=self.current_pos(),
+            tx_power_dbm=self.config.ue_tx_power_dbm,
+            f_hz=self.config.f_ghz,
+            pl_exp=self.config.pl_exp,
+            t_end=now + self.slot_us,
+            tech="NR",
+            bandwidth_mhz=self.config.bandwidth_mhz,
+            noise_figure_db=self.config.noise_figure_db,
+        )
+        return self.channel.sinr_db(trial)
+    # Rashed-Step 15.E-09-18-2026-end
+
+    # Rashed-Step 15.F-09-18-2026-start
+    def rrc_uplink_delay(self, ue):
+        """
+        RRC attach's technology-specific uplink-access-delay hook (see
+        ran/protocol/rrc.py's RrcLayer.attach()) - reuses 15.E's own
+        SchedulingRequest -> grant-eligibility delay
+        (config.sr_to_grant_delay_us), the same real bootstrap cost
+        every other uplink message on this UE would incur.
+        """
+        yield self.env.timeout(self.config.sr_to_grant_delay_us)
+    # Rashed-Step 15.F-09-18-2026-end
+
     def _proportional_fair_allocation(self) -> Dict[str, int]:
         """Classic PF: priority = instantaneous achievable rate / running
         average rate. The single highest-priority UE gets the whole
@@ -312,19 +455,27 @@ class GnbLicensedNR:
         implemented - one winner per scheduling interval), then its
         average-rate tracker is updated via EMA; everyone else's tracker
         decays toward 0 for this slot (they got nothing)."""
-        if not self.ue_list or self.total_rbs == 0:
+        # Rashed-Step 15.E-09-18-2026-start
+        # UPGRADE (pure refactor, zero behavior change): same extraction
+        # as _round_robin_allocation() above - see that method's
+        # comment. This method is now a one-line wrapper; test/
+        # test_nr_licensed.py's direct calls are unaffected.
+        return self._proportional_fair_allocation_for(self.ue_list, self._pf_avg_rate)
+
+    def _proportional_fair_allocation_for(self, candidate_ues: list, avg_rate: Dict[str, float],
+                                           trial_sinr_fn=None) -> Dict[str, int]:
+        trial_sinr_fn = trial_sinr_fn if trial_sinr_fn is not None else self._trial_sinr_db
+        if not candidate_ues or self.total_rbs == 0:
             return {}
         best_ue = None
         best_priority = -math.inf
         best_inst_rate = 0.0
-        inst_rates = {}
-        for ue in self.ue_list:
-            sinr = self._trial_sinr_db(ue)
+        for ue in candidate_ues:
+            sinr = trial_sinr_fn(ue)
             mcs = select_mcs_for_sinr(sinr)
             eff = NR_MCS_TABLE[mcs][1] if mcs is not None else 0.0
             inst_rate = eff * (self.total_rbs * self.rb_bandwidth_hz)
-            inst_rates[ue.name] = inst_rate
-            avg = self._pf_avg_rate.get(ue.name, 1.0)
+            avg = avg_rate.get(ue.name, 1.0)
             priority = inst_rate / avg if avg > 0 else inst_rate
             if priority > best_priority:
                 best_priority = priority
@@ -332,12 +483,13 @@ class GnbLicensedNR:
                 best_inst_rate = inst_rate
 
         alpha = self.config.pf_alpha
-        for ue in self.ue_list:
+        for ue in candidate_ues:
             achieved = best_inst_rate if ue is best_ue else 0.0
-            prev = self._pf_avg_rate.get(ue.name, 1.0)
-            self._pf_avg_rate[ue.name] = (1 - alpha) * prev + alpha * achieved
+            prev = avg_rate.get(ue.name, 1.0)
+            avg_rate[ue.name] = (1 - alpha) * prev + alpha * achieved
 
         return {best_ue.name: self.total_rbs} if best_ue is not None else {}
+        # Rashed-Step 15.E-09-18-2026-end
 
     # Rashed-Step 15.A-09-18-2026-start
     # UPGRADE (pure refactor, zero behavior change): delegates to
@@ -414,6 +566,25 @@ class GnbLicensedNR:
     # simulation shutdown doesn't try to yield again mid-cleanup.
     # -------------------------------------------------------------
     def run_one_slot(self):
+        # Rashed-Step 15.E-09-18-2026-start
+        # UPGRADE (opt-in, byte-identical when off): this method's ENTIRE
+        # pre-15.E body is now _run_dl_slot() below, a pure rename - see
+        # that method's own comment. config.tdd_enabled=False (the
+        # default) means every slot is scheduled as downlink exactly as
+        # before this step, unconditionally - no TDD pattern, no UL, no
+        # behavior change whatsoever for any existing licensed-NR run.
+        if not self.config.tdd_enabled:
+            yield from self._run_dl_slot()
+            return
+        direction = self.config.tdd_pattern[self._slot_index % len(self.config.tdd_pattern)]
+        self._slot_index += 1
+        if direction == "U":
+            yield from self._run_ul_slot()
+        else:
+            yield from self._run_dl_slot()
+        # Rashed-Step 15.E-09-18-2026-end
+
+    def _run_dl_slot(self):
         alloc = self._allocate_rbs()
         if not alloc:
             yield self.env.timeout(self.slot_us)
@@ -515,6 +686,123 @@ class GnbLicensedNR:
             for tx, _rb_count, _packet, _chosen_mcs in txs:
                 self.channel.unregister_tx(tx, success=False)
             raise
+
+    # Rashed-Step 15.E-09-18-2026-start
+    def _run_ul_slot(self):
+        """
+        Grant-based uplink for one TDD 'U' slot. Unlike WiFiSTA/NrUE's
+        autonomous-contention uplinks (Steps 15.B/15.C, each UE decides
+        FOR ITSELF when to transmit via its own backoff/LBT process),
+        licensed NR's uplink is grant-based - this gNB decides who
+        transmits and with how many RBs, exactly like it already does
+        for downlink in _run_dl_slot(). So the UE object stays passive
+        here too (see NrUeLicensed's class docstring): this method
+        drives the ENTIRE uplink transmission - registering each
+        granted UE's ActiveTx (tx_id/tx_pos are the UE's, not this
+        gNB's - the UE IS the transmitter here), waiting out the slot,
+        then settling SINR/MCS/success exactly like the DL path does.
+
+        Candidates: UEs with uplink_enabled=True whose one-time
+        SchedulingRequest->grant-eligibility delay has already elapsed
+        (ue.ul_ready - see NrUeLicensed._send_scheduling_request()).
+        Not yet supported: ahead-of-time rate adaptation for UL (always
+        uses the oracle/post-hoc select_mcs_for_sinr(), same as DL's
+        rate_adapt_enabled=False path) - a deferred follow-up, mirroring
+        every other uplink sub-step's own first-cut scope-out.
+        """
+        candidate_ues = [
+            ue for ue in self.ue_list
+            if getattr(ue, "uplink_enabled", False) and getattr(ue, "ul_ready", False)
+        ]
+        if not candidate_ues:
+            yield self.env.timeout(self.slot_us)
+            return
+
+        alloc = self._channel_access.allocate_ul(self, candidate_ues)
+        if not alloc:
+            yield self.env.timeout(self.slot_us)
+            return
+
+        ue_by_name = {ue.name: ue for ue in candidate_ues}
+        now = self.env.now
+        txs: List[Tuple[ActiveTx, int, Packet]] = []
+        for ue_name, rb_count in alloc.items():
+            ue = ue_by_name[ue_name]
+            bw_mhz_this_ue = self.config.bandwidth_mhz * (rb_count / self.total_rbs)
+            # Same constant-PSD power split as DL, off the UE's own
+            # (smaller) max power - see Config_NRL.ue_tx_power_dbm.
+            tx_power_dbm_this_ue = self.config.ue_tx_power_dbm + 10.0 * math.log10(rb_count / self.total_rbs)
+            packet = self._make_packet_ul(ue_name)
+            tx = ActiveTx(
+                tx_id=ue_name,
+                tx_pos=ue.current_pos(),
+                tx_start=now,
+                rx_pos=self.current_pos(),
+                tx_power_dbm=tx_power_dbm_this_ue,
+                f_hz=self.config.f_ghz,
+                pl_exp=self.config.pl_exp,
+                t_end=now + self.slot_us,
+                tech="NR",
+                bandwidth_mhz=bw_mhz_this_ue,
+                noise_figure_db=self.config.noise_figure_db,
+                packet=packet,
+            )
+            self.channel.register_tx(tx)
+            txs.append((tx, rb_count, packet))
+
+        try:
+            yield self.env.timeout(self.slot_us)
+            for tx, rb_count, packet in txs:
+                sinr = self.channel.sinr_db(tx)
+                packet.measured_sinr_db = sinr
+                mcs = select_mcs_for_sinr(sinr)
+                if mcs is not None:
+                    eff = NR_MCS_TABLE[mcs][1]
+                    bits = eff * (rb_count * self.rb_bandwidth_hz) * (self.slot_us / 1e6)
+                    self.sent_completed_ul(bits)
+                    packet.status = "DELIVERED"
+                    packet.delivered_at = self.env.now
+                    log(self, f"UL UE {tx.tx_id} slot OK: SINR={sinr:.2f} dB, MCS={mcs}, RBs={rb_count}, bits={bits:.0f}")
+                else:
+                    self.sent_failed_ul()
+                    packet.status = "DROPPED"
+                    log(self, f"UL UE {tx.tx_id} slot FAILED: SINR={sinr:.2f} dB below MCS0 threshold")
+                self.packet_log.append(packet)
+                self.channel.unregister_tx(tx, success=(mcs is not None))
+        except BaseException:
+            for tx, _rb_count, _packet in txs:
+                self.channel.unregister_tx(tx, success=False)
+            raise
+
+    def _make_packet_ul(self, ue_name: str) -> Packet:
+        """UL counterpart to _make_packet() - direction reversed (UE is
+        source, this gNB is destination)."""
+        self._packet_seq += 1
+        return Packet(
+            packet_id=f"{self.name}-UL-{self._packet_seq:06d}",
+            source=ue_name,
+            destination=self.name,
+            payload_bytes=self.config.packet_payload_bytes,
+            header_bytes=0,
+            created_at=self.env.now,
+        )
+
+    def sent_completed_ul(self, bits: float):
+        """UL counterpart to sent_completed() - shares the channel-level
+        aggregate NRL counters (same convention as nru.py's Step 15.C:
+        Gnb/NrUE share channel.succeeded_transmissions_NR) but keeps
+        its own gNB-object-level counters (succeeded_transmissions_ul/
+        failed_transmissions_ul/bits_delivered_ul) separate from DL's
+        (succeeded_transmissions/failed_transmissions/bits_delivered),
+        so direction is still distinguishable at the gNB-object level."""
+        self.channel.succeeded_transmissions_NRL += 1
+        self.succeeded_transmissions_ul += 1
+        self.bits_delivered_ul += bits
+
+    def sent_failed_ul(self):
+        self.channel.failed_transmissions_NRL += 1
+        self.failed_transmissions_ul += 1
+    # Rashed-Step 15.E-09-18-2026-end
 
     def sent_completed(self, bits: float):
         self.channel.succeeded_transmissions_NRL += 1

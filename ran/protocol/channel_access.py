@@ -169,4 +169,45 @@ class SlotScheduledAccess:
         if scheduler.config.scheduler == "proportional_fair":
             return scheduler._proportional_fair_allocation()
         return scheduler._round_robin_allocation()
+
+    # Rashed-Step 15.E-09-18-2026-start
+    def allocate_ul(self, scheduler: Any, candidate_ues: list) -> Dict[str, int]:
+        """
+        UL counterpart to allocate() above - this class's own docstring
+        anticipated exactly this ("future UL scheduling (15.E) ...
+        have one consistent interface to add a second implementation
+        against"). Same round_robin/proportional_fair dispatch, but
+        against a caller-supplied candidate set (UEs with a pending
+        SchedulingRequest that's been granted eligibility - see
+        GnbLicensedNR._run_ul_slot()/NrUeLicensed's SR timer - not the
+        gNB's whole ue_list) and the gNB's own UL-specific scheduler
+        state (scheduler._rr_pointer_ul / scheduler._pf_avg_rate_ul,
+        kept separate from DL's scheduler._rr_pointer /
+        scheduler._pf_avg_rate since DL and UL rounds happen on
+        different slots and coupling their rotation/fairness state
+        would be a confusing, unintended cross-direction interaction).
+
+        Reuses scheduler._round_robin_allocation_for()/
+        _proportional_fair_allocation_for() - the pure, parametrized
+        cores Step 15.E extracted from _round_robin_allocation()/
+        _proportional_fair_allocation() (themselves left as thin
+        zero-arg wrappers around these same cores, so test/
+        test_nr_licensed.py's direct DL-only calls are unaffected) -
+        specifically so this reuses the real DL algorithm rather than
+        reimplementing a parallel copy of it.
+
+        `scheduler` must additionally expose: _rr_pointer_ul: int,
+        _pf_avg_rate_ul: Dict[str, float], _trial_sinr_db_ul(ue) - all
+        new on GnbLicensedNR as of Step 15.E.
+        """
+        if scheduler.config.scheduler == "proportional_fair":
+            return scheduler._proportional_fair_allocation_for(
+                candidate_ues, scheduler._pf_avg_rate_ul,
+                trial_sinr_fn=scheduler._trial_sinr_db_ul,
+            )
+        rr_alloc, scheduler._rr_pointer_ul = scheduler._round_robin_allocation_for(
+            candidate_ues, scheduler._rr_pointer_ul
+        )
+        return rr_alloc
+    # Rashed-Step 15.E-09-18-2026-end
 # Rashed-Step 15.A-09-18-2026-end
