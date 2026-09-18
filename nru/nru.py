@@ -23,6 +23,10 @@ from common.packet import pick_traffic_class
 # Rashed-Step 10.A-08-07-2026-end
 # Rashed-Step 8.B-08-06-2026-end
 
+# Rashed-Step 15.A-09-18-2026-start
+from ran.protocol.channel_access import LbtChannelAccess, generate_backoff_slots as _lbt_generate_backoff_slots
+# Rashed-Step 15.A-09-18-2026-end
+
 
 # Rashed-Step 5.D-02-06-2026-start
 # NR-U never had an MCS/rate table before (unlike WiFi's Times.py MCS
@@ -259,6 +263,15 @@ class Gnb:
         self.packet_log = []
         # Rashed-Step 8.G-08-06-2026-end
 
+        # Rashed-Step 15.A-09-18-2026-start
+        # Shared, stateless Cat-4 LBT strategy (see ran/protocol/
+        # channel_access.py) - wait_back_off_gap_after() below now
+        # delegates to it instead of running the algorithm inline, so
+        # 15.C's NrUE can reuse the exact same implementation for its
+        # own uplink LBT. Zero behavior change: same code, just moved.
+        self._channel_access = LbtChannelAccess()
+        # Rashed-Step 15.A-09-18-2026-end
+
         env.process(self.start())  # starting simulation process
         env.process(self.sync_slot_counter())
         self.process = None  # waiting back off process
@@ -410,58 +423,20 @@ class Gnb:
 
     # Rashed-Step 3.E_2-01-12-2026-start
 
+    # Rashed-Step 15.A-09-18-2026-start
+    # UPGRADE (pure refactor, zero behavior change): this method's body
+    # used to run the Cat-4 LBT algorithm inline - it's now delegated to
+    # ran.protocol.channel_access.LbtChannelAccess.wait(), a parametrized
+    # move of the exact same code (see that module's docstring for the
+    # full rationale and the real-world scope discovery made while
+    # building this). Gnb satisfies LbtChannelAccess.wait()'s duck-typed
+    # contract already (env/channel/current_pos()/name/config_nr/
+    # failed_transmissions_in_row/next_sync_slot_boundry/cw_min/cw_max
+    # all already exist on self), so this is a one-line delegation, not
+    # a rewrite - same yields, same order, same simulated timing.
     def wait_back_off_gap_after(self):
-
-        pp = self.config_nr.deter_period + self.config_nr.M * self.config_nr.observation_slot_duration
-        backoff_slots = self.generate_backoff_slots(self.failed_transmissions_in_row)
-        backoff_time = pp + backoff_slots * self.config_nr.observation_slot_duration
-
-        remaining = backoff_time
-
-        while remaining > 0:
-            # Rashed-Step 5.E-02-06-2026-start
-            if self.channel.is_busy(self.current_pos(), self.config_nr.ed_threshold_dbm, exclude_tx_id=self.name,
-                                     sense_f_hz=self.config_nr.f_ghz, sense_bw_mhz=self.config_nr.bandwidth_mhz):
-            # Rashed-Step 5.E-02-06-2026-end
-                log(self, f"Channel busy during backoff, pausing backoff with {remaining} us remaining")
-                yield self.channel.state_changed
-                continue
-
-            step = min(self.config_nr.observation_slot_duration, remaining)
-            yield self.env.timeout(step)
-            remaining -= step
-
-        
-        time_to_next_sync_slot = self.next_sync_slot_boundry - self.env.now
-        while time_to_next_sync_slot <= 0:
-            time_to_next_sync_slot += self.config_nr.synchronization_slot_duration
-            log(self,
-                f'Backoff finished but next sync slot was in the past, new time to next possible sync = {time_to_next_sync_slot}')
-            
-        # gap_time = time_to_next_sync_slot
-        # log(self, f"Waiting gap period of : {gap_time} us")
-        # yield self.env.timeout(gap_time)
-
-        gap_remaining = time_to_next_sync_slot
-
-        log(self, f"Starting gap period of : {gap_remaining} us")
-
-        while gap_remaining > 0:
-            # Rashed-Step 5.E-02-06-2026-start
-            if self.channel.is_busy(self.current_pos(), self.config_nr.ed_threshold_dbm, exclude_tx_id=self.name,
-                                     sense_f_hz=self.config_nr.f_ghz, sense_bw_mhz=self.config_nr.bandwidth_mhz):
-            # Rashed-Step 5.E-02-06-2026-end
-                log(self, f"Channel busy during gap, pausing gap with {gap_remaining} us remaining")
-                yield self.channel.state_changed
-                continue
-
-            step = min (self.config_nr.observation_slot_duration, gap_remaining)
-            yield self.env.timeout(step)
-            gap_remaining -= step
-        
-        log(self, "Finished GAP-after-backoff (reached sync boundary)")
-
-        return
+        yield from self._channel_access.wait(self)
+    # Rashed-Step 15.A-09-18-2026-end
 
 
     # Rashed-Step 3.E_2-01-12-2026-end
@@ -910,12 +885,15 @@ class Gnb:
     #     self.channel.backoffs[back_off][self.channel.n_of_stations] += 1
     #     return back_off * self.config_nr.observation_slot_duration
 
+    # Rashed-Step 15.A-09-18-2026-start
+    # UPGRADE (pure refactor, zero behavior change): delegates to
+    # ran.protocol.channel_access.generate_backoff_slots() - the exact
+    # same formula/single random.randint() draw, just parametrized on
+    # cw_min/cw_max instead of reading them off self directly. Kept as a
+    # real method (not deleted) since it's still callable directly.
     def generate_backoff_slots(self, failed_transmissions_in_row: int)-> int:
-        # BACKOFF SLOTS GENERATION
-        upper_limit = (pow(2, failed_transmissions_in_row) * (self.cw_min + 1) - 1)  # define the upper limit basing on  unsuccessful transmissions in the row
-        upper_limit = upper_limit if upper_limit <= self.cw_max else self.cw_max  # set upper limit to CW Max if is bigger then this parameter
-    
-        return random.randint(0, upper_limit)
+        return _lbt_generate_backoff_slots(failed_transmissions_in_row, self.cw_min, self.cw_max)
+    # Rashed-Step 15.A-09-18-2026-end
     
     # Rashed-Step 3.E_1-12-26-2025-end
 

@@ -331,6 +331,21 @@ class WiFi:
         self.pos = pos
         self.sta_list = sta_list
         # Rashed-Step 1.C_1-01-12-2026-end
+        # Rashed-Step 15.B-09-18-2026-start
+        # Back-reference each associated STA to this AP object, so a STA
+        # whose uplink_enabled=True (see wifi/sta.py's WiFiSTA) can
+        # compute a real rx_pos/rx_name against wherever this AP
+        # currently is (its own current_pos(), mobility-aware) when it
+        # actually transmits an uplink frame - the STA has no other way
+        # to reach this AP object, since every simulation*.py caller
+        # still builds a STA's stas_for_ap list BEFORE constructing the
+        # WiFi AP that owns it (unchanged - this is purely additive, not
+        # a construction-order change). A no-op assignment (None ->
+        # this AP) for every STA that doesn't use uplink, i.e. byte-
+        # identical to every pre-15.B run.
+        for sta in self.sta_list:
+            sta.ap = self
+        # Rashed-Step 15.B-09-18-2026-end
         # Rashed-Step 5.G-02-06-2026-start
         self.mobility = mobility
         # Rashed-Step 5.G-02-06-2026-end

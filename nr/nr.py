@@ -26,6 +26,10 @@ from channel.channel import ActiveTx
 from common.packet import Packet
 # Rashed-Step 13.E.3-08-23-2026-end
 
+# Rashed-Step 15.A-09-18-2026-start
+from ran.protocol.channel_access import SlotScheduledAccess
+# Rashed-Step 15.A-09-18-2026-end
+
 
 # ---------------------------------------------------------------------
 # Numerology (3GPP TS 38.211): subcarrier spacing doubles, slot duration
@@ -222,6 +226,17 @@ class GnbLicensedNR:
         self.channel.airtime_data_NRL.setdefault(name, 0)
         self.channel.airtime_control_NRL.setdefault(name, 0)
 
+        # Rashed-Step 15.A-09-18-2026-start
+        # Shared, stateless slot-scheduler strategy (see ran/protocol/
+        # channel_access.py) - _allocate_rbs() below now delegates to it
+        # instead of dispatching inline. _round_robin_allocation()/
+        # _proportional_fair_allocation() themselves are UNMOVED (still
+        # directly unit-tested by test/test_nr_licensed.py) - zero
+        # behavior change, just formalizes the existing dispatch behind
+        # the same interface LbtChannelAccess uses.
+        self._channel_access = SlotScheduledAccess()
+        # Rashed-Step 15.A-09-18-2026-end
+
         # Rashed-Step 13.E.3-08-23-2026-start
         self._packet_seq = 0
         # Every DATA packet this gNB has finished with (DELIVERED or
@@ -324,10 +339,16 @@ class GnbLicensedNR:
 
         return {best_ue.name: self.total_rbs} if best_ue is not None else {}
 
+    # Rashed-Step 15.A-09-18-2026-start
+    # UPGRADE (pure refactor, zero behavior change): delegates to
+    # ran.protocol.channel_access.SlotScheduledAccess.allocate(), which
+    # runs the exact same if/else dispatch this method used to run
+    # inline. Kept as a real method (not deleted) since run_one_slot()
+    # and anything else already calling self._allocate_rbs() keeps
+    # working unmodified.
     def _allocate_rbs(self) -> Dict[str, int]:
-        if self.config.scheduler == "proportional_fair":
-            return self._proportional_fair_allocation()
-        return self._round_robin_allocation()
+        return self._channel_access.allocate(self)
+    # Rashed-Step 15.A-09-18-2026-end
 
     # Rashed-Step 13.E.3-08-23-2026-start
     def _make_packet(self, destination: str) -> Packet:
