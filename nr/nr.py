@@ -232,6 +232,24 @@ class Config_NRL:
     sr_to_grant_delay_us: float = 4000.0
     # Rashed-Step 15.E-09-18-2026-end
 
+    # Rashed-Step 16.A-10-02-2026-start
+    # Per-message uplink grant delay for RRC signaling (RRCSetupRequest
+    # / RRCSetupComplete - see GnbLicensedNR.rrc_uplink_delay()). Before
+    # 16.A, RRC reused sr_to_grant_delay_us above (4000us, a DATA-plane
+    # Configured-Grant bootstrap cost) twice, which made licensed NR's
+    # attach (10ms) slower than NR-U's (3.6-7.6ms) - the reverse of
+    # real deployments, where LBT adds delay on top of scheduling.
+    # 1000us = 2 slots at the default numerology (mu=1, 500us slots):
+    # one slot for the grant, one for the UE's own transmission. With
+    # RrcLayer's 2000us setup-processing delay, a full licensed-NR
+    # attach takes 2*1000 + 2000 = 4000us, inside 3GPP TR 38.913's
+    # 10ms control-plane latency target. NR-U's Config_NR has the same
+    # field and pays it too, plus its LBT wait (nru/nru.py's
+    # Gnb.rrc_uplink_delay()). Only read when a UE has
+    # rrc_enabled=True.
+    rrc_ul_grant_delay_us: float = 1000.0
+    # Rashed-Step 16.A-10-02-2026-end
+
 
 class GnbLicensedNR:
     def __init__(
@@ -443,12 +461,14 @@ class GnbLicensedNR:
     def rrc_uplink_delay(self, ue):
         """
         RRC attach's technology-specific uplink-access-delay hook (see
-        ran/protocol/rrc.py's RrcLayer.attach()) - reuses 15.E's own
-        SchedulingRequest -> grant-eligibility delay
-        (config.sr_to_grant_delay_us), the same real bootstrap cost
-        every other uplink message on this UE would incur.
+        ran/protocol/rrc.py's RrcLayer.attach()).
         """
-        yield self.env.timeout(self.config.sr_to_grant_delay_us)
+        # Rashed-Step 16.A-10-02-2026-start
+        # Was config.sr_to_grant_delay_us (15.F) - see
+        # Config_NRL.rrc_ul_grant_delay_us for why RRC now has its own
+        # grant delay.
+        yield self.env.timeout(self.config.rrc_ul_grant_delay_us)
+        # Rashed-Step 16.A-10-02-2026-end
     # Rashed-Step 15.F-09-18-2026-end
 
     def _proportional_fair_allocation(self) -> Dict[str, int]:

@@ -17,12 +17,18 @@ simulation_nr.py do internally.
 Three scenarios, same distance (10m) and default PHY parameters
 throughout so only the ATTACH MECHANISM itself differs between bars:
 
-  Licensed NR: grant-based RRC uplink delay (reuses Step 15.E's own
-    SchedulingRequest -> grant-eligibility timer, config.sr_to_grant_
-    delay_us=4000.0 by default) - exactly deterministic, no contention
-    of any kind possible. Expected: every seed reads identically
-    2*4000.0 + setup_processing_delay_us(2000.0) = 10000.0us, zero
-    variance.
+  Licensed NR: grant-based RRC uplink delay (config.rrc_ul_grant_
+    delay_us=1000.0 by default since Step 16.A; before that it reused
+    15.E's sr_to_grant_delay_us=4000.0) - exactly deterministic, no
+    contention of any kind possible. Expected: every seed reads
+    identically 2*1000.0 + setup_processing_delay_us(2000.0) = 4000.0us,
+    zero variance.
+
+  Step 16.A note: both NR-U bars below now also pay the same
+  rrc_ul_grant_delay_us before each LBT wait, so NR-U is never faster
+  than licensed NR. Measured after 16.A (20 seeds): licensed 4000.0us,
+  NR-U isolated 5629.6us mean, NR-U self-collision 14629.5us mean
+  (was 10000.0 / 3629.6 / 7629.6 before 16.A).
 
   NR-U (isolated UE): a single UE attaching to a gNB whose OWN
     downlink is silenced (see _NoAutoStartGnb below, the same
@@ -75,7 +81,8 @@ GNB_POS = (0.0, 0.0)
 # Generous enough for NR-U's gNB-self-collision case (the slowest of
 # the three) to reliably finish attach within this budget across every
 # seed - see module docstring's own empirical range during dev testing
-# (roughly 5000-10000us observed for that scenario at this distance).
+# (roughly 5000-10000us observed for that scenario at this distance;
+# ~14000-15000us since Step 16.A's added RRC grant delay).
 RUN_UNTIL_US = 200_000.0
 
 

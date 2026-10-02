@@ -165,8 +165,8 @@ def test_nru_rrc_attach_reaches_connected():
 def test_nr_licensed_rrc_attach_reaches_connected_with_deterministic_timing():
     """Licensed NR's uplink is grant-based, not contention-based, so
     unlike NR-U's version this timing is exactly deterministic: two
-    SR->grant delays (RRCSetupRequest + RRCSetupComplete) plus one
-    gNB-side setup-processing delay, no collisions possible."""
+    RRC uplink grant delays (RRCSetupRequest + RRCSetupComplete) plus
+    one gNB-side setup-processing delay, no collisions possible."""
     env = simpy.Environment()
     channel = _make_channel(env)
     cfg = Config_NRL(tdd_enabled=True)
@@ -181,13 +181,17 @@ def test_nr_licensed_rrc_attach_reaches_connected_with_deterministic_timing():
     env.run(until=20_000)
 
     assert ue.rrc_state is RrcState.CONNECTED
+    # Rashed-Step 16.A-10-02-2026-start
+    # Was 2 * sr_to_grant_delay_us (15.F); RRC has its own grant delay
+    # since 16.A.
     expected_connected_at = (
-        2 * cfg.sr_to_grant_delay_us + gnb._rrc_layer.setup_processing_delay_us
+        2 * cfg.rrc_ul_grant_delay_us + gnb._rrc_layer.setup_processing_delay_us
     )
     assert ue.rrc_connected_at == expected_connected_at
-    assert ue.rrc_setup_request_sent_at == cfg.sr_to_grant_delay_us
-    assert ue.rrc_setup_received_at == cfg.sr_to_grant_delay_us + gnb._rrc_layer.setup_processing_delay_us
+    assert ue.rrc_setup_request_sent_at == cfg.rrc_ul_grant_delay_us
+    assert ue.rrc_setup_received_at == cfg.rrc_ul_grant_delay_us + gnb._rrc_layer.setup_processing_delay_us
     assert ue.rrc_setup_complete_sent_at == expected_connected_at
+    # Rashed-Step 16.A-10-02-2026-end
 
 
 def test_nr_licensed_rrc_attach_does_not_require_tdd_enabled():
@@ -232,3 +236,67 @@ def test_nr_licensed_multiple_ues_each_attach_independently():
     for ue in ues:
         assert ue.rrc_state is RrcState.CONNECTED
 # Rashed-Step 15.F-09-18-2026-end
+
+
+# Rashed-Step 16.A-10-02-2026-start
+# ---------------------------------------------------------------------
+# 16.A: RRC timing realism. Licensed NR's attach must fit 3GPP TR
+# 38.913's 10ms control-plane latency target, and NR-U (grant + LBT)
+# must never attach faster than licensed NR (grant only) at matching
+# defaults - the inversion Step 15 ended with.
+# ---------------------------------------------------------------------
+
+import random
+
+
+class _NoAutoStartGnb(Gnb):
+    """Silences only the gNB's own downlink (same isolation technique as
+    test_nru_uplink.py) so NR-U's RRC uplink sees an idle channel - the
+    fastest NR-U can possibly attach."""
+    def start(self):
+        return
+        yield
+
+
+def test_rrc_grant_delay_defaults_match_across_technologies():
+    assert Config_NRL().rrc_ul_grant_delay_us == 1000.0
+    assert Config_NR().rrc_ul_grant_delay_us == 1000.0
+    # The data-plane SR timer is a separate knob and keeps its value.
+    assert Config_NRL().sr_to_grant_delay_us == 4000.0
+
+
+def test_nr_licensed_default_attach_within_tr38913_control_plane_target():
+    env = simpy.Environment()
+    channel = _make_channel(env)
+    cfg = Config_NRL()
+    ue = NrUeLicensed(
+        name="UE 1-1", pos=(10.0, 0.0), gnb_name="G1",
+        env=env, config=cfg, uplink_enabled=True, rrc_enabled=True,
+    )
+    GnbLicensedNR(env, "G1", channel, (0.0, 0.0), [ue], cfg)
+    env.run(until=20_000)
+    assert ue.rrc_connected_at == 4000.0
+    assert ue.rrc_connected_at <= 10_000.0
+
+
+def test_nru_attach_never_faster_than_licensed_nr():
+    """Even on an idle channel, every NR-U RRC uplink message pays the
+    grant delay before its LBT wait, so NR-U's attach is at least the
+    licensed-NR figure (2 * grant + processing) on every seed."""
+    for seed in range(1, 11):
+        random.seed(seed)
+        env = simpy.Environment()
+        channel = _make_channel(env)
+        cfg = Config_NR()
+        ue = NrUE(
+            name="UE 1-1", pos=(10.0, 0.0), gnb_name="G1",
+            env=env, channel=channel, config_nr=cfg,
+            uplink_enabled=True, rrc_enabled=True,
+        )
+        gnb = _NoAutoStartGnb(env, "G1", channel, (0.0, 0.0), [ue], cfg)
+        env.run(until=200_000)
+        assert ue.rrc_state is RrcState.CONNECTED
+        licensed_floor = 2 * cfg.rrc_ul_grant_delay_us + gnb._rrc_layer.setup_processing_delay_us
+        assert ue.rrc_setup_request_sent_at >= cfg.rrc_ul_grant_delay_us
+        assert ue.rrc_connected_at - ue.rrc_attach_started_at >= licensed_floor
+# Rashed-Step 16.A-10-02-2026-end

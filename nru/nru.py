@@ -198,6 +198,15 @@ class Config_NR:
     deployment_mode: NruDeploymentMode = NruDeploymentMode.STANDALONE_MULTIFIRE
     # Rashed-Step 15.D-09-18-2026-end
 
+    # Rashed-Step 16.A-10-02-2026-start
+    # Per-message uplink grant delay for RRC signaling, same meaning and
+    # default as nr.nr.Config_NRL.rrc_ul_grant_delay_us. NR-U pays this
+    # grant cost AND its Cat-4 LBT wait (see Gnb.rrc_uplink_delay()),
+    # so its attach is never faster than licensed NR's at matching
+    # defaults. Only read when a UE has rrc_enabled=True.
+    rrc_ul_grant_delay_us: float = 1000.0
+    # Rashed-Step 16.A-10-02-2026-end
+
 
 
 @dataclass()
@@ -555,6 +564,11 @@ class Gnb:
         contention to be sent at all" (Step pre_15.txt's 15.F SCOPE
         RESOLVED note) means.
         """
+        # Rashed-Step 16.A-10-02-2026-start
+        # Grant first (same cost licensed NR pays), then LBT on top -
+        # see Config_NR.rrc_ul_grant_delay_us.
+        yield self.env.timeout(self.config_nr.rrc_ul_grant_delay_us)
+        # Rashed-Step 16.A-10-02-2026-end
         yield from self._channel_access.wait(ue)
     # Rashed-Step 15.F-09-18-2026-end
 

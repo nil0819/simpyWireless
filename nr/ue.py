@@ -74,9 +74,9 @@ class NrUeLicensed:
     # Opt-in RRC attach - mirrors nru.ue.NrUE's identical field/
     # dependency contract (see ran/protocol/rrc.py's module docstring).
     # Requires uplink_enabled=True too - RRC attach genuinely needs
-    # real uplink capability (RRCSetupRequest/RRCSetupComplete ride the
-    # same SR->grant delay every other uplink message on this UE
-    # would incur - see GnbLicensedNR.rrc_uplink_delay()).
+    # real uplink capability (RRCSetupRequest/RRCSetupComplete each wait
+    # config.rrc_ul_grant_delay_us since Step 16.A - see
+    # GnbLicensedNR.rrc_uplink_delay()).
     rrc_enabled: bool = False
     # Rashed-Step 15.F-09-18-2026-end
 

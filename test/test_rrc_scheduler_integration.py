@@ -46,17 +46,23 @@ def _make_channel(env, n_of_gnb=1):
 
 # ---------------------------------------------------------------------
 # GnbLicensedNR: DL scheduler filtering by rrc_state == CONNECTED.
-# Default sr_to_grant_delay_us=4000.0, setup_processing_delay_us=
-# 2000.0 -> full attach takes exactly 10000.0us (see test_rrc.py's own
-# deterministic-timing test). A short run (until < 4000) always catches
-# an rrc_enabled UE still in CONNECTING (RRCSetupRequest's own SR-delay
-# uplink wait hasn't even elapsed yet).
+# rrc_ul_grant_delay_us=4000.0 (pinned below), setup_processing_delay_us=
+# 2000.0 -> full attach takes exactly 10000.0us. A short run (until <
+# 4000) always catches an rrc_enabled UE still in CONNECTING
+# (RRCSetupRequest's own uplink grant wait hasn't even elapsed yet).
 # ---------------------------------------------------------------------
 
 def _make_two_ue_licensed_gnb(cfg=None, ue2_uplink_enabled=True):
     env = simpy.Environment()
     channel = _make_channel(env)
-    cfg = cfg if cfg is not None else Config_NRL(tdd_enabled=True)
+    # Rashed-Step 16.A-10-02-2026-start
+    # Pins the pre-16.A RRC grant delay (4000us, equal to
+    # sr_to_grant_delay_us) so this file's timelines - in particular
+    # "ul_ready already True but RRC still CONNECTING" at t=7000 - stay
+    # the same. These tests check the gating logic, not the default
+    # timing; test_rrc.py covers the 16.A defaults.
+    cfg = cfg if cfg is not None else Config_NRL(tdd_enabled=True, rrc_ul_grant_delay_us=4000.0)
+    # Rashed-Step 16.A-10-02-2026-end
     ue1 = NrUeLicensed(
         name="UE 1-1", pos=(10.0, 0.0), gnb_name="G1",
         env=env, config=cfg, uplink_enabled=True,

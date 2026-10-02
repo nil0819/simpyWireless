@@ -78,16 +78,18 @@ class RrcLayer:
         `gnb` must expose: env (simpy.Environment), and
         rrc_uplink_delay(ue) - a generator modeling how long this UE
         must wait before it can actually send an uplink RRC message.
-        Technology-specific by design: nru.nru.Gnb's version reuses
+        Technology-specific by design (Step 16.A: both first pay
+        their config's rrc_ul_grant_delay_us, so the description
+        below is what each adds on top of / instead of that):
+        nru.nru.Gnb's version reuses
         REAL LBT contention delay (via the same
         ran.protocol.channel_access.LbtChannelAccess Step 15.C's NrUE
         uplink already uses - so an NR-U UE's RRCSetupRequest/
         RRCSetupComplete genuinely wait through real Cat-4 LBT
         contention, exactly as this sub-step's SCOPE RESOLVED note
-        called for); nr.nr.GnbLicensedNR's version reuses Step 15.E's
-        own SchedulingRequest -> grant-eligibility delay
-        (config.sr_to_grant_delay_us) - the same real bootstrap cost
-        every other uplink message on that UE would incur.
+        called for); nr.nr.GnbLicensedNR's version is the grant delay
+        alone (config.rrc_ul_grant_delay_us - before Step 16.A it
+        reused 15.E's data-plane sr_to_grant_delay_us instead).
 
         `ue` must expose rrc_state, already set to RrcState.IDLE
         before this process starts running (see each UE class's own
