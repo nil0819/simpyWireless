@@ -32,6 +32,9 @@ from ran.protocol.rrc import RrcLayer
 # Rashed-Step 15.G-09-18-2026-start
 from ran.protocol.rrc import RrcState
 # Rashed-Step 15.G-09-18-2026-end
+# Rashed-Step 16.E-10-02-2026-start
+from ran.protocol.user_plane import user_plane_allows
+# Rashed-Step 16.E-10-02-2026-end
 # Rashed-Step 15.D-09-18-2026-start
 from enum import Enum
 # Rashed-Step 15.D-09-18-2026-end
@@ -985,6 +988,12 @@ class Gnb:
         candidate_ues = [
             ue for ue in self.ue_list
             if getattr(ue, "rrc_state", RrcState.CONNECTED) is RrcState.CONNECTED
+            # Rashed-Step 16.E-10-02-2026-start
+            # ...and only UEs whose PDU session is ACTIVE, for UEs handed
+            # to the 5G Core (ran/protocol/user_plane.py). Same rx_ue=None
+            # fallback as above when nobody qualifies yet.
+            and user_plane_allows(ue)
+            # Rashed-Step 16.E-10-02-2026-end
         ]
         rx_ue = random.choice(candidate_ues) if candidate_ues else None
         # Rashed-Step 15.G-09-18-2026-end

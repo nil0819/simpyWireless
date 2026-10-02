@@ -83,6 +83,14 @@ def pdu_session_establishment(core: Any, ue: Any):
     ue.pdu_session = core.smf.request_session(ue.name, now=env.now)
     yield env.timeout(core.config.pdu_session_delay_us)
     core.smf.activate_session(ue.name, now=env.now)
+    # Rashed-Step 16.E-10-02-2026-start
+    # Release anything waiting on the user plane (NR-U's uplink loop) on
+    # the same tick the UPF opens. getattr: a UE driven through this
+    # function without start_ue() simply has no event.
+    event = getattr(ue, "_user_plane_event", None)
+    if event is not None and not event.triggered:
+        event.succeed()
+    # Rashed-Step 16.E-10-02-2026-end
 # Rashed-Step 16.D-10-02-2026-end
 
 

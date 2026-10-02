@@ -199,5 +199,13 @@ class CoreNetwork:
         # compute_pdu_session_stats' attach_latencies_us).
         ue.core_started_at = self.env.now
         # Rashed-Step 16.D-10-02-2026-end
+        # Rashed-Step 16.E-10-02-2026-start
+        # RAN-side UPF gate hooks (ran/protocol/user_plane.py): the
+        # schedulers ask ue.core_network.user_plane_allows(); NR-U's
+        # autonomous uplink waits on _user_plane_event, fired by
+        # pdu_session_establishment() at activation.
+        ue.core_network = self
+        ue._user_plane_event = self.env.event()
+        # Rashed-Step 16.E-10-02-2026-end
         return self.env.process(ue_attach(self, gnb, ue))
     # Rashed-Step 16.C-10-02-2026-end

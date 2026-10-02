@@ -35,6 +35,9 @@ from ran.protocol.rrc import RrcLayer
 # Rashed-Step 15.G-09-18-2026-start
 from ran.protocol.rrc import RrcState
 # Rashed-Step 15.G-09-18-2026-end
+# Rashed-Step 16.E-10-02-2026-start
+from ran.protocol.user_plane import user_plane_allows
+# Rashed-Step 16.E-10-02-2026-end
 
 
 # ---------------------------------------------------------------------
@@ -626,6 +629,12 @@ class GnbLicensedNR:
         candidate_ues = [
             ue for ue in self.ue_list
             if getattr(ue, "rrc_state", RrcState.CONNECTED) is RrcState.CONNECTED
+            # Rashed-Step 16.E-10-02-2026-start
+            # ...and, for a UE handed to the 5G Core, only once its PDU
+            # session is ACTIVE (ran/protocol/user_plane.py). Always
+            # True for every other UE.
+            and user_plane_allows(ue)
+            # Rashed-Step 16.E-10-02-2026-end
         ]
         alloc = self._channel_access.allocate_dl_for(self, candidate_ues)
         # Rashed-Step 15.G-09-18-2026-end
@@ -764,6 +773,10 @@ class GnbLicensedNR:
             # docstring update for Step 15.G).
             and getattr(ue, "rrc_state", RrcState.CONNECTED) is RrcState.CONNECTED
             # Rashed-Step 15.G-09-18-2026-end
+            # Rashed-Step 16.E-10-02-2026-start
+            # Same UPF gate as _run_dl_slot().
+            and user_plane_allows(ue)
+            # Rashed-Step 16.E-10-02-2026-end
         ]
         if not candidate_ues:
             yield self.env.timeout(self.slot_us)

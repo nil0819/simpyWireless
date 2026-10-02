@@ -375,6 +375,17 @@ class NrUE:
         if self.rrc_enabled:
             yield self._rrc_connected_event
         # Rashed-Step 15.G-09-18-2026-end
+        # Rashed-Step 16.E-10-02-2026-start
+        # UPF gate (ran/protocol/user_plane.py): a UE handed to the 5G
+        # Core waits for its PDU session to become ACTIVE. The event
+        # exists only after core.network.CoreNetwork.start_ue(), so
+        # every other UE skips this. Checked once, here: start_ue() must
+        # be called before the simulation reaches this point (16.F's
+        # orchestrators call it at setup, t=0).
+        user_plane_event = getattr(self, "_user_plane_event", None)
+        if user_plane_event is not None:
+            yield user_plane_event
+        # Rashed-Step 16.E-10-02-2026-end
         while True:
             packet = self._make_packet()
             self.transmission_to_send = self.gen_new_transmission(packet)

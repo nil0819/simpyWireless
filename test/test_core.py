@@ -141,6 +141,7 @@ def test_nothing_outside_core_imports_it_yet():
     Expected to start failing in 16.F - delete it there and rely on the
     byte-identical CLI check instead."""
     import pathlib
+    import re
     root = pathlib.Path(PROJECT_ROOT)
     offenders = []
     for path in root.rglob("*.py"):
@@ -148,7 +149,9 @@ def test_nothing_outside_core_imports_it_yet():
         if rel.startswith(("core/", "test/test_core.py")):
             continue
         text = path.read_text(encoding="utf-8", errors="ignore")
-        if "from core" in text or "import core" in text:
+        # Real import statements only (16.E: ran/protocol/user_plane.py's
+        # docstring mentions "import core/" in prose).
+        if re.search(r"^\s*(from core[.\s]|import core\b)", text, re.MULTILINE):
             offenders.append(rel)
     assert offenders == [], offenders
 # Rashed-Step 16.B-10-02-2026-end
@@ -298,15 +301,16 @@ def test_registration_stats_mid_procedure_and_empty():
     assert compute_registration_stats([])["success_rate"] is None
 
 
-def test_core_registration_leaves_ran_scheduling_untouched():
-    """Registration is Core-side only in 16.C: the RAN keeps scheduling
-    the UE as soon as RRC connects (user-plane gating is 16.E)."""
+def test_ran_does_not_schedule_ue_mid_registration():
+    """Was test_core_registration_leaves_ran_scheduling_untouched (16.C:
+    the RAN ignored the Core). Since 16.E the UPF gate applies: RRC
+    connected but registration still pending -> no DL data yet."""
     env, gnb, (ue,) = _licensed(rrc_enabled=True)
     core = CoreNetwork(env)
     core.start_ue(gnb, ue)
     env.run(until=20_000)  # RRC connected, registration still pending
     assert ue.reg_state is RegistrationState.DEREGISTERED
-    assert any(p.destination == ue.name for p in gnb.packet_log)
+    assert not any(p.destination == ue.name for p in gnb.packet_log)
 # Rashed-Step 16.C-10-02-2026-end
 
 
@@ -421,3 +425,142 @@ def test_late_start_attach_latency_counts_from_rrc_start():
     assert ue.pdu_session.activated_at == 10_000 + 215_000
     assert compute_pdu_session_stats([ue])["attach_latencies_us"] == [225_000]
 # Rashed-Step 16.D-10-02-2026-end
+
+
+# Rashed-Step 16.E-10-02-2026-start
+# ---------------------------------------------------------------------
+# 16.E: RAN-side UPF gate (ran/protocol/user_plane.py). A UE handed to
+# the Core carries no DATA until its PDU session is ACTIVE (219ms for
+# licensed NR with RRC at defaults); every other UE is unaffected.
+# ---------------------------------------------------------------------
+
+from ran.protocol.user_plane import user_plane_allows
+
+ACTIVE_AT_US = 219_000  # RRC 4000 + registration 90000 + session 125000
+
+
+class _Bare:
+    name = "UE X"
+
+
+def test_user_plane_allows_defaults_to_true_without_core():
+    assert user_plane_allows(_Bare())
+
+
+def _two_licensed_ues_one_in_core(rrc_enabled=True):
+    env, gnb, (ue1, ue2) = _licensed(rrc_enabled=rrc_enabled, n_ues=2)
+    core = CoreNetwork(env)
+    core.start_ue(gnb, ue2)  # ue1 never handed to the Core
+    return env, gnb, core, ue1, ue2
+
+
+def test_licensed_dl_gated_until_session_active():
+    env, gnb, core, ue1, ue2 = _two_licensed_ues_one_in_core()
+    env.run(until=ACTIVE_AT_US - 1)
+    assert not any(p.destination == ue2.name for p in gnb.packet_log)
+    assert any(p.destination == ue1.name for p in gnb.packet_log)
+    n_before = len(gnb.packet_log)
+    env.run(until=ACTIVE_AT_US + 20_000)
+    assert any(p.destination == ue2.name for p in gnb.packet_log[n_before:])
+    assert all(p.created_at >= ACTIVE_AT_US for p in gnb.packet_log if p.destination == ue2.name)
+
+
+def test_licensed_ul_gated_until_session_active():
+    env, gnb, core, ue1, ue2 = _two_licensed_ues_one_in_core()
+    env.run(until=ACTIVE_AT_US - 1)
+    assert ue2.ul_ready is True  # its own SR timer finished long ago
+    assert not any(p.source == ue2.name for p in gnb.packet_log)
+    assert any(p.source == ue1.name for p in gnb.packet_log)
+    env.run(until=ACTIVE_AT_US + 20_000)
+    ul2 = [p for p in gnb.packet_log if p.source == ue2.name]
+    assert ul2 and all(p.created_at >= ACTIVE_AT_US for p in ul2)
+    assert any(p.status == "DELIVERED" for p in ul2)
+
+
+def test_licensed_gate_closes_again_on_session_release():
+    env, gnb, core, ue1, ue2 = _two_licensed_ues_one_in_core()
+    env.run(until=ACTIVE_AT_US + 10_000)
+    core.smf.release_session(ue2.name)
+    released_at = env.now
+    env.run(until=released_at + 20_000)
+    assert not any(
+        p.destination == ue2.name and p.created_at > released_at for p in gnb.packet_log
+    )
+
+
+def test_licensed_no_rrc_ue_in_core_gated_from_t0():
+    env, gnb, core, ue1, ue2 = _two_licensed_ues_one_in_core(rrc_enabled=False)
+    env.run(until=90_000 + 125_000 - 1)
+    assert not any(p.destination == ue2.name for p in gnb.packet_log)
+    env.run(until=90_000 + 125_000 + 20_000)
+    assert any(p.destination == ue2.name for p in gnb.packet_log)
+
+
+class _RecordingGnb(Gnb):
+    """NR-U gNB that records which UE each downlink transmission really
+    targets (tx.rx_ue) - Packet.destination is always ue_list[0] in
+    nru.Gnb._make_packet(), so it can't be used for this."""
+    def gen_new_transmission(self, packet=None):
+        tx = super().gen_new_transmission(packet)
+        self.rx_log = getattr(self, "rx_log", [])
+        self.rx_log.append((self.env.now, tx.rx_ue.name if tx.rx_ue is not None else None))
+        return tx
+
+
+def test_nru_dl_destination_gated_until_session_active():
+    random.seed(3)
+    env = simpy.Environment()
+    channel = _make_channel(env)
+    cfg = Config_NR()
+    ue1 = NrUE(name="UE 1-1", pos=(10.0, 0.0), gnb_name="G1")
+    ue2 = NrUE(name="UE 1-2", pos=(12.0, 0.0), gnb_name="G1")
+    gnb = _RecordingGnb(env, "G1", channel, (0.0, 0.0), [ue1, ue2], cfg)
+    core = CoreNetwork(env)
+    core.start_ue(gnb, ue2)
+    active_at = 90_000 + 125_000  # no RRC on these UEs
+    env.run(until=active_at + 100_000)
+    before = [name for t, name in gnb.rx_log if t < active_at]
+    after = [name for t, name in gnb.rx_log if t >= active_at]
+    assert before and set(before) == {"UE 1-1"}
+    assert "UE 1-2" in after
+
+
+def test_nru_ul_waits_for_session_active():
+    random.seed(1)
+    env = simpy.Environment()
+    channel = _make_channel(env)
+    cfg = Config_NR()
+    ue = NrUE(
+        name="UE 1-1", pos=(10.0, 0.0), gnb_name="G1",
+        env=env, channel=channel, config_nr=cfg,
+        uplink_enabled=True, rrc_enabled=True,
+    )
+    gnb = _NoAutoStartGnb(env, "G1", channel, (0.0, 0.0), [ue], cfg)
+    core = CoreNetwork(env)
+    core.start_ue(gnb, ue)
+    ue_active_bound = 300_000
+    env.run(until=ue_active_bound)
+    activated_at = ue.pdu_session.activated_at
+    assert activated_at is not None and activated_at < ue_active_bound
+    assert ue.packet_log, "uplink should have delivered packets after activation"
+    assert all(p.created_at >= activated_at for p in ue.packet_log)
+    assert ue.transmission_to_send.packet.created_at >= activated_at
+
+
+def test_nru_ul_without_core_unaffected():
+    """Control for the test above: same UE, not handed to the Core,
+    starts sending right after RRC (well before 215ms)."""
+    random.seed(1)
+    env = simpy.Environment()
+    channel = _make_channel(env)
+    cfg = Config_NR()
+    ue = NrUE(
+        name="UE 1-1", pos=(10.0, 0.0), gnb_name="G1",
+        env=env, channel=channel, config_nr=cfg,
+        uplink_enabled=True, rrc_enabled=True,
+    )
+    _NoAutoStartGnb(env, "G1", channel, (0.0, 0.0), [ue], cfg)
+    env.run(until=50_000)
+    assert ue.packet_log
+    assert min(p.created_at for p in ue.packet_log) < 50_000
+# Rashed-Step 16.E-10-02-2026-end
