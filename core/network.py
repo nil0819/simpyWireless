@@ -183,3 +183,16 @@ class CoreNetwork:
         """The single question the RAN will ask in 16.E."""
         return any(upf.allows(ue_name) for upf in self.upfs)
 # Rashed-Step 16.B-10-02-2026-end
+
+    # Rashed-Step 16.C-10-02-2026-start
+    def start_ue(self, gnb: Any, ue: Any):
+        """Hand one UE to the Core: marks it DEREGISTERED and starts its
+        procedure chain (core/procedures.py's ue_attach - waits for RRC
+        CONNECTED, then registers). Returns the simpy Process. The only
+        way a UE gains reg_state - see core/procedures.py's
+        backward-compat contract."""
+        # Imported here: core/procedures.py imports this module.
+        from core.procedures import ue_attach
+        ue.reg_state = RegistrationState.DEREGISTERED
+        return self.env.process(ue_attach(self, gnb, ue))
+    # Rashed-Step 16.C-10-02-2026-end

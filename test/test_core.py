@@ -152,3 +152,159 @@ def test_nothing_outside_core_imports_it_yet():
             offenders.append(rel)
     assert offenders == [], offenders
 # Rashed-Step 16.B-10-02-2026-end
+
+
+# Rashed-Step 16.C-10-02-2026-start
+# ---------------------------------------------------------------------
+# 16.C: Registration procedure (core/procedures.py) driven by
+# CoreNetwork.start_ue(), for both technologies, with and without RRC.
+# ---------------------------------------------------------------------
+
+import random
+
+from channel.channel import Channel
+from core.network import RegistrationState
+from core.procedures import compute_registration_stats
+from ran.protocol.rrc import RrcState
+
+from nru.nru import Gnb, Config_NR
+from nru.ue import NrUE
+from nr.nr import GnbLicensedNR, Config_NRL
+from nr.ue import NrUeLicensed
+
+
+def _make_channel(env):
+    return Channel(
+        tx_queue=simpy.PriorityResource(env, capacity=1),
+        tx_lock=simpy.Resource(env, capacity=1),
+        n_of_stations=0, n_of_gNB=1, backoffs={},
+        airtime_data={}, airtime_control={},
+        airtime_data_NR={}, airtime_control_NR={},
+    )
+
+
+class _NoAutoStartGnb(Gnb):
+    """NR-U gNB with its own downlink silenced (same isolation technique
+    as test_nru_uplink.py) so RRC timing is reproducible."""
+    def start(self):
+        return
+        yield
+
+
+def _licensed(rrc_enabled, n_ues=1):
+    env = simpy.Environment()
+    cfg = Config_NRL(tdd_enabled=True)
+    ues = [
+        NrUeLicensed(
+            name=f"UE 1-{i}", pos=(10.0, 0.0), gnb_name="G1",
+            env=env, config=cfg, uplink_enabled=rrc_enabled, rrc_enabled=rrc_enabled,
+        )
+        for i in range(1, n_ues + 1)
+    ]
+    gnb = GnbLicensedNR(env, "G1", _make_channel(env), (0.0, 0.0), ues, cfg)
+    return env, gnb, ues
+
+
+def test_ue_never_handed_to_core_has_no_reg_state():
+    env, gnb, (ue,) = _licensed(rrc_enabled=False)
+    CoreNetwork(env)
+    env.run(until=200_000)
+    assert not hasattr(ue, "reg_state")
+    assert getattr(ue, "reg_state", RegistrationState.REGISTERED) is RegistrationState.REGISTERED
+
+
+def test_registration_without_rrc_starts_immediately():
+    env, gnb, (ue,) = _licensed(rrc_enabled=False)
+    core = CoreNetwork(env)
+    core.start_ue(gnb, ue)
+    assert ue.reg_state is RegistrationState.DEREGISTERED
+
+    env.run(until=core.config.registration_delay_us - 1)
+    assert ue.reg_state is RegistrationState.DEREGISTERED
+    assert not core.amf.is_registered(ue.name)
+
+    env.run(until=core.config.registration_delay_us + 1)
+    assert ue.reg_state is RegistrationState.REGISTERED
+    assert ue.reg_requested_at == 0
+    assert ue.registered_at == core.config.registration_delay_us
+    assert core.amf.serving_gnb[ue.name] == "G1"
+
+
+def test_licensed_nr_registration_waits_for_rrc_connected():
+    env, gnb, (ue,) = _licensed(rrc_enabled=True)
+    core = CoreNetwork(env)
+    core.start_ue(gnb, ue)
+    env.run(until=200_000)
+    assert ue.rrc_connected_at == 4000.0  # Step 16.A default
+    assert ue.reg_requested_at == ue.rrc_connected_at
+    assert ue.registered_at == 4000.0 + core.config.registration_delay_us
+    assert ue.reg_state is RegistrationState.REGISTERED
+
+
+def test_nru_registration_waits_for_rrc_connected():
+    random.seed(1)
+    env = simpy.Environment()
+    channel = _make_channel(env)
+    cfg = Config_NR()
+    ue = NrUE(
+        name="UE 1-1", pos=(10.0, 0.0), gnb_name="G1",
+        env=env, channel=channel, config_nr=cfg,
+        uplink_enabled=True, rrc_enabled=True,
+    )
+    gnb = _NoAutoStartGnb(env, "G1", channel, (0.0, 0.0), [ue], cfg)
+    core = CoreNetwork(env)
+    core.start_ue(gnb, ue)
+    env.run(until=300_000)
+    assert ue.rrc_state is RrcState.CONNECTED
+    assert ue.reg_requested_at == ue.rrc_connected_at
+    assert ue.registered_at == ue.rrc_connected_at + core.config.registration_delay_us
+    assert core.amf.serving_gnb["UE 1-1"] == "G1"
+
+
+def test_start_ue_after_rrc_already_connected_registers_from_now():
+    env, gnb, (ue,) = _licensed(rrc_enabled=True)
+    core = CoreNetwork(env)
+    env.run(until=10_000)  # RRC done at 4000
+    assert ue.rrc_state is RrcState.CONNECTED
+    core.start_ue(gnb, ue)
+    env.run(until=200_000)
+    assert ue.reg_requested_at == 10_000
+    assert ue.registered_at == 10_000 + core.config.registration_delay_us
+
+
+def test_custom_registration_delay_and_stats():
+    env, gnb, ues = _licensed(rrc_enabled=True, n_ues=3)
+    core = CoreNetwork(env, CoreConfig(registration_delay_us=5000.0))
+    for ue in ues[:2]:  # third UE never handed to the Core
+        core.start_ue(gnb, ue)
+    env.run(until=20_000)
+    stats = compute_registration_stats(gnb.ue_list)
+    assert stats["attempted"] == 2
+    assert stats["registered"] == 2
+    assert stats["success_rate"] == 1.0
+    assert stats["latencies_us"] == [5000.0, 5000.0]
+    assert stats["mean_latency_us"] == 5000.0
+    assert not hasattr(ues[2], "reg_state")
+
+
+def test_registration_stats_mid_procedure_and_empty():
+    env, gnb, (ue,) = _licensed(rrc_enabled=True)
+    core = CoreNetwork(env)
+    core.start_ue(gnb, ue)
+    env.run(until=50_000)
+    stats = compute_registration_stats([ue])
+    assert stats == {"attempted": 1, "registered": 0, "success_rate": 0.0,
+                     "latencies_us": [], "mean_latency_us": None}
+    assert compute_registration_stats([])["success_rate"] is None
+
+
+def test_core_registration_leaves_ran_scheduling_untouched():
+    """Registration is Core-side only in 16.C: the RAN keeps scheduling
+    the UE as soon as RRC connects (user-plane gating is 16.E)."""
+    env, gnb, (ue,) = _licensed(rrc_enabled=True)
+    core = CoreNetwork(env)
+    core.start_ue(gnb, ue)
+    env.run(until=20_000)  # RRC connected, registration still pending
+    assert ue.reg_state is RegistrationState.DEREGISTERED
+    assert any(p.destination == ue.name for p in gnb.packet_log)
+# Rashed-Step 16.C-10-02-2026-end
