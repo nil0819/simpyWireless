@@ -308,3 +308,116 @@ def test_core_registration_leaves_ran_scheduling_untouched():
     assert ue.reg_state is RegistrationState.DEREGISTERED
     assert any(p.destination == ue.name for p in gnb.packet_log)
 # Rashed-Step 16.C-10-02-2026-end
+
+
+# Rashed-Step 16.D-10-02-2026-start
+# ---------------------------------------------------------------------
+# 16.D: PDU session establishment, chained after registration.
+# Defaults: RRC 4000us (licensed), registration 90000us, PDU session
+# 125000us.
+# ---------------------------------------------------------------------
+
+from core.procedures import compute_pdu_session_stats
+
+
+def test_licensed_nr_full_chain_timing_and_upf_gate():
+    env, gnb, (ue,) = _licensed(rrc_enabled=True)
+    core = CoreNetwork(env)
+    core.start_ue(gnb, ue)
+
+    env.run(until=94_000 + 1)  # registered at 94000, session just requested
+    assert ue.reg_state is RegistrationState.REGISTERED
+    assert ue.pdu_session.state is PduSessionState.PENDING
+    assert ue.pdu_session.requested_at == 94_000
+    assert not core.user_plane_allows(ue.name)
+
+    env.run(until=219_000 - 1)
+    assert not core.user_plane_allows(ue.name)
+
+    env.run(until=219_000 + 1)
+    assert ue.pdu_session.state is PduSessionState.ACTIVE
+    assert ue.pdu_session.activated_at == 94_000 + 125_000
+    assert ue.pdu_session.session_id == 1
+    assert ue.pdu_session.upf_name == "UPF 1"
+    assert ue.pdu_session.dnn == "internet"
+    assert ue.pdu_session is core.smf.sessions[ue.name]
+    assert core.user_plane_allows(ue.name)
+
+
+def test_no_rrc_chain_and_attach_latency_from_core_start():
+    env, gnb, (ue,) = _licensed(rrc_enabled=False)
+    core = CoreNetwork(env)
+    core.start_ue(gnb, ue)
+    env.run(until=300_000)
+    assert ue.core_started_at == 0
+    assert ue.pdu_session.activated_at == 90_000 + 125_000
+    stats = compute_pdu_session_stats([ue])
+    assert stats["attach_latencies_us"] == [215_000]
+
+
+def test_nru_session_follows_registration():
+    random.seed(1)
+    env = simpy.Environment()
+    channel = _make_channel(env)
+    cfg = Config_NR()
+    ue = NrUE(
+        name="UE 1-1", pos=(10.0, 0.0), gnb_name="G1",
+        env=env, channel=channel, config_nr=cfg,
+        uplink_enabled=True, rrc_enabled=True,
+    )
+    gnb = _NoAutoStartGnb(env, "G1", channel, (0.0, 0.0), [ue], cfg)
+    core = CoreNetwork(env)
+    core.start_ue(gnb, ue)
+    env.run(until=400_000)
+    assert ue.pdu_session.requested_at == ue.registered_at
+    assert ue.pdu_session.activated_at == ue.rrc_connected_at + 215_000
+    assert core.user_plane_allows("UE 1-1")
+    stats = compute_pdu_session_stats([ue])
+    assert stats["attach_latencies_us"] == [ue.pdu_session.activated_at - ue.rrc_attach_started_at]
+
+
+def test_multiple_ues_get_distinct_sessions_across_upfs():
+    env, gnb, ues = _licensed(rrc_enabled=True, n_ues=4)
+    core = CoreNetwork(env, n_upfs=2)
+    for ue in ues:
+        core.start_ue(gnb, ue)
+    env.run(until=300_000)
+    assert sorted(ue.pdu_session.session_id for ue in ues) == [1, 2, 3, 4]
+    assert sorted(ue.pdu_session.upf_name for ue in ues) == ["UPF 1", "UPF 1", "UPF 2", "UPF 2"]
+    for ue in ues:
+        assert core.user_plane_allows(ue.name)
+        assert any(u.allows(ue.name) for u in core.upfs if u.name == ue.pdu_session.upf_name)
+
+
+def test_pdu_session_stats_mid_procedure_custom_delays_and_partial_set():
+    env, gnb, ues = _licensed(rrc_enabled=True, n_ues=3)
+    core = CoreNetwork(env, CoreConfig(registration_delay_us=1000.0, pdu_session_delay_us=2000.0))
+    for ue in ues[:2]:
+        core.start_ue(gnb, ue)
+
+    env.run(until=5500)  # RRC 4000 + registration 1000 = 5000: sessions PENDING
+    mid = compute_pdu_session_stats(gnb.ue_list)
+    assert mid["attempted"] == 2 and mid["active"] == 0 and mid["success_rate"] == 0.0
+    assert mid["mean_latency_us"] is None and mid["mean_attach_latency_us"] is None
+
+    env.run(until=10_000)
+    stats = compute_pdu_session_stats(gnb.ue_list)
+    assert stats["attempted"] == 2 and stats["active"] == 2 and stats["success_rate"] == 1.0
+    assert stats["latencies_us"] == [2000.0, 2000.0]
+    assert stats["attach_latencies_us"] == [7000.0, 7000.0]
+    assert stats["mean_attach_latency_us"] == 7000.0
+    assert not hasattr(ues[2], "pdu_session")
+    assert compute_pdu_session_stats([])["success_rate"] is None
+
+
+def test_late_start_attach_latency_counts_from_rrc_start():
+    """Documented choice: for a UE that went through RRC, the attach
+    clock starts at RRC, even if the Core was only told later."""
+    env, gnb, (ue,) = _licensed(rrc_enabled=True)
+    core = CoreNetwork(env)
+    env.run(until=10_000)
+    core.start_ue(gnb, ue)
+    env.run(until=300_000)
+    assert ue.pdu_session.activated_at == 10_000 + 215_000
+    assert compute_pdu_session_stats([ue])["attach_latencies_us"] == [225_000]
+# Rashed-Step 16.D-10-02-2026-end

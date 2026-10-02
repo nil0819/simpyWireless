@@ -188,11 +188,16 @@ class CoreNetwork:
     def start_ue(self, gnb: Any, ue: Any):
         """Hand one UE to the Core: marks it DEREGISTERED and starts its
         procedure chain (core/procedures.py's ue_attach - waits for RRC
-        CONNECTED, then registers). Returns the simpy Process. The only
-        way a UE gains reg_state - see core/procedures.py's
-        backward-compat contract."""
+        CONNECTED, registers, then establishes a PDU session). Returns
+        the simpy Process. The only way a UE gains reg_state - see
+        core/procedures.py's backward-compat contract."""
         # Imported here: core/procedures.py imports this module.
         from core.procedures import ue_attach
         ue.reg_state = RegistrationState.DEREGISTERED
+        # Rashed-Step 16.D-10-02-2026-start
+        # Start of the attach for UEs without RRC (see
+        # compute_pdu_session_stats' attach_latencies_us).
+        ue.core_started_at = self.env.now
+        # Rashed-Step 16.D-10-02-2026-end
         return self.env.process(ue_attach(self, gnb, ue))
     # Rashed-Step 16.C-10-02-2026-end

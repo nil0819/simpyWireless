@@ -33,6 +33,9 @@ from typing import Any, Dict, List
 
 from ran.protocol.rrc import RrcState
 from core.network import RegistrationState
+# Rashed-Step 16.D-10-02-2026-start
+from core.network import PduSessionState
+# Rashed-Step 16.D-10-02-2026-end
 
 
 def wait_rrc_connected(ue: Any):
@@ -64,11 +67,34 @@ def registration(core: Any, gnb: Any, ue: Any):
     ue.registered_at = env.now
 
 
+# Rashed-Step 16.C-10-02-2026-end
+
+
+# Rashed-Step 16.D-10-02-2026-start
+def pdu_session_establishment(core: Any, ue: Any):
+    """Generator - PDU Session Establishment for one REGISTERED UE.
+    Request: the SMF creates a PENDING session and picks its UPF.
+    Accept (core.config.pdu_session_delay_us later, 125ms default): the
+    session becomes ACTIVE and the UPF anchors the UE, so
+    core.user_plane_allows(ue.name) turns True from this instant.
+    ue.pdu_session points at the SMF's own PduSession object (its
+    requested_at / activated_at are the timestamps)."""
+    env = core.env
+    ue.pdu_session = core.smf.request_session(ue.name, now=env.now)
+    yield env.timeout(core.config.pdu_session_delay_us)
+    core.smf.activate_session(ue.name, now=env.now)
+# Rashed-Step 16.D-10-02-2026-end
+
+
+# Rashed-Step 16.C-10-02-2026-start
 def ue_attach(core: Any, gnb: Any, ue: Any):
     """Generator - the whole per-UE Core procedure chain: RRC CONNECTED
-    -> Registration (16.C). 16.D appends PDU session establishment."""
+    -> Registration (16.C) -> PDU session establishment (16.D)."""
     yield from wait_rrc_connected(ue)
     yield from registration(core, gnb, ue)
+    # Rashed-Step 16.D-10-02-2026-start
+    yield from pdu_session_establishment(core, ue)
+    # Rashed-Step 16.D-10-02-2026-end
 
 
 def compute_registration_stats(ue_list: List[Any]) -> Dict[str, Any]:
@@ -89,3 +115,40 @@ def compute_registration_stats(ue_list: List[Any]) -> Dict[str, Any]:
         "mean_latency_us": (sum(latencies_us) / len(latencies_us)) if latencies_us else None,
     }
 # Rashed-Step 16.C-10-02-2026-end
+
+
+# Rashed-Step 16.D-10-02-2026-start
+def compute_pdu_session_stats(ue_list: List[Any]) -> Dict[str, Any]:
+    """Same shape as compute_registration_stats(). Counts UEs handed to
+    the Core (they have reg_state at all).
+      latencies_us: activated_at - requested_at (the PDU session step
+        alone).
+      attach_latencies_us: activated_at - the moment the UE started
+        attaching - rrc_attach_started_at if it went through RRC, else
+        core_started_at (when CoreNetwork.start_ue() was called). This
+        is the full "radio + Core" time before the UE may carry data.
+    Same "success_rate is really 'finished so far'" caveat as the RRC
+    and registration stats - nothing can fail yet."""
+    opted = [ue for ue in ue_list if getattr(ue, "reg_state", None) is not None]
+    active = [
+        ue for ue in opted
+        if getattr(ue, "pdu_session", None) is not None
+        and ue.pdu_session.state is PduSessionState.ACTIVE
+    ]
+    latencies_us = [ue.pdu_session.activated_at - ue.pdu_session.requested_at for ue in active]
+    attach_latencies_us = [
+        ue.pdu_session.activated_at - getattr(ue, "rrc_attach_started_at", ue.core_started_at)
+        for ue in active
+    ]
+    return {
+        "attempted": len(opted),
+        "active": len(active),
+        "success_rate": (len(active) / len(opted)) if opted else None,
+        "latencies_us": latencies_us,
+        "mean_latency_us": (sum(latencies_us) / len(latencies_us)) if latencies_us else None,
+        "attach_latencies_us": attach_latencies_us,
+        "mean_attach_latency_us": (
+            sum(attach_latencies_us) / len(attach_latencies_us) if attach_latencies_us else None
+        ),
+    }
+# Rashed-Step 16.D-10-02-2026-end
