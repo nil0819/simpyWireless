@@ -2,6 +2,9 @@ import click
 import sys
 
 from simulation import *
+# Rashed-Step 16.F-10-02-2026-start
+from core.network import core_config_from_cli
+# Rashed-Step 16.F-10-02-2026-end
 
 
 # Rashed-Step 5.A-02-06-2026-start
@@ -179,6 +182,11 @@ def parse_traffic_class_mix(raw_values, label: str):
 @click.option("--nru-ue-uplink-enabled", "nru_ue_uplink_enabled", is_flag=True, default=False, help="Enable real NR-U uplink (Step 15.C): every UE gets a genuine Cat-4 LBT uplink transmit path (contention-based, saturated traffic only - see nru/ue.py's NrUE class docstring). Default (unset/False) = every UE stays the passive position+label object it always was, byte-identical to every pre-15.C run.")
 @click.option("--nru-rrc-enabled", "nru_rrc_enabled", is_flag=True, default=False, help="Enable the generic RRC attach state machine (Step 15.F) for every NR-U UE: IDLE -> CONNECTING -> CONNECTED, via a real RRCSetupRequest/RRCSetup/RRCSetupComplete exchange that genuinely waits through LBT contention. Requires --nru-ue-uplink-enabled too (RRC attach needs real uplink capability - fails fast otherwise). Once set, the gNB's own downlink scheduling AND each UE's own uplink data traffic (Step 15.G) are gated on rrc_state==CONNECTED - see Project details/Step pre_15.txt's STEP 15 - 15.G DONE section. Default (unset/False) = every UE has no rrc_state at all, byte-identical to every pre-15.F run.")
 # Rashed-Step 15.G-09-18-2026-end
+# Rashed-Step 16.F-10-02-2026-start
+@click.option("--nru-core-enabled", "nru_core_enabled", is_flag=True, default=False, help="Enable the minimal 5G Core (Step 16) for every NR-U UE (Wi-Fi untouched): registration with the AMF and a PDU session (SMF/UPF) after RRC connects (or from t=0 without --nru-rrc-enabled); the gNB's downlink and each UE's uplink carry no data for a UE until its session is ACTIVE. Prints an 'NR-U 5G Core' stdout block (its first-packet line counts uplink only - needs --nru-ue-uplink-enabled). Default (unset/False) = no Core, byte-identical to every pre-16.F run.")
+@click.option("--core-registration-delay-us", "core_registration_delay_us", type=float, default=None, help="Registration Request -> Accept time in us (default 90000, measured Open5GS testbed - see core/network.py). Requires --nru-core-enabled.")
+@click.option("--core-pdu-session-delay-us", "core_pdu_session_delay_us", type=float, default=None, help="PDU Session Establishment Request -> Accept time in us (default 125000, measured Open5GS testbed). Requires --nru-core-enabled.")
+# Rashed-Step 16.F-10-02-2026-end
 
 def single_run(
         runs: int,
@@ -280,6 +288,11 @@ def single_run(
         nru_ue_uplink_enabled: bool = False,
         nru_rrc_enabled: bool = False,
         # Rashed-Step 15.G-09-18-2026-end
+        # Rashed-Step 16.F-10-02-2026-start
+        nru_core_enabled: bool = False,
+        core_registration_delay_us: float = None,
+        core_pdu_session_delay_us: float = None,
+        # Rashed-Step 16.F-10-02-2026-end
 ):
     backoffs = {key: {ap_number: 0} for key in range(wifi_cw_max + 1)}
     airtime_data = {"Station {}".format(i): 0 for i in range(1, ap_number + 1)}
@@ -389,6 +402,13 @@ def single_run(
         )
     # Rashed-Step 15.G-09-18-2026-end
 
+    # Rashed-Step 16.F-10-02-2026-start
+    try:
+        core_config = core_config_from_cli(nru_core_enabled, core_registration_delay_us, core_pdu_session_delay_us)
+    except ValueError as e:
+        raise click.BadParameter(str(e))
+    # Rashed-Step 16.F-10-02-2026-end
+
     # Rashed-Step 8.B-08-06-2026-start
     # Rashed-Step 8.C-08-06-2026: added packet_size_bytes=... (defaults
     # to None, matching TrafficConfig's own default - unset means "use
@@ -487,6 +507,10 @@ def single_run(
                        nru_ue_uplink_enabled=nru_ue_uplink_enabled,
                        nru_rrc_enabled=nru_rrc_enabled,
                        # Rashed-Step 15.G-09-18-2026-end
+                       # Rashed-Step 16.F-10-02-2026-start
+                       nru_core_enabled=nru_core_enabled,
+                       core_config=core_config,
+                       # Rashed-Step 16.F-10-02-2026-end
                        )
 
 

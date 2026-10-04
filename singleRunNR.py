@@ -8,6 +8,9 @@ import click
 
 from simulation_nr import run_simulation_licensed_nr, parse_pos_list_nr
 from nr.nr import Config_NRL
+# Rashed-Step 16.F-10-02-2026-start
+from core.network import core_config_from_cli
+# Rashed-Step 16.F-10-02-2026-end
 
 
 @click.command()
@@ -40,6 +43,11 @@ from nr.nr import Config_NRL
 @click.option("--ue-uplink-enabled", "ue_uplink_enabled", is_flag=True, default=False, help="Enable real licensed-NR uplink (Step 15.E): every UE gets a one-time SchedulingRequest timer, then becomes a standing grant-based UL candidate on 'U' slots (see nr/ue.py's NrUeLicensed class docstring). Default (unset/False) = every UE stays passive (no uplink at all), byte-identical to every pre-15.E run.")
 @click.option("--rrc-enabled", "rrc_enabled", is_flag=True, default=False, help="Enable the generic RRC attach state machine (Step 15.F) for every UE: IDLE -> CONNECTING -> CONNECTED, via a real RRCSetupRequest/RRCSetup/RRCSetupComplete exchange whose uplink messages each wait a fixed RRC grant delay (Config_NRL.rrc_ul_grant_delay_us, 1000us by default since Step 16.A; deterministic timing, unlike NR-U's LBT-contention-driven version). Requires --ue-uplink-enabled too (fails fast otherwise). Once set, the gNB's own DL/UL scheduling (Step 15.G) is gated on rrc_state==CONNECTED - see Project details/Step pre_15.txt's STEP 15 - 15.G DONE section. Default (unset/False) = every UE has no rrc_state at all, byte-identical to every pre-15.F run.")
 # Rashed-Step 15.G-09-18-2026-end
+# Rashed-Step 16.F-10-02-2026-start
+@click.option("--core-enabled", "core_enabled", is_flag=True, default=False, help="Enable the minimal 5G Core (Step 16): every UE registers with the AMF and establishes a PDU session (SMF/UPF) after RRC connects (or from t=0 without --rrc-enabled), and the gNB carries no data for a UE until its session is ACTIVE. Prints a '5G Core' stdout block. Default (unset/False) = no Core, byte-identical to every pre-16.F run.")
+@click.option("--core-registration-delay-us", "core_registration_delay_us", type=float, default=None, help="Registration Request -> Accept time in us (default 90000, measured Open5GS testbed - see core/network.py). Requires --core-enabled.")
+@click.option("--core-pdu-session-delay-us", "core_pdu_session_delay_us", type=float, default=None, help="PDU Session Establishment Request -> Accept time in us (default 125000, measured Open5GS testbed). Requires --core-enabled.")
+# Rashed-Step 16.F-10-02-2026-end
 def single_run_nr(
         runs, seed, gnb_number, ues_per_gnb, simulation_time,
         area_w, area_h, gnb_pos, ue_radius,
@@ -51,6 +59,9 @@ def single_run_nr(
         # Rashed-Step 15.G-09-18-2026-start
         tdd_enabled=False, tdd_pattern="DDDU", ue_uplink_enabled=False, rrc_enabled=False,
         # Rashed-Step 15.G-09-18-2026-end
+        # Rashed-Step 16.F-10-02-2026-start
+        core_enabled=False, core_registration_delay_us=None, core_pdu_session_delay_us=None,
+        # Rashed-Step 16.F-10-02-2026-end
 ):
     gnb_positions = parse_pos_list_nr(gnb_pos, "--gnb-pos") if gnb_pos else None
 
@@ -63,6 +74,13 @@ def single_run_nr(
             "module docstring)."
         )
     # Rashed-Step 15.G-09-18-2026-end
+
+    # Rashed-Step 16.F-10-02-2026-start
+    try:
+        core_config = core_config_from_cli(core_enabled, core_registration_delay_us, core_pdu_session_delay_us)
+    except ValueError as e:
+        raise click.BadParameter(str(e))
+    # Rashed-Step 16.F-10-02-2026-end
 
     # Rashed-Step 13.E.3-08-23-2026-start
     if rate_adapt_ml_model and not rate_adapt:
@@ -115,6 +133,10 @@ def single_run_nr(
             nr_ue_uplink_enabled=ue_uplink_enabled,
             nr_rrc_enabled=rrc_enabled,
             # Rashed-Step 15.G-09-18-2026-end
+            # Rashed-Step 16.F-10-02-2026-start
+            core_enabled=core_enabled,
+            core_config=core_config,
+            # Rashed-Step 16.F-10-02-2026-end
         )
 
 

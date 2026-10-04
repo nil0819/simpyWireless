@@ -160,3 +160,59 @@ def compute_pdu_session_stats(ue_list: List[Any]) -> Dict[str, Any]:
         ),
     }
 # Rashed-Step 16.D-10-02-2026-end
+
+
+# Rashed-Step 16.F-10-02-2026-start
+def compute_first_packet_stats(ue_list: List[Any], packets: List[Any]) -> Dict[str, Any]:
+    """Attach-to-first-packet: for each UE handed to the Core, the first
+    DELIVERED data packet to or from it (Packet.destination or .source
+    == ue.name) in `packets`, measured from the same attach start as
+    compute_pdu_session_stats' attach latency (rrc_attach_started_at, or
+    core_started_at without RRC). The caller decides which packet logs
+    count - see simulation.py's NR-U note on why it passes uplink logs
+    only. UEs with no delivered packet yet are counted in "attempted"
+    but not in "with_packet"."""
+    opted = [ue for ue in ue_list if getattr(ue, "reg_state", None) is not None]
+    first_at: Dict[str, float] = {}
+    for p in packets:
+        if p.status != "DELIVERED" or p.delivered_at is None:
+            continue
+        for name in (p.destination, p.source):
+            if name not in first_at or p.delivered_at < first_at[name]:
+                first_at[name] = p.delivered_at
+    latencies_us = [
+        first_at[ue.name] - getattr(ue, "rrc_attach_started_at", ue.core_started_at)
+        for ue in opted if ue.name in first_at
+    ]
+    return {
+        "attempted": len(opted),
+        "with_packet": len(latencies_us),
+        "latencies_us": latencies_us,
+        "mean_latency_us": (sum(latencies_us) / len(latencies_us)) if latencies_us else None,
+    }
+
+
+def compute_core_stats(ue_list: List[Any], packets: List[Any]) -> Dict[str, Any]:
+    """Registration + PDU session + first-packet stats in one dict, the
+    shape both orchestrators return under "core_stats"."""
+    return {
+        "registration": compute_registration_stats(ue_list),
+        "pdu_session": compute_pdu_session_stats(ue_list),
+        "first_packet": compute_first_packet_stats(ue_list, packets),
+    }
+
+
+def print_core_stats(title: str, prefix: str, stats: Dict[str, Any], first_packet_label: str) -> None:
+    """Stdout block for a run with the Core enabled - same "label: value"
+    style as the RRC Connection Setup block."""
+    reg, pdu, first = stats["registration"], stats["pdu_session"], stats["first_packet"]
+    print(f"=== {title} ===")
+    print(f'{prefix} Core UEs: {reg["attempted"]}')
+    print(f'{prefix} registered: {reg["registered"]}')
+    print(f'{prefix} mean registration latency (us): {reg["mean_latency_us"]}')
+    print(f'{prefix} PDU sessions active: {pdu["active"]}')
+    print(f'{prefix} mean PDU session latency (us): {pdu["mean_latency_us"]}')
+    print(f'{prefix} mean attach latency, start -> session active (us): {pdu["mean_attach_latency_us"]}')
+    print(f'{prefix} UEs with a delivered {first_packet_label}: {first["with_packet"]}')
+    print(f'{prefix} mean attach-to-first-{first_packet_label} latency (us): {first["mean_latency_us"]}')
+# Rashed-Step 16.F-10-02-2026-end

@@ -42,6 +42,10 @@ from common.packet import export_packets_csv
 # Rashed-Step 15.G-09-18-2026-start
 from ran.protocol.rrc import compute_connection_setup_stats
 # Rashed-Step 15.G-09-18-2026-end
+# Rashed-Step 16.F-10-02-2026-start
+from core.network import CoreNetwork, CoreConfig
+from core.procedures import compute_core_stats, print_core_stats
+# Rashed-Step 16.F-10-02-2026-end
 
 
 # Rashed-Step 1.D_2-12-26-2025-start
@@ -154,6 +158,16 @@ def run_simulation(
         nru_ue_uplink_enabled: bool = False,
         nru_rrc_enabled: bool = False,
         # Rashed-Step 15.G-09-18-2026-end
+        # Rashed-Step 16.F-10-02-2026-start
+        # Opt-in minimal 5G Core (Step 16) for every NR-U UE (Wi-Fi is
+        # untouched): registration -> PDU session after RRC (or from
+        # t=0 without RRC), and NR-U data to/from a UE only once its
+        # session is ACTIVE (16.E). core_config=None means CoreConfig()
+        # defaults. False (default) = no Core object at all,
+        # byte-identical to every pre-16.F run.
+        nru_core_enabled: bool = False,
+        core_config: Optional[CoreConfig] = None,
+        # Rashed-Step 16.F-10-02-2026-end
 ):
     random.seed(seed)
     environment = simpy.Environment()
@@ -468,6 +482,17 @@ def run_simulation(
     # print("GNBs: ", [g.name for g in gnbs])
     # Rashed-Step 3.F-12-26-2025-end
 
+    # Rashed-Step 16.F-10-02-2026-start
+    # Must happen before environment.run(): NR-U's uplink checks the
+    # user-plane gate once, before its first packet (16.E).
+    nru_core = None
+    if nru_core_enabled:
+        nru_core = CoreNetwork(environment, core_config)
+        for g in gnbs:
+            for ue in g.ue_list:
+                nru_core.start_ue(g, ue)
+    # Rashed-Step 16.F-10-02-2026-end
+
     # environment.run(until=simulation_time * 1000000) 10^6 milisekundy
     environment.run(until=simulation_time * 1000000)
 
@@ -550,6 +575,21 @@ def run_simulation(
         print(f'NRU RRC success_rate: {nru_rrc_stats["success_rate"]}')
         print(f'NRU RRC mean connection setup latency (us): {nru_rrc_stats["mean_latency_us"]}')
     # Rashed-Step 15.G-09-18-2026-end
+
+    # Rashed-Step 16.F-10-02-2026-start
+    # First-packet counts NR-U UPLINK only (each UE's own packet_log,
+    # source=UE name). The gNB's downlink packet_log can't be used:
+    # nru.Gnb._make_packet() stamps every packet destination=ue_list[0]
+    # whichever UE was really picked - including packets sent while the
+    # Core UE was still gated (rx_ue=None) - which would report a fake,
+    # too-early first packet. Without --nru-ue-uplink-enabled this line
+    # therefore reads 0 / None.
+    if nru_core is not None:
+        nru_core_stats = compute_core_stats(
+            ues, [p for ue in ues for p in getattr(ue, "packet_log", [])]
+        )
+        print_core_stats("NR-U 5G Core", "NRU", nru_core_stats, "uplink packet")
+    # Rashed-Step 16.F-10-02-2026-end
 
     # Rashed-Step 12.A-08-13-2026-start
     # No longer printed directly to stdout (see below, after every

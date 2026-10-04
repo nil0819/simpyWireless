@@ -57,6 +57,34 @@ class CoreConfig:
     dnn: str = "internet"
 
 
+# Rashed-Step 16.F-10-02-2026-start
+def core_config_from_cli(core_enabled: bool,
+                         registration_delay_us: Optional[float] = None,
+                         pdu_session_delay_us: Optional[float] = None) -> Optional["CoreConfig"]:
+    """Shared by singleRun.py and singleRunNR.py: a CoreConfig with any
+    delay overrides applied, or None when the Core is off. Raises
+    ValueError (each CLI turns it into click.BadParameter) for delay
+    flags given without the Core flag, or negative delays."""
+    overrides = {}
+    if registration_delay_us is not None:
+        overrides["registration_delay_us"] = registration_delay_us
+    if pdu_session_delay_us is not None:
+        overrides["pdu_session_delay_us"] = pdu_session_delay_us
+    if not core_enabled:
+        if overrides:
+            raise ValueError(
+                "--core-registration-delay-us/--core-pdu-session-delay-us "
+                "only apply with the 5G Core enabled (--core-enabled in "
+                "singleRunNR.py, --nru-core-enabled in singleRun.py)."
+            )
+        return None
+    for name, value in overrides.items():
+        if value < 0:
+            raise ValueError(f"{name} must be >= 0 (got {value}).")
+    return CoreConfig(**overrides)
+# Rashed-Step 16.F-10-02-2026-end
+
+
 @dataclass
 class PduSession:
     session_id: int

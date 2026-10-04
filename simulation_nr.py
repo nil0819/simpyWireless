@@ -23,6 +23,10 @@ from common.packet import export_packets_csv
 # Rashed-Step 15.G-09-18-2026-start
 from ran.protocol.rrc import compute_connection_setup_stats
 # Rashed-Step 15.G-09-18-2026-end
+# Rashed-Step 16.F-10-02-2026-start
+from core.network import CoreNetwork, CoreConfig
+from core.procedures import compute_core_stats, print_core_stats
+# Rashed-Step 16.F-10-02-2026-end
 
 
 def rand_pos_near(center: Pos, radius: float) -> Pos:
@@ -78,6 +82,16 @@ def run_simulation_licensed_nr(
         nr_ue_uplink_enabled: bool = False,
         nr_rrc_enabled: bool = False,
         # Rashed-Step 15.G-09-18-2026-end
+        # Rashed-Step 16.F-10-02-2026-start
+        # Opt-in minimal 5G Core (Step 16): every UE is handed to one
+        # CoreNetwork at setup -> registration -> PDU session, and the
+        # gNB only carries its data once the session is ACTIVE (16.E).
+        # Works with or without RRC. core_config=None means CoreConfig()
+        # defaults. False (default) = no Core object at all,
+        # byte-identical to every pre-16.F run.
+        core_enabled: bool = False,
+        core_config: Optional[CoreConfig] = None,
+        # Rashed-Step 16.F-10-02-2026-end
 ):
     random.seed(seed)
     environment = simpy.Environment()
@@ -155,6 +169,17 @@ def run_simulation_licensed_nr(
         for ue in g.ue_list:
             print("  ", ue.name, ue.pos, "d=", dist(g.pos, ue.pos))
 
+    # Rashed-Step 16.F-10-02-2026-start
+    # Must happen before environment.run() (see core/network.py's
+    # start_ue() and ran/protocol/user_plane.py).
+    core = None
+    if core_enabled:
+        core = CoreNetwork(environment, core_config)
+        for g in gnbs:
+            for ue in g.ue_list:
+                core.start_ue(g, ue)
+    # Rashed-Step 16.F-10-02-2026-end
+
     environment.run(until=simulation_time * 1_000_000)
 
     print("=== Licensed 5G NR Results ===")
@@ -192,6 +217,19 @@ def run_simulation_licensed_nr(
         print(f'NR RRC mean connection setup latency (us): {nr_rrc_stats["mean_latency_us"]}')
     # Rashed-Step 15.G-09-18-2026-end
 
+    # Rashed-Step 16.F-10-02-2026-start
+    # Licensed NR's gNB packet_log holds both DL (destination=UE) and UL
+    # (source=UE) packets with correct UE names, so first-packet counts
+    # both directions here.
+    nr_core_stats = None
+    if core is not None:
+        nr_core_stats = compute_core_stats(
+            [ue for g in gnbs for ue in g.ue_list],
+            [p for g in gnbs for p in g.packet_log],
+        )
+        print_core_stats("Licensed 5G NR 5G Core", "NR", nr_core_stats, "packet")
+    # Rashed-Step 16.F-10-02-2026-end
+
     # Rashed-Step 13.E.3-08-23-2026-start
     # Opt-in packet-level CSV export, same technology-agnostic
     # export_packets_csv() (Step 9.D) every other scenario uses - keyed
@@ -216,5 +254,9 @@ def run_simulation_licensed_nr(
         # itself a meaningful, valid "no UE opted into RRC" result.
         "rrc_stats": nr_rrc_stats,
         # Rashed-Step 15.G-09-18-2026-end
+        # Rashed-Step 16.F-10-02-2026-start
+        # None when core_enabled=False.
+        "core_stats": nr_core_stats,
+        # Rashed-Step 16.F-10-02-2026-end
     }
 # Rashed-Step 6.B-07-31-2026-end

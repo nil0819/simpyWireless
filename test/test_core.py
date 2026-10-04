@@ -135,18 +135,19 @@ def test_core_network_honors_custom_config():
     assert [u.name for u in core.upfs] == ["UPF 1", "UPF 2"]
 
 
-def test_nothing_outside_core_imports_it_yet():
-    """16.B is a skeleton: no existing module may depend on core/ until
-    16.F wires it in, so every pre-16 run is untouched by construction.
-    Expected to start failing in 16.F - delete it there and rely on the
-    byte-identical CLI check instead."""
+def test_ran_packages_never_import_core():
+    """Was test_nothing_outside_core_imports_it_yet (16.B: nothing at all
+    could import core/). Since 16.F the orchestrators/CLIs do, by design,
+    so this now guards the rule 16.E relies on instead: the RAN packages
+    stay Core-agnostic and reach it only through ue.core_network
+    (ran/protocol/user_plane.py)."""
     import pathlib
     import re
     root = pathlib.Path(PROJECT_ROOT)
     offenders = []
     for path in root.rglob("*.py"):
         rel = path.relative_to(root).as_posix()
-        if rel.startswith(("core/", "test/test_core.py")):
+        if not rel.startswith(("nr/", "nru/", "ran/", "wifi/", "channel/", "common/")):
             continue
         text = path.read_text(encoding="utf-8", errors="ignore")
         # Real import statements only (16.E: ran/protocol/user_plane.py's
