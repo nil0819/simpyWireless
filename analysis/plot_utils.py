@@ -326,3 +326,94 @@ def save_bar_figure(
 
     return {"pdf": pdf_path, "jpg": jpg_path}
 # Rashed-Step 13.F-08-29-2026-end
+
+
+# Rashed-Step 16.G-10-04-2026-start
+# Stacked bars for "how a total breaks down into stages" (Step 16.G's
+# RRC / registration / PDU session attach breakdown). The stages are not
+# technologies, so they deliberately don't use WIFI_COLOR/NRU_COLOR -
+# technologies stay on the x-axis as categories, same as save_bar_figure.
+# Neutral grays plus a hatch per stage keep the stages distinguishable
+# in black-and-white print.
+STACK_STYLE: Dict[str, dict] = {
+    "RRC setup":           dict(color="#404040", hatch=""),
+    "Registration":        dict(color="#9a9a9a", hatch="//"),
+    "PDU session":         dict(color="#e0e0e0", hatch=".."),
+}
+
+
+def save_stacked_bar_figure(
+    categories: Sequence[str],
+    stacks: Dict[str, Sequence[float]],
+    xlabel: str,
+    ylabel: str,
+    output_stem: str,
+    figsize=(8.0, 5.5),
+    value_fmt: str = "{:.1f}",
+    total_labels: bool = True,
+) -> Dict[str, str]:
+    """
+    One stacked bar per category; `stacks` is {stage label: one value per
+    category}, drawn bottom-up in dict order and styled per STACK_STYLE
+    (matplotlib defaults for unknown labels). Optionally labels each bar
+    with its total. Same gridded/bordered/no-title/PDF+JPG-at-300-DPI
+    conventions as save_bar_figure().
+
+    Returns {"pdf": <path>, "jpg": <path>}.
+    """
+    fig, ax = plt.subplots(figsize=figsize)
+    x = np.arange(len(categories))
+    bottoms = np.zeros(len(categories))
+
+    for label, values in stacks.items():
+        style = STACK_STYLE.get(label, {})
+        values = np.asarray(values, dtype=float)
+        ax.bar(
+            x, values, width=0.6, bottom=bottoms, label=label,
+            color=style.get("color"), hatch=style.get("hatch", ""),
+            edgecolor="black", linewidth=1.0,
+        )
+        bottoms = bottoms + values
+
+    if total_labels:
+        for xi, total in zip(x, bottoms):
+            ax.annotate(
+                value_fmt.format(total),
+                xy=(xi, total), xytext=(0, 3), textcoords="offset points",
+                ha="center", va="bottom", fontsize=FONTSIZE_LEGEND,
+            )
+    # Headroom above the tallest bar for its total label plus the
+    # one-row legend along the top (see below), so neither ever
+    # overlaps a bar.
+    ax.set_ylim(0, bottoms.max() * 1.30 if len(bottoms) else 1)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(categories, fontsize=FONTSIZE_TICK)
+    ax.set_xlabel(xlabel, fontsize=FONTSIZE_LABEL)
+    ax.set_ylabel(ylabel, fontsize=FONTSIZE_LABEL)
+    ax.tick_params(axis="y", labelsize=FONTSIZE_TICK)
+
+    ax.grid(True, axis="y", which="major", linestyle=":", linewidth=0.8, alpha=0.7)
+    ax.set_axisbelow(True)
+
+    for spine in ax.spines.values():
+        spine.set_visible(True)
+        spine.set_linewidth(1.2)
+        spine.set_color("black")
+
+    # One row across the top, in stacking order (bottom stage first), in
+    # the headroom reserved above - a corner legend covered the bottom
+    # slice of the last bar.
+    ax.legend(fontsize=FONTSIZE_LEGEND, framealpha=0.9, edgecolor="black",
+              loc="upper center", ncol=len(stacks))
+
+    fig.tight_layout()
+
+    pdf_path = os.path.join(GENERATED_DIR, f"{output_stem}.pdf")
+    jpg_path = os.path.join(GENERATED_DIR, f"{output_stem}.jpg")
+    fig.savefig(pdf_path, dpi=DPI, bbox_inches="tight")
+    fig.savefig(jpg_path, dpi=DPI, bbox_inches="tight", format="jpg")
+    plt.close(fig)
+
+    return {"pdf": pdf_path, "jpg": jpg_path}
+# Rashed-Step 16.G-10-04-2026-end

@@ -207,3 +207,44 @@ def test_nru_cli_delay_flag_without_core_fails_fast():
     assert result.exit_code != 0
     assert "only apply with the 5G Core enabled" in result.output
 # Rashed-Step 16.F-10-02-2026-end
+
+
+# Rashed-Step 16.G-10-04-2026-start
+# ---------------------------------------------------------------------
+# 16.G: analysis/core_attach_latency.py stages + the stacked-bar helper.
+# Never calls generate() (it would overwrite the committed figure with a
+# few-seed version); the helper is pointed at pytest's tmp_path instead.
+# ---------------------------------------------------------------------
+
+from analysis import core_attach_latency as cal
+from analysis import plot_utils
+
+
+def test_attach_stages_licensed_nr_exact():
+    assert cal._stages_us("licensed", seed=1) == (4000.0, 90_000.0, 125_000.0)
+
+
+def test_attach_stages_nru_rrc_slower_than_licensed_core_stages_identical():
+    for scenario in ("nru_isolated", "nru_collision"):
+        rrc, reg, pdu = cal._stages_us(scenario, seed=1)
+        assert rrc > 4000.0
+        assert (reg, pdu) == (90_000.0, 125_000.0)
+    assert cal._stages_us("nru_collision", 1)[0] > cal._stages_us("nru_isolated", 1)[0]
+
+
+def test_attach_stages_follow_custom_core_config():
+    cfg = CoreConfig(registration_delay_us=1000.0, pdu_session_delay_us=2000.0)
+    assert cal._stages_us("licensed", seed=1, core_config=cfg) == (4000.0, 1000.0, 2000.0)
+
+
+def test_stacked_bar_helper_writes_pdf_and_jpg(tmp_path, monkeypatch):
+    monkeypatch.setattr(plot_utils, "GENERATED_DIR", str(tmp_path))
+    paths = plot_utils.save_stacked_bar_figure(
+        categories=["A", "B"],
+        stacks={"RRC setup": [1.0, 2.0], "Registration": [3.0, 4.0], "PDU session": [5.0, 6.0]},
+        xlabel="x", ylabel="y", output_stem="stack_test",
+    )
+    for p in paths.values():
+        assert os.path.dirname(p) == str(tmp_path)
+        assert os.path.getsize(p) > 0
+# Rashed-Step 16.G-10-04-2026-end
