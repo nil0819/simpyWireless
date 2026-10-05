@@ -4,6 +4,9 @@ from common.common import *
 
 # Rashed-Step 3.B-01-12-2026-start
 from dataclasses import dataclass
+# Rashed-Step pre_18.A-10-04-2026-start
+from dataclasses import field
+# Rashed-Step pre_18.A-10-04-2026-end
 import simpy
 import math
 from common.common_phy import rx_power_dbm, dbm_to_mw, mw_to_dbm, Pos, sample_shadow_db, thermal_noise_dbm, spectral_overlap_fraction
@@ -52,7 +55,44 @@ class ActiveTx:
     # exposes today.
     packet: Optional[Packet] = None
     # Rashed-Step 8.A-08-06-2026-end
+    # Rashed-Step pre_18.A-10-04-2026-start
+    # Every other transmission that overlapped this one in time at any
+    # point, as TxSnapshot records (plain values, no object references,
+    # so long runs don't keep the whole history alive). Filled by
+    # Channel.register_tx(); read by Channel.sinr_db() so interference
+    # that ENDED before this transmission still counts - see sinr_db().
+    overlap_history: list = field(default_factory=list, repr=False, compare=False)
+    # Unique per registered transmission (set by Channel.register_tx), so
+    # sinr_db() can tell "the same transmission, on air AND remembered"
+    # apart from DIFFERENT transmissions sharing tx_id and timing -
+    # licensed NR registers one ActiveTx per UE allocation, all named
+    # after the gNB, in the same slot. -1 = never registered.
+    uid: int = field(default=-1, repr=False, compare=False)
+    # Rashed-Step pre_18.A-10-04-2026-end
 # Rashed-Step 3.B-01-12-2026-end
+
+
+# Rashed-Step pre_18.A-10-04-2026-start
+@dataclass(frozen=True)
+class TxSnapshot:
+    """What sinr_db() needs to know about an interferer after it has
+    left the air: same attribute names as ActiveTx, so _rx_pwr_dbm()
+    works on either."""
+    tx_id: str
+    tx_pos: Pos
+    tx_start: float
+    t_end: float
+    tx_power_dbm: float
+    f_hz: float
+    pl_exp: float
+    bandwidth_mhz: float
+    uid: int = -1
+
+    @staticmethod
+    def of(tx: "ActiveTx") -> "TxSnapshot":
+        return TxSnapshot(tx.tx_id, tx.tx_pos, tx.tx_start, tx.t_end,
+                          tx.tx_power_dbm, tx.f_hz, tx.pl_exp, tx.bandwidth_mhz, tx.uid)
+# Rashed-Step pre_18.A-10-04-2026-end
 
 
 @dataclass()
@@ -158,6 +198,20 @@ class Channel:
 
 
     def register_tx(self, tx: ActiveTx):
+         # Rashed-Step pre_18.A-10-04-2026-start
+         self._tx_serial = getattr(self, "_tx_serial", 0) + 1
+         tx.uid = self._tx_serial
+         # Record every time-overlapping pair both ways, so each side's
+         # SINR can count the other even after it has left the air (see
+         # sinr_db()). active_txs may still hold entries past their t_end
+         # (pruned lazily), hence the explicit time check.
+         for other in self.active_txs:
+              if other is tx or other.tx_id == tx.tx_id:
+                   continue
+              if other.tx_start < tx.t_end and other.t_end > tx.tx_start:
+                   other.overlap_history.append(TxSnapshot.of(tx))
+                   tx.overlap_history.append(TxSnapshot.of(other))
+         # Rashed-Step pre_18.A-10-04-2026-end
          self.active_txs.append(tx)
          self._pulse_state_changed()
 
@@ -315,6 +369,30 @@ class Channel:
         """
         SINR at target.rx_pos considering only transmissions that overlap in time
         with [target.tx_start, target.t_end].
+
+        Rashed-Step pre_18.A (2026-10-04) - HYBRID rule (Rashed's choice
+        after comparing end-only / time-averaged / hybrid / worst case on
+        the same scenarios - see Step pre_18.txt):
+          - Wi-Fi target (tech "WiFi"): every interferer that overlapped
+            it at any point counts at FULL power - a Wi-Fi frame is one
+            decode unit, so a strong hit on any part of it ruins it.
+          - Any other target (NR-U, licensed NR, generic devices): each
+            interferer is weighted by the fraction of the target's
+            duration it overlapped ("effective SINR") - an NR-U/NR burst
+            is many separately checked slots, so a short hit only spoils
+            part of it.
+        Before this,
+        only transmissions still in active_txs when SINR was evaluated
+        (at the target's END) counted, at full power - so a short Wi-Fi
+        frame (242us) that hit a long NR-U transmission (3-6ms) and ended
+        first was ignored, while the reverse was almost always counted:
+        a one-sided bias in NR-U's favor (Step 17.txt, 17.G FINDING).
+        Now: transmissions on the air now (as before - this also covers
+        never-registered trial estimates like licensed NR's scheduler)
+        PLUS target.overlap_history (ones that already ended). An
+        interferer covering the whole target gets weight exactly 1.0, so
+        fully aligned cases (e.g. licensed NR's synchronized slots)
+        compute exactly as before.
         """
         if noise_dbm is None:
             noise_dbm = thermal_noise_dbm(target.bandwidth_mhz, target.noise_figure_db)
@@ -324,12 +402,36 @@ class Channel:
 
         i_mw = 0.0
 
-        for other in self.active_txs:
+        # Rashed-Step pre_18.A-10-04-2026-start
+        duration = target.t_end - target.tx_start
+
+        def time_weight(other) -> float:
+            if duration <= 0 or target.tech == "WiFi":
+                return 1.0
+            covered = min(other.t_end, target.t_end) - max(other.tx_start, target.tx_start)
+            if covered >= duration:
+                return 1.0
+            return max(0.0, covered / duration)
+
+        seen = set()
+        # On the air now first (same order as before, so shadowing draws
+        # happen in the same order), then remembered ones that ended.
+        candidates = list(self.active_txs) + list(getattr(target, "overlap_history", ()))
+        # Rashed-Step pre_18.A-10-04-2026-end
+
+        for other in candidates:
             if other.tx_id == target.tx_id:
                 continue
 
             if not (other.tx_start < target.t_end and other.t_end > target.tx_start):
                 continue
+
+            # Rashed-Step pre_18.A-10-04-2026-start
+            key = other.uid if other.uid >= 0 else ("unregistered", id(other))
+            if key in seen:
+                continue
+            seen.add(key)
+            # Rashed-Step pre_18.A-10-04-2026-end
 
             # Rashed-Step 5.E-02-06-2026-start
             # BUGFIX/upgrade: interference used to be counted at full
@@ -346,7 +448,7 @@ class Channel:
             if overlap <= 0.0:
                 continue
             i_dbm = self._rx_pwr_dbm(other, target.rx_pos)
-            i_mw += dbm_to_mw(i_dbm) * overlap
+            i_mw += dbm_to_mw(i_dbm) * overlap * time_weight(other)  # Rashed-Step pre_18.A-10-04-2026
             # Rashed-Step 5.E-02-06-2026-end
 
         n_mw = dbm_to_mw(noise_dbm)
