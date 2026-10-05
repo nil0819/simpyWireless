@@ -21,6 +21,9 @@ import simpy
 
 from channel.channel import Channel
 from nru.nru import Gnb, Config_NR, NruDeploymentMode
+# Rashed-Step 17.E-10-04-2026-start
+from nru.nru import NruUplinkAccessMode
+# Rashed-Step 17.E-10-04-2026-end
 from nru.ue import NrUE
 from common.packet import TrafficConfig
 
@@ -63,7 +66,12 @@ def _make_gnb_with_uplink_ue(config_nr=None, ue_pos=(1.0, 0.0), gnb_pos=(0.0, 0.
     loop)."""
     env = simpy.Environment()
     channel = _make_channel(env)
-    cfg = config_nr if config_nr is not None else Config_NR()
+    # Rashed-Step 17.E-10-04-2026-start
+    # Default pinned to AUTONOMOUS: this file's Step 15.C tests describe
+    # the autonomous (Cat-4) uplink. COT_SHARING (the default since
+    # 17.E) is tested in test_nru_cot.py.
+    cfg = config_nr if config_nr is not None else Config_NR(ul_access_mode=NruUplinkAccessMode.AUTONOMOUS)
+    # Rashed-Step 17.E-10-04-2026-end
     ue = NrUE(
         name="UE 1-1", pos=ue_pos, gnb_name="Gnb 1",
         env=env, channel=channel, config_nr=cfg, uplink_enabled=True,
@@ -205,7 +213,9 @@ def test_uplink_retry_and_drop_under_forced_failure():
     """Force every uplink attempt to fail (impossible SINR threshold),
     with a small r_limit so a drop is reached quickly, mirroring
     Gnb.sent_failed()'s own retry-count/DROP bookkeeping exactly."""
-    cfg = Config_NR(nru_sinr_thr_db_override=1000.0, r_limit=2)
+    # Rashed-Step 17.E-10-04-2026: pinned to AUTONOMOUS (see the helper).
+    cfg = Config_NR(nru_sinr_thr_db_override=1000.0, r_limit=2,
+                    ul_access_mode=NruUplinkAccessMode.AUTONOMOUS)
     env, channel, gnb, ue = _make_gnb_with_uplink_ue(config_nr=cfg)
     env.run(until=60000)
 
@@ -291,8 +301,9 @@ def test_autonomous_uplink_gnb_and_own_ue_start_in_lockstep():
 
 def test_uplink_access_mode_defaults():
     cfg = Config_NR()
-    # AUTONOMOUS until COT_SHARING is built; flips in 17.E.
-    assert cfg.ul_access_mode is NruUplinkAccessMode.AUTONOMOUS
+    # Rashed-Step 17.E-10-04-2026: was AUTONOMOUS until COT sharing
+    # worked; flipped in 17.E (Rashed's decision 1).
+    assert cfg.ul_access_mode is NruUplinkAccessMode.COT_SHARING
     assert cfg.ul_cot_fraction == 0.5
 
 
@@ -307,15 +318,14 @@ def test_ul_cot_fraction_must_be_strictly_between_0_and_1():
     assert Config_NR(ul_cot_fraction=0.25).ul_cot_fraction == 0.25
 
 
-def test_cot_sharing_not_built_yet_fails_loudly_only_with_uplink():
+def test_cot_sharing_uplink_ue_runs_no_autonomous_loop():
+    """Was test_cot_sharing_not_built_yet_fails_loudly_only_with_uplink
+    (17.B guard). Since 17.E COT_SHARING works: the UE builds fine and
+    never contends on its own - with its gNB silenced it never sends."""
     cfg = Config_NR(ul_access_mode=NruUplinkAccessMode.COT_SHARING)
-    try:
-        _make_gnb_with_uplink_ue(config_nr=cfg)
-    except NotImplementedError as e:
-        assert "COT_SHARING is not built yet" in str(e)
-    else:
-        assert False, "expected NotImplementedError"
-    # A UE without uplink ignores the setting entirely.
-    ue = NrUE(name="UE 1-1", pos=(0.0, 0.0), gnb_name="Gnb 1", config_nr=cfg)
-    assert ue.uplink_enabled is False
+    env, channel, gnb, ue = _make_gnb_with_uplink_ue(config_nr=cfg, silence_gnb_downlink=True)
+    env.run(until=50_000)
+    assert ue.transmission_to_send is None
+    assert ue.succeeded_transmissions == ue.failed_transmissions == 0
+    assert ue.ul_grants_received == 0
 # Rashed-Step 17.B-10-04-2026-end

@@ -7,9 +7,11 @@ eligible UE, the downlink uses the first (1 - ul_cot_fraction) of the
 COT, then the gNB opens an uplink window for the rest and holds until it
 ends. Otherwise the whole COT is downlink, exactly as before.
 
-To test the gNB alone, "eligible UE" here is a passive NrUE with
-uplink_enabled flipped on after construction - eligible for the gNB's
-filter, but without starting its own (autonomous) uplink process.
+The eligible UE is a real uplink-capable NrUE. (In 17.C it was a passive
+UE with uplink_enabled flipped on, since the window did nothing yet; 17.E
+made the window actually call the UE, which needs the real thing. In
+COT_SHARING a real uplink UE runs no autonomous loop, so the gNB still
+fully controls the timing.)
 """
 
 import random
@@ -43,9 +45,12 @@ def _cell(mode=NruUplinkAccessMode.COT_SHARING, fraction=0.5, eligible=True, see
     env = simpy.Environment()
     channel = _make_channel(env)
     cfg = Config_NR(ul_access_mode=mode, ul_cot_fraction=fraction)
-    ue = NrUE(name="UE 1-1", pos=(10.0, 0.0), gnb_name="Gnb 1")
+    # Rashed-Step 17.E-10-04-2026: real uplink UE (see module docstring).
     if eligible:
-        ue.uplink_enabled = True  # eligible for the gNB, no own uplink process
+        ue = NrUE(name="UE 1-1", pos=(10.0, 0.0), gnb_name="Gnb 1",
+                  env=env, channel=channel, config_nr=cfg, uplink_enabled=True)
+    else:
+        ue = NrUE(name="UE 1-1", pos=(10.0, 0.0), gnb_name="Gnb 1")
     gnb = Gnb(env, "Gnb 1", channel, (0.0, 0.0), [ue], cfg)
     txs = []
     original = channel.register_tx
@@ -99,12 +104,17 @@ def test_ul_fraction_sets_the_split():
     assert {w["end"] - w["start"] for w in gnb.ul_windows} == {cot * 0.25}
 
 
-def test_unused_window_is_not_counted_as_nru_airtime():
-    """Occupancy counts actual transmissions: with nobody sending in the
-    uplink window yet (17.C), only the downlink part is NR-U airtime."""
+def test_airtime_counts_actual_transmissions_only():
+    """Occupancy counts actual transmissions: the gNB gets its downlink
+    part, the UE its uplink (window minus the 25us Type 2A check) -
+    never the whole COT for either. (17.C version: window unused, only
+    the downlink counted.)"""
     env, channel, cfg, gnb, ue, txs = _cell(fraction=0.5)
     env.run(until=60_000)
-    assert channel.airtime_data_NR["Gnb 1"] == gnb.succeeded_transmissions * cfg.mcot * 1000 * 0.5
+    half = cfg.mcot * 1000 * 0.5
+    assert channel.airtime_data_NR["Gnb 1"] == gnb.succeeded_transmissions * half
+    assert ue.succeeded_transmissions > 0
+    assert channel.airtime_data_NR["UE 1-1"] == ue.succeeded_transmissions * (half - cfg.ul_type2a_sense_us)
 
 
 def test_ue_not_rrc_connected_is_not_given_a_window():
@@ -251,3 +261,102 @@ def test_failed_packet_is_retried_on_next_grant_then_new_packet():
     assert first.packet_id == "UE 1-1-000001" and first.retry_count == 1 and first.status == "DELIVERED"
     assert second.packet_id == "UE 1-1-000002" and second.retry_count == 0
 # Rashed-Step 17.D-10-04-2026-end
+
+
+# Rashed-Step 17.E-10-04-2026-start
+# ---------------------------------------------------------------------
+# 17.E: end to end - running gNB + real uplink UEs, COT_SHARING (the
+# default now). The gNB grants its uplink window to one UE per COT,
+# round-robin; UEs run no Cat-4 of their own.
+# ---------------------------------------------------------------------
+
+from core.network import CoreNetwork
+
+
+def _running_cell(n_ues=1, mode=None, rrc=False, seed=1):
+    random.seed(seed)
+    env = simpy.Environment()
+    channel = _make_channel(env)
+    cfg = Config_NR() if mode is None else Config_NR(ul_access_mode=mode)
+    ues = [NrUE(name=f"UE 1-{i}", pos=(10.0 + i, 0.0), gnb_name="Gnb 1",
+                env=env, channel=channel, config_nr=cfg,
+                uplink_enabled=True, rrc_enabled=rrc)
+           for i in range(1, n_ues + 1)]
+    gnb = Gnb(env, "Gnb 1", channel, (0.0, 0.0), ues, cfg)
+    starts = []
+    original = channel.register_tx
+    channel.register_tx = lambda tx: (starts.append((tx.tx_id, tx.tx_start)), original(tx))[1]
+    return env, channel, cfg, gnb, ues, starts
+
+
+def test_default_is_cot_sharing_and_fixes_single_cell_self_collision():
+    """The 17.A failure case (one gNB + its own uplink UE, both
+    saturated): autonomous delivers nothing either way; COT sharing
+    delivers in both directions and the two never start together."""
+    env, channel, cfg, gnb, (ue,), starts = _running_cell(mode=NruUplinkAccessMode.AUTONOMOUS)
+    env.run(until=300_000)
+    assert gnb.succeeded_transmissions == 0 and ue.succeeded_transmissions == 0
+
+    env, channel, cfg, gnb, (ue,), starts = _running_cell()
+    assert cfg.ul_access_mode is NruUplinkAccessMode.COT_SHARING
+    env.run(until=300_000)
+    assert gnb.failed_transmissions == 0 and ue.failed_transmissions == 0
+    assert gnb.succeeded_transmissions > 10
+    # One window per successful downlink; the last may still be in
+    # progress when the run stops, so compare completed windows.
+    assert len(gnb.ul_windows) == gnb.succeeded_transmissions
+    completed = [w for w in gnb.ul_windows if w["result"] is not None]
+    assert ue.succeeded_transmissions == len(completed) >= len(gnb.ul_windows) - 1
+    gnb_starts = {t for who, t in starts if who == "Gnb 1"}
+    assert not any(t in gnb_starts for who, t in starts if who == "UE 1-1")
+    assert all(p.status == "DELIVERED" for p in ue.packet_log)
+
+
+def test_window_grants_rotate_round_robin():
+    env, channel, cfg, gnb, ues, starts = _running_cell(n_ues=3)
+    env.run(until=300_000)
+    granted = [w["granted"] for w in gnb.ul_windows]
+    assert len(granted) >= 9
+    assert granted[:6] == ["UE 1-1", "UE 1-2", "UE 1-3"] * 2
+    counts = [ue.ul_grants_received for ue in ues]
+    assert max(counts) - min(counts) <= 1
+    assert all(ue.succeeded_transmissions > 0 for ue in ues)
+
+
+def test_skipped_grant_still_holds_gnb_until_window_end():
+    """If the granted UE's Type 2A check fails, the rest of the window is
+    left idle - the gNB doesn't reclaim it - and the next COT starts no
+    earlier than the window end."""
+    env, channel, cfg, gnb, (ue,), starts = _running_cell()
+    busy_until = {"t": 0}
+    original_busy = ue._channel_busy
+    def busy_first_window():
+        if not gnb.ul_windows or len(gnb.ul_windows) > 1:
+            return original_busy()
+        return True
+    ue._channel_busy = busy_first_window
+    env.run(until=40_000)
+    first, second = gnb.ul_windows[0], gnb.ul_windows[1]
+    assert first["result"] is None and ue.type2a_skips == 1
+    assert second["result"] is True
+    gnb_starts = sorted(t for who, t in starts if who == "Gnb 1")
+    assert gnb_starts[1] >= first["end"]
+
+
+def test_no_windows_until_rrc_connected():
+    env, channel, cfg, gnb, (ue,), starts = _running_cell(rrc=True)
+    env.run(until=300_000)
+    assert ue.rrc_state is RrcState.CONNECTED
+    assert gnb.ul_windows and all(w["start"] >= ue.rrc_connected_at for w in gnb.ul_windows)
+
+
+def test_no_windows_until_pdu_session_active():
+    env, channel, cfg, gnb, (ue,), starts = _running_cell()
+    core = CoreNetwork(env)
+    core.start_ue(gnb, ue)
+    env.run(until=400_000)
+    activated = ue.pdu_session.activated_at
+    assert activated is not None
+    assert gnb.ul_windows and all(w["start"] >= activated for w in gnb.ul_windows)
+    assert all(p.created_at >= activated for p in ue.packet_log)
+# Rashed-Step 17.E-10-04-2026-end

@@ -151,15 +151,8 @@ class NrUE:
                 "(Step 15.E)."
             )
         # Rashed-Step 17.B-10-04-2026-start
-        # Same fail-loudly guard as LAA_ANCHORED above, until the COT
-        # sharing path exists (Step 17.C-17.E).
-        if self.config_nr.ul_access_mode == NruUplinkAccessMode.COT_SHARING:
-            raise NotImplementedError(
-                "NrUE: uplink_enabled=True with config_nr.ul_access_mode="
-                "NruUplinkAccessMode.COT_SHARING is not built yet (Step "
-                "17.C-17.E) - use NruUplinkAccessMode.AUTONOMOUS for now. "
-                "See NruUplinkAccessMode's docstring in nru/nru.py."
-            )
+        # (17.B's "COT_SHARING not built yet" guard was removed in 17.E,
+        # when COT sharing started working and became the default.)
         # Rashed-Step 17.B-10-04-2026-end
         self.traffic_config = (
             self.traffic_config if self.traffic_config is not None
@@ -437,6 +430,14 @@ class NrUE:
                 "UE in its own ue_list - see this class's own "
                 "docstring's WIRING section)."
             )
+        # Rashed-Step 17.E-10-04-2026-start
+        # COT sharing: this UE sends data only when its gNB grants it part
+        # of a COT (Gnb._run_ul_window -> send_in_shared_cot), so it runs
+        # no autonomous Cat-4 loop of its own. RRC/UPF gating is applied
+        # by the gNB's eligibility filter instead.
+        if self.config_nr.ul_access_mode is NruUplinkAccessMode.COT_SHARING:
+            return
+        # Rashed-Step 17.E-10-04-2026-end
         # Rashed-Step 15.G-09-18-2026-start
         # Gate real uplink DATA traffic on RRC connection setup, when
         # this UE opted into RRC - see __post_init__'s own comment on

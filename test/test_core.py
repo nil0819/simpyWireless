@@ -172,6 +172,9 @@ from core.procedures import compute_registration_stats
 from ran.protocol.rrc import RrcState
 
 from nru.nru import Gnb, Config_NR
+# Rashed-Step 17.E-10-04-2026-start
+from nru.nru import NruUplinkAccessMode
+# Rashed-Step 17.E-10-04-2026-end
 from nru.ue import NrUE
 from nr.nr import GnbLicensedNR, Config_NRL
 from nr.ue import NrUeLicensed
@@ -532,7 +535,7 @@ def test_nru_ul_waits_for_session_active():
     random.seed(1)
     env = simpy.Environment()
     channel = _make_channel(env)
-    cfg = Config_NR()
+    cfg = Config_NR(ul_access_mode=NruUplinkAccessMode.AUTONOMOUS)  # Rashed-Step 17.E-10-04-2026: pinned - this test describes the autonomous (Cat-4) uplink
     ue = NrUE(
         name="UE 1-1", pos=(10.0, 0.0), gnb_name="G1",
         env=env, channel=channel, config_nr=cfg,
@@ -556,7 +559,7 @@ def test_nru_ul_without_core_unaffected():
     random.seed(1)
     env = simpy.Environment()
     channel = _make_channel(env)
-    cfg = Config_NR()
+    cfg = Config_NR(ul_access_mode=NruUplinkAccessMode.AUTONOMOUS)  # Rashed-Step 17.E-10-04-2026: pinned - this test describes the autonomous (Cat-4) uplink
     ue = NrUE(
         name="UE 1-1", pos=(10.0, 0.0), gnb_name="G1",
         env=env, channel=channel, config_nr=cfg,

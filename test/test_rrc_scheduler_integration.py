@@ -24,6 +24,9 @@ from channel.channel import Channel
 from ran.protocol.rrc import RrcState, compute_connection_setup_stats
 
 from nru.nru import Gnb, Config_NR
+# Rashed-Step 17.E-10-04-2026-start
+from nru.nru import NruUplinkAccessMode
+# Rashed-Step 17.E-10-04-2026-end
 from nru.ue import NrUE
 
 from nr.nr import GnbLicensedNR, Config_NRL
@@ -184,7 +187,7 @@ def test_nru_downlink_includes_ue_once_connected():
 def test_nru_ue_own_uplink_data_path_blocked_until_rrc_connects():
     env = simpy.Environment()
     channel = _make_channel(env)
-    cfg = Config_NR()
+    cfg = Config_NR(ul_access_mode=NruUplinkAccessMode.AUTONOMOUS)  # Rashed-Step 17.E-10-04-2026: pinned - this test describes the autonomous (Cat-4) uplink
     ue = NrUE(
         name="UE 1-1", pos=(10.0, 0.0), gnb_name="G1",
         env=env, channel=channel, config_nr=cfg, uplink_enabled=True, rrc_enabled=True,
@@ -206,7 +209,7 @@ def test_nru_ue_uplink_data_path_unaffected_when_rrc_disabled():
     data immediately, no gate at all."""
     env = simpy.Environment()
     channel = _make_channel(env)
-    cfg = Config_NR()
+    cfg = Config_NR(ul_access_mode=NruUplinkAccessMode.AUTONOMOUS)  # Rashed-Step 17.E-10-04-2026: pinned - this test describes the autonomous (Cat-4) uplink
     ue = NrUE(
         name="UE 1-1", pos=(10.0, 0.0), gnb_name="G1",
         env=env, channel=channel, config_nr=cfg, uplink_enabled=True,

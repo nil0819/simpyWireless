@@ -91,14 +91,12 @@ class NruUplinkAccessMode(Enum):
       every saturated attempt (Step 17.A measured 100% lockstep and 0
       packets delivered either way in a single cell).
 
-    COT_SHARING: real NR-U - the gNB wins Cat-4 LBT, uses the first
-      part of its channel occupancy time (COT) for downlink, and grants
-      the rest (Config_NR.ul_cot_fraction) to its own UEs, who send after
-      a single 25us Type 2A LBT check. Built in 17.C-17.E; becomes the
-      default once it works (Rashed's decision, 2026-10-04). Until then
-      AUTONOMOUS stays the default so existing uplink runs keep working,
-      and selecting COT_SHARING raises NotImplementedError in
-      NrUE.__post_init__.
+    COT_SHARING (default since 17.E): real NR-U - the gNB wins Cat-4
+      LBT, uses the first part of its channel occupancy time (COT) for
+      downlink, and grants the rest (Config_NR.ul_cot_fraction) to one of
+      its own UEs (round-robin across COTs), who sends after a single
+      25us Type 2A LBT check. The UE runs no Cat-4 of its own for data,
+      so it can't collide with its own gNB. Built in Steps 17.C-17.E.
     """
     AUTONOMOUS = "autonomous"
     COT_SHARING = "cot_sharing"
@@ -239,8 +237,14 @@ class Config_NR:
 
     # Rashed-Step 17.B-10-04-2026-start
     # How UEs with uplink_enabled=True access the channel - see
-    # NruUplinkAccessMode. AUTONOMOUS until COT_SHARING is built (17.E).
-    ul_access_mode: NruUplinkAccessMode = NruUplinkAccessMode.AUTONOMOUS
+    # NruUplinkAccessMode.
+    # Rashed-Step 17.E-10-04-2026-start
+    # Default flipped from AUTONOMOUS to COT_SHARING now that it works
+    # (Rashed's decision 1, 2026-10-04). Only changes runs with NR-U
+    # uplink on: the gNB opens uplink windows only for uplink-capable
+    # UEs, so every other run is unaffected.
+    ul_access_mode: NruUplinkAccessMode = NruUplinkAccessMode.COT_SHARING
+    # Rashed-Step 17.E-10-04-2026-end
     # COT_SHARING only: share of the gNB's COT (mcot) granted to its UEs
     # for uplink, after the downlink part. Fixed fraction, default 50/50
     # (Rashed's decision, 2026-10-04). Must be strictly between 0 and 1 -
@@ -390,6 +394,10 @@ class Gnb:
         # only): {"start", "end", "ues"}. Stays empty otherwise.
         self.ul_windows = []
         # Rashed-Step 17.C-10-04-2026-end
+        # Rashed-Step 17.E-10-04-2026-start
+        # Round-robin pointer over eligible UEs for uplink-window grants.
+        self._ul_rr = 0
+        # Rashed-Step 17.E-10-04-2026-end
 
         # Rashed-Step 15.A-09-18-2026-start
         # Shared, stateless Cat-4 LBT strategy (see ran/protocol/
@@ -1003,14 +1011,24 @@ class Gnb:
         ]
 
     def _run_ul_window(self, duration_us: float, ues: list):
-        """Uplink part of a shared COT: records the window and holds the
-        gNB until it ends. 17.C stops here (the channel is simply idle,
-        so other nodes may take it); 17.D/17.E have the granted UEs
-        transmit inside it."""
+        """Uplink part of a shared COT: grants it to one eligible UE and
+        holds the gNB until the window ends (also when that UE skips its
+        grant - the gNB doesn't reclaim the rest of its COT)."""
         start = self.env.now
-        self.ul_windows.append({"start": start, "end": start + duration_us,
-                                "ues": [ue.name for ue in ues]})
-        yield self.env.timeout(duration_us)
+        # Rashed-Step 17.E-10-04-2026-start
+        # The whole window goes to ONE UE, rotating round-robin across
+        # COTs: NR-U here has no per-UE frequency split, so two UEs
+        # sending at once would just interfere at this gNB.
+        ue = ues[self._ul_rr % len(ues)]
+        self._ul_rr += 1
+        record = {"start": start, "end": start + duration_us,
+                  "ues": [u.name for u in ues], "granted": ue.name, "result": None}
+        self.ul_windows.append(record)
+        record["result"] = yield from ue.send_in_shared_cot(duration_us)
+        remaining = start + duration_us - self.env.now
+        if remaining > 0:
+            yield self.env.timeout(remaining)
+        # Rashed-Step 17.E-10-04-2026-end
     # Rashed-Step 17.C-10-04-2026-end
 
     def check_collision(self):  # check if the collision occurred
