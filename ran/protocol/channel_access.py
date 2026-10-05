@@ -73,6 +73,34 @@ def generate_backoff_slots(failed_transmissions_in_row: int, cw_min: int, cw_max
     return random.randint(0, upper_limit)
 
 
+# Rashed-Step pre_18.E-10-05-2026-start
+def sense_idle_for(node: Any, duration: float, busy):
+    """
+    Generator -> True if the channel stays idle (busy() False) from now
+    until now + duration, False as soon as it turns busy before that.
+    Event-driven: wakes on every node.channel.state_changed, so a
+    transmission that starts at any instant is noticed at once - not
+    only at the next fixed sensing step. Something that starts EXACTLY
+    at the end counts as idle (the same-slot rule: both sides go ahead
+    and collide, whatever order the simulator processes them in).
+    Shared by DcfChannelAccess (Wi-Fi, pre_18.D) and LbtChannelAccess
+    (NR-U, pre_18.E).
+    """
+    env = node.env
+    end = env.now + duration
+    if duration <= 0:
+        return True
+    if busy():
+        return False
+    while True:
+        yield env.timeout(end - env.now) | node.channel.state_changed
+        if env.now >= end:
+            return True
+        if busy():
+            return False
+# Rashed-Step pre_18.E-10-05-2026-end
+
+
 class LbtChannelAccess:
     """
     NR-U's Cat-4 LBT channel-access wait: a prioritization period
@@ -101,26 +129,48 @@ class LbtChannelAccess:
         shape) as `node.config_nr`. nru.py's Gnb satisfies this today;
         15.C gives NrUE the same shape so it can reuse this unchanged.
 
-        Generator - same yield sequence/order as the original
-        Gnb.wait_back_off_gap_after(), so callers see byte-identical
-        simulated timing (and, since node.name/node.col are read the
-        same way, byte-identical log output too).
+        Generator. (Until pre_18.E this was a byte-identical move of the
+        original Gnb.wait_back_off_gap_after(); see below for what
+        pre_18.E changed.)
+
+        Rashed-Step pre_18.E (2026-10-05) - 3GPP TS 37.213 Type 1 channel
+        access. The defer period Td = deter_period + M x slot (16 + 3x9 =
+        43us, priority class 3) must be sensed idle in full before the
+        countdown starts AND again after every busy period; the backoff
+        then counts down one observation slot at a time, freezing as soon
+        as the channel turns busy (event-driven sensing - sense_idle_for).
+        Before, Td was just the first part of one countdown that resumed
+        after a busy period without re-sensing Td, and the channel was
+        only checked at the start of each 9us step - the same shortcut
+        the old Wi-Fi loop had (fixed in pre_18.D). Once Wi-Fi did a fresh
+        DIFS after every busy period and NR-U did not, NR-U regained the
+        channel about one defer period earlier after every Wi-Fi
+        transmission (DTMC validation: NR-U 2-5 points above the model).
+        The model charges a defer after every busy period on both sides.
+        Same backoff draw (generate_backoff_slots) as before.
         """
         config = node.config_nr
-        pp = config.deter_period + config.M * config.observation_slot_duration
-        backoff_slots = generate_backoff_slots(node.failed_transmissions_in_row, node.cw_min, node.cw_max)
-        backoff_time = pp + backoff_slots * config.observation_slot_duration
 
-        remaining = backoff_time
-        while remaining > 0:
-            if node.channel.is_busy(node.current_pos(), config.ed_threshold_dbm, exclude_tx_id=node.name,
-                                     sense_f_hz=config.f_ghz, sense_bw_mhz=config.bandwidth_mhz):
-                log(node, f"Channel busy during backoff, pausing backoff with {remaining} us remaining")
+        # Rashed-Step pre_18.E-10-05-2026-start
+        def busy():
+            return node.channel.is_busy(node.current_pos(), config.ed_threshold_dbm, exclude_tx_id=node.name,
+                                        sense_f_hz=config.f_ghz, sense_bw_mhz=config.bandwidth_mhz)
+
+        defer_us = config.deter_period + config.M * config.observation_slot_duration
+        backoff_slots = generate_backoff_slots(node.failed_transmissions_in_row, node.cw_min, node.cw_max)
+        while True:
+            while busy():
                 yield node.channel.state_changed
+            if not (yield from sense_idle_for(node, defer_us, busy)):
                 continue
-            step = min(config.observation_slot_duration, remaining)
-            yield node.env.timeout(step)
-            remaining -= step
+            while backoff_slots > 0:
+                if not (yield from sense_idle_for(node, config.observation_slot_duration, busy)):
+                    log(node, f"Channel busy during backoff, frozen with {backoff_slots} slots left - fresh defer period next")
+                    break
+                backoff_slots -= 1
+            else:
+                break
+        # Rashed-Step pre_18.E-10-05-2026-end
 
         time_to_next_sync_slot = node.next_sync_slot_boundry - node.env.now
         while time_to_next_sync_slot <= 0:
@@ -129,18 +179,97 @@ class LbtChannelAccess:
 
         gap_remaining = time_to_next_sync_slot
         log(node, f"Starting gap period of : {gap_remaining} us")
+        # Rashed-Step pre_18.E-10-05-2026-start
+        # Same meaning as before (freeze on busy, resume the remaining gap
+        # - the DTMC gap states self-loop with pg, no re-defer), but
+        # event-driven: a transmission starting mid-step is noticed at
+        # once instead of at the next 9us check.
         while gap_remaining > 0:
-            if node.channel.is_busy(node.current_pos(), config.ed_threshold_dbm, exclude_tx_id=node.name,
-                                     sense_f_hz=config.f_ghz, sense_bw_mhz=config.bandwidth_mhz):
+            while busy():
                 log(node, f"Channel busy during gap, pausing gap with {gap_remaining} us remaining")
                 yield node.channel.state_changed
-                continue
-            step = min(config.observation_slot_duration, gap_remaining)
-            yield node.env.timeout(step)
-            gap_remaining -= step
+            started = node.env.now
+            idle = yield from sense_idle_for(node, gap_remaining, busy)
+            gap_remaining = 0 if idle else gap_remaining - (node.env.now - started)
+        # Rashed-Step pre_18.E-10-05-2026-end
 
         log(node, "Finished GAP-after-backoff (reached sync boundary)")
         return
+
+
+# Rashed-Step pre_18.D-10-05-2026-start
+class DcfChannelAccess:
+    """
+    Wi-Fi legacy DCF channel-access wait (DIFS + backoff) on a SHARED slot
+    grid - Step pre_18.D (Project details/Step pre_18.txt).
+
+    Why: 802.11 DCF, and the DTMC/Bianchi models, assume all stations count
+    backoff slots on the same grid, so two stations can only collide when
+    they finish in the same slot (they start at the same instant); a
+    station whose slot ends later has already sensed the earlier one and
+    frozen. The old wifi.py/sta.py wait_back_off() counted slots on each
+    station's own grid, checked the channel only at the start of each of
+    its slots, and transmitted after the last one without re-checking -
+    so it missed a neighbour that started a few microseconds earlier
+    (measured: ~3/4 of Wi-Fi/Wi-Fi collisions started 1-9us apart, ~2x
+    the model's collision rate).
+
+    How: (1) wait until the channel is idle; (2) DIFS with the channel
+    continuously idle; (3) wait for the next GLOBAL slot boundary (t a
+    multiple of Times.t_slot) - the DTMC's own slotted time; (4) count the
+    backoff down one global slot at a time. Sensing is event-driven
+    (wakes on every channel.state_changed), so a transmission that starts
+    any time inside a slot is noticed at once; the station freezes, and
+    after the channel clears it does a fresh DIFS (802.11 behaviour - the
+    old code resumed without one). A transmission starting EXACTLY on the
+    boundary where this station's slot ends is the same-slot case: both
+    transmit and collide, whatever order the simulator processes them in.
+
+    Why a global grid rather than one anchored at "idle + DIFS": in this
+    simulator the sender waits for its ACK (44us) without the ACK being on
+    the channel, so other stations would anchor 44us earlier than the
+    sender - 44 is not a multiple of 9, the grids would drift again.
+    A global grid sidesteps that and is exactly the model's assumption.
+    Cost: up to t_slot-1 us of extra waiting after DIFS.
+
+    Stateless; node must expose env, channel, current_pos(), name and
+    config.ed_threshold_dbm / f_ghz / bandwidth_mhz (wifi.WiFi and
+    wifi.sta.WiFiSTA both do).
+    """
+
+    def __init__(self, t_slot_us: float, t_difs_us: float):
+        self.t_slot_us = t_slot_us
+        self.t_difs_us = t_difs_us
+
+    @staticmethod
+    def _busy(node: Any) -> bool:
+        cfg = node.config
+        return node.channel.is_busy(node.current_pos(), cfg.ed_threshold_dbm, exclude_tx_id=node.name,
+                                    sense_f_hz=cfg.f_ghz, sense_bw_mhz=cfg.bandwidth_mhz)
+
+    def _idle_for(self, node: Any, duration: float):
+        """See sense_idle_for() (shared with LbtChannelAccess since pre_18.E)."""
+        return (yield from sense_idle_for(node, duration, lambda: self._busy(node)))
+
+    def wait(self, node: Any, backoff_slots: int):
+        """Generator - returns when `node` may transmit (see class doc)."""
+        env = node.env
+        while True:
+            while self._busy(node):
+                yield node.channel.state_changed
+            if not (yield from self._idle_for(node, self.t_difs_us)):
+                continue
+            to_grid = (self.t_slot_us - env.now % self.t_slot_us) % self.t_slot_us
+            if not (yield from self._idle_for(node, to_grid)):
+                continue
+            while backoff_slots > 0:
+                if not (yield from self._idle_for(node, self.t_slot_us)):
+                    break
+                backoff_slots -= 1
+            else:
+                return
+            log(node, f"Channel busy during backoff, frozen with {backoff_slots} slots left")
+# Rashed-Step pre_18.D-10-05-2026-end
 
 
 class SlotScheduledAccess:

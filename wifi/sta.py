@@ -11,6 +11,10 @@ from common.common import Frame, log, colors
 from common.packet import Packet, TrafficConfig
 from channel.channel import ActiveTx
 from Times import Times, WIFI_MCS_SINR_THRESHOLDS_DB
+# Rashed-Step pre_18.D-10-05-2026-start
+from ran.protocol.channel_access import DcfChannelAccess
+_DCF_ACCESS = DcfChannelAccess(Times.t_slot, Times.t_difs)
+# Rashed-Step pre_18.D-10-05-2026-end
 from common.common_phy import dist, rx_power_dbm, mcs_sinr_threshold_db
 # Rashed-Step 15.B-09-18-2026-end
 
@@ -211,26 +215,12 @@ class WiFiSTA:
 
     def wait_back_off(self):
         backoff_slots = self.generate_new_back_off_slots(self.failed_transmissions_in_row)
-        dif_remaining = Times.t_difs
-        while dif_remaining > 0:
-            if self.channel.is_busy(self.current_pos(), self.config.ed_threshold_dbm, exclude_tx_id=self.name,
-                                     sense_f_hz=self.config.f_ghz, sense_bw_mhz=self.config.bandwidth_mhz):
-                log(self, "Channel busy during DIFS (uplink), waiting...")
-                yield self.channel.state_changed
-                continue
-            step = min(1, dif_remaining)
-            yield self.env.timeout(step)
-            dif_remaining -= step
-
-        while backoff_slots > 0:
-            if self.channel.is_busy(self.current_pos(), self.config.ed_threshold_dbm, exclude_tx_id=self.name,
-                                     sense_f_hz=self.config.f_ghz, sense_bw_mhz=self.config.bandwidth_mhz):
-                log(self, "Channel busy during backoff (uplink), waiting...")
-                yield self.channel.state_changed
-                continue
-            yield self.env.timeout(Times.t_slot)
-            backoff_slots -= 1
-
+        # Rashed-Step pre_18.D-10-05-2026-start
+        # Same shared-slot-grid DCF wait as the AP (wifi.WiFi.wait_back_off,
+        # ran/protocol/channel_access.py DcfChannelAccess), so the two can't
+        # drift apart again.
+        yield from _DCF_ACCESS.wait(self, backoff_slots)
+        # Rashed-Step pre_18.D-10-05-2026-end
         log(self, "Backoff waited (uplink), sending frame...")
         return
 

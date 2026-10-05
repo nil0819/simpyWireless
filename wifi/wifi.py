@@ -10,6 +10,10 @@ from common.common_phy import dist, rx_power_dbm
 
 # Rashed-Step 3.D-01-12-2026-start
 from channel.channel import ActiveTx
+# Rashed-Step pre_18.D-10-05-2026-start
+from ran.protocol.channel_access import DcfChannelAccess
+_DCF_ACCESS = DcfChannelAccess(Times.t_slot, Times.t_difs)
+# Rashed-Step pre_18.D-10-05-2026-end
 # Rashed-Step 3.D-01-12-2026-end
 
 # Rashed-Step 5.D-02-06-2026-start
@@ -826,35 +830,16 @@ class WiFi:
         
     def wait_back_off(self):
         backoff_slots = self.generate_new_back_off_slots(self.failed_transmissions_in_row)
+        # Rashed-Step pre_18.D-10-05-2026-start
+        # DIFS + backoff now on the shared slot grid (ran/protocol/
+        # channel_access.py DcfChannelAccess - see its docstring). The old
+        # loop counted slots on this AP's own grid and only checked the
+        # channel at the start of each slot, so it missed neighbours that
+        # started a few microseconds earlier (~2x the DTMC model's Wi-Fi
+        # collision rate). Same backoff draw as before.
+        yield from _DCF_ACCESS.wait(self, backoff_slots)
+        # Rashed-Step pre_18.D-10-05-2026-end
 
-        dif_remaining = Times.t_difs
-
-        while dif_remaining > 0:
-            # Rashed-Step 5.E-02-06-2026-start
-            # Sensing is now channel-aware: pass this AP's own f_ghz/
-            # bandwidth_mhz so energy on a non-overlapping channel doesn't
-            # falsely mark the channel busy.
-            if self.channel.is_busy(self.current_pos(), self.config.ed_threshold_dbm, exclude_tx_id=self.name,
-                                     sense_f_hz=self.config.f_ghz, sense_bw_mhz=self.config.bandwidth_mhz):
-            # Rashed-Step 5.E-02-06-2026-end
-                log(self, "Channel busy during DIFS, waiting...")
-                yield self.channel.state_changed
-                continue
-            step = min(1, dif_remaining)
-            yield self.env.timeout(step)
-            dif_remaining -= step
-
-        while backoff_slots > 0:
-            # Rashed-Step 5.E-02-06-2026-start
-            if self.channel.is_busy(self.current_pos(), self.config.ed_threshold_dbm, exclude_tx_id=self.name,
-                                     sense_f_hz=self.config.f_ghz, sense_bw_mhz=self.config.bandwidth_mhz):
-            # Rashed-Step 5.E-02-06-2026-end
-                log(self, "Channel busy during backoff, waiting...")
-                yield self.channel.state_changed
-                continue
-            yield self.env.timeout(Times.t_slot)
-            backoff_slots -= 1
-            
         log(self, f"Backoff waited, sending frame...")
 
         return
