@@ -124,3 +124,130 @@ def test_window_opens_only_after_a_successful_downlink():
     assert gnb.failed_transmissions > 0 and gnb.succeeded_transmissions == 0
     assert gnb.ul_windows == []
 # Rashed-Step 17.C-10-04-2026-end
+
+
+# Rashed-Step 17.D-10-04-2026-start
+# ---------------------------------------------------------------------
+# 17.D: the UE side - Type 2A LBT (25us) and one uplink transmission
+# inside a granted window (NrUE.type2a_lbt / send_in_shared_cot). Driven
+# directly here; 17.E wires it to the gNB's window. A loud interferer
+# right next to the UE is placed on the channel at chosen times to make
+# the Type 2A check fail or pass.
+# ---------------------------------------------------------------------
+
+from channel.channel import ActiveTx
+
+
+class _NoLoopUE(NrUE):
+    """Uplink-capable UE without its own autonomous uplink loop."""
+    def start_uplink(self):
+        return
+        yield
+
+
+class _QuietGnb(Gnb):
+    """gNB that never transmits on its own."""
+    def start(self):
+        return
+        yield
+
+
+def _ue_cell():
+    random.seed(1)
+    env = simpy.Environment()
+    channel = _make_channel(env)
+    cfg = Config_NR()
+    ue = _NoLoopUE(name="UE 1-1", pos=(10.0, 0.0), gnb_name="Gnb 1",
+                   env=env, channel=channel, config_nr=cfg, uplink_enabled=True)
+    gnb = _QuietGnb(env, "Gnb 1", channel, (0.0, 0.0), [ue], cfg)
+    return env, channel, cfg, gnb, ue
+
+
+def _interferer(env, channel, start, end, pos=(11.0, 0.0)):
+    def proc():
+        yield env.timeout(start)
+        tx = ActiveTx(tx_id="Wi-Fi X", tx_pos=pos, tx_start=env.now, rx_pos=(12.0, 0.0),
+                      tx_power_dbm=20.0, f_hz=channel_f(), pl_exp=3.0,
+                      t_end=end, tech="WiFi")
+        channel.register_tx(tx)
+        yield env.timeout(end - start)
+        channel.unregister_tx(tx, success=False)
+    env.process(proc())
+
+
+def channel_f():
+    return Config_NR().f_ghz
+
+
+def _grant(env, ue, at, window_us, results):
+    def proc():
+        yield env.timeout(at)
+        results.append((yield from ue.send_in_shared_cot(window_us)))
+    env.process(proc())
+
+
+def test_type2a_on_idle_channel_sends_for_rest_of_window():
+    env, channel, cfg, gnb, ue, = _ue_cell()
+    txs = []
+    original = channel.register_tx
+    channel.register_tx = lambda tx: (txs.append(tx), original(tx))[1]
+    results = []
+    _grant(env, ue, 1000, 3000, results)
+    env.run(until=10_000)
+    assert results == [True]
+    (tx,) = [t for t in txs if t.tx_id == "UE 1-1"]
+    assert tx.tx_start == 1000 + cfg.ul_type2a_sense_us
+    assert tx.t_end == 1000 + 3000  # exactly fills the window
+    assert ue.ul_grants_received == 1 and ue.type2a_skips == 0
+    assert [p.status for p in ue.packet_log] == ["DELIVERED"]
+    assert channel.airtime_data_NR["UE 1-1"] == 3000 - cfg.ul_type2a_sense_us
+    assert ue.transmission_to_send is None  # next grant starts a new packet
+
+
+def test_type2a_busy_at_start_skips_grant():
+    env, channel, cfg, gnb, ue = _ue_cell()
+    _interferer(env, channel, 900, 1500)
+    results = []
+    _grant(env, ue, 1000, 3000, results)
+    env.run(until=10_000)
+    assert results == [None]
+    assert ue.type2a_skips == 1 and ue.succeeded_transmissions == 0 and ue.failed_transmissions == 0
+    assert "UE 1-1" not in channel.airtime_data_NR or channel.airtime_data_NR["UE 1-1"] == 0
+
+
+def test_type2a_busy_during_sensing_skips_grant():
+    env, channel, cfg, gnb, ue = _ue_cell()
+    _interferer(env, channel, 1010, 1500)  # appears 10us into the 25us check
+    results = []
+    _grant(env, ue, 1000, 3000, results)
+    env.run(until=10_000)
+    assert results == [None] and ue.type2a_skips == 1
+
+
+def test_type2a_does_not_protect_after_sensing():
+    """Something starting after the 25us check is not detected - the UE
+    sends anyway (and here loses on SINR), as in real Type 2A. The
+    interferer sits next to the gNB - the uplink's receiver - so it
+    breaks the SINR there."""
+    env, channel, cfg, gnb, ue = _ue_cell()
+    _interferer(env, channel, 1100, 4500, pos=(0.5, 0.0))
+    results = []
+    _grant(env, ue, 1000, 3000, results)
+    env.run(until=10_000)
+    assert results == [False]
+    assert ue.type2a_skips == 0 and ue.failed_transmissions == 1
+
+
+def test_failed_packet_is_retried_on_next_grant_then_new_packet():
+    env, channel, cfg, gnb, ue = _ue_cell()
+    _interferer(env, channel, 1100, 4500, pos=(0.5, 0.0))  # at the gNB: first grant fails on SINR
+    results = []
+    _grant(env, ue, 1000, 3000, results)
+    _grant(env, ue, 8000, 3000, results)   # clean second grant
+    _grant(env, ue, 15000, 3000, results)  # third grant: new packet
+    env.run(until=20_000)
+    assert results == [False, True, True]
+    first, second = ue.packet_log
+    assert first.packet_id == "UE 1-1-000001" and first.retry_count == 1 and first.status == "DELIVERED"
+    assert second.packet_id == "UE 1-1-000002" and second.retry_count == 0
+# Rashed-Step 17.D-10-04-2026-end

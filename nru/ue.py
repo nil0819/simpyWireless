@@ -183,6 +183,13 @@ class NrUE:
         self._packet_seq = 0
         self.packet_log = []
         self.process = None
+        # Rashed-Step 17.D-10-04-2026-start
+        # COT sharing counters (see send_in_shared_cot()): grants this UE
+        # was given inside its gNB's COT, and how many it had to skip
+        # because the Type 2A check found the channel busy.
+        self.ul_grants_received = 0
+        self.type2a_skips = 0
+        # Rashed-Step 17.D-10-04-2026-end
         # Same shared, stateless Cat-4 LBT strategy nru.py's Gnb uses
         # (Step 15.A) - this is the whole point of that refactor.
         self._channel_access = LbtChannelAccess()
@@ -367,6 +374,58 @@ class NrUE:
             new_packet = self._make_packet()
             self.transmission_to_send = self.gen_new_transmission(new_packet)
             self.failed_transmissions_in_row = 0
+
+    # Rashed-Step 17.D-10-04-2026-start
+    def _channel_busy(self) -> bool:
+        return self.channel.is_busy(
+            self.current_pos(), self.config_nr.ed_threshold_dbm, exclude_tx_id=self.name,
+            sense_f_hz=self.config_nr.f_ghz, sense_bw_mhz=self.config_nr.bandwidth_mhz,
+        )
+
+    def type2a_lbt(self):
+        """
+        Generator -> bool. Type 2A LBT (3GPP TS 37.213) for uplink inside
+        the gNB's shared COT: the channel must be idle for
+        config_nr.ul_type2a_sense_us (25us = a 16us gap + one 9us slot).
+        Modeled as three checks - at the start, after 16us, and at the
+        end; busy at any of them means the UE may not send in this COT.
+        No backoff and no retrying within the window, unlike Cat-4.
+        """
+        total = self.config_nr.ul_type2a_sense_us
+        gap = min(16.0, total)
+        for step in (gap, total - gap):
+            if self._channel_busy():
+                return False
+            if step > 0:
+                yield self.env.timeout(step)
+        return not self._channel_busy()
+
+    def send_in_shared_cot(self, window_us: float):
+        """
+        Generator -> True (sent and decoded), False (sent, failed SINR) or
+        None (grant skipped: Type 2A found the channel busy). Uses one
+        uplink grant inside the gNB's COT: Type 2A check, then transmit
+        for the rest of the window through the normal send path, so
+        packet bookkeeping is exactly the autonomous uplink's - a new
+        packet after a success, the same packet retried after a failure,
+        dropped past r_limit.
+        """
+        self.ul_grants_received += 1
+        if self.transmission_to_send is None:
+            self.transmission_to_send = self.gen_new_transmission(self._make_packet())
+        clear = yield from self.type2a_lbt()
+        if not clear:
+            self.type2a_skips += 1
+            log(self, "Uplink: Type 2A found the channel busy, skipping this grant")
+            return None
+        duration = window_us - self.config_nr.ul_type2a_sense_us
+        self.transmission_to_send.transmission_time = duration
+        self.transmission_to_send.airtime = duration
+        was_sent = yield from self.send_transmission()
+        if was_sent:
+            self.transmission_to_send = None
+        return was_sent
+    # Rashed-Step 17.D-10-04-2026-end
 
     def start_uplink(self):
         if self.gnb is None:

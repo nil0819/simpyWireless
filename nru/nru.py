@@ -246,6 +246,13 @@ class Config_NR:
     # (Rashed's decision, 2026-10-04). Must be strictly between 0 and 1 -
     # checked in __post_init__ below.
     ul_cot_fraction: float = 0.5
+    # Rashed-Step 17.D-10-04-2026-start
+    # COT_SHARING only: Type 2A LBT - a UE granted uplink inside its
+    # gNB's COT checks that the channel is idle for this long (a 16us
+    # gap + one 9us sensing slot = 25us, 3GPP TS 37.213) and then sends,
+    # instead of running full Cat-4. See NrUE.type2a_lbt().
+    ul_type2a_sense_us: float = 25.0
+    # Rashed-Step 17.D-10-04-2026-end
 
     def __post_init__(self):
         if not (0.0 < self.ul_cot_fraction < 1.0):
