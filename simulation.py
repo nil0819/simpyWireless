@@ -168,6 +168,15 @@ def run_simulation(
         nru_core_enabled: bool = False,
         core_config: Optional[CoreConfig] = None,
         # Rashed-Step 16.F-10-02-2026-end
+        # Rashed-Step pre_17.B-10-04-2026-start
+        # Opt-in Wi-Fi uplink (Step 15.B's WiFiSTA transmit path, never
+        # exposed until now) for every STA built below: saturated
+        # CSMA/CA uplink to its AP. False (default) = STAs get none of
+        # the uplink kwargs, byte-identical to every earlier run. Not
+        # supported with is_rogue_wifi (RogueWiFiCAD never wires
+        # sta.ap) - singleRun.py rejects that combination.
+        wifi_sta_uplink_enabled: bool = False,
+        # Rashed-Step pre_17.B-10-04-2026-end
 ):
     random.seed(seed)
     environment = simpy.Environment()
@@ -257,8 +266,14 @@ def run_simulation(
                 # Rashed-Step 5.A-02-06-2026-end
                 ap_name=ap_name,
                 # Rashed-Step 5.G-02-06-2026-start
-                mobility=sta_mobility
+                mobility=sta_mobility,
                 # Rashed-Step 5.G-02-06-2026-end
+                # Rashed-Step pre_17.B-10-04-2026-start
+                env=environment if wifi_sta_uplink_enabled else None,
+                channel=channel if wifi_sta_uplink_enabled else None,
+                config=wifi_config if wifi_sta_uplink_enabled else None,
+                uplink_enabled=wifi_sta_uplink_enabled,
+                # Rashed-Step pre_17.B-10-04-2026-end
             )
             stas_for_ap.append(sta)
             wifi_stas.append(sta)
@@ -577,19 +592,39 @@ def run_simulation(
     # Rashed-Step 15.G-09-18-2026-end
 
     # Rashed-Step 16.F-10-02-2026-start
-    # First-packet counts NR-U UPLINK only (each UE's own packet_log,
-    # source=UE name). The gNB's downlink packet_log can't be used:
-    # nru.Gnb._make_packet() stamps every packet destination=ue_list[0]
-    # whichever UE was really picked - including packets sent while the
-    # Core UE was still gated (rx_ue=None) - which would report a fake,
-    # too-early first packet. Without --nru-ue-uplink-enabled this line
-    # therefore reads 0 / None.
+    # Rashed-Step pre_17.A-10-04-2026-start
+    # First-packet now counts both directions: each gNB's downlink
+    # packet_log plus each UE's own uplink packet_log. 16.F had to use
+    # uplink only, because nru.Gnb stamped every downlink packet
+    # destination=ue_list[0], including ones sent before the UE's
+    # session existed (rx_ue=None) - fixed in Step pre_17.A, where those
+    # now carry the gNB's own name and credit no UE.
     if nru_core is not None:
         nru_core_stats = compute_core_stats(
-            ues, [p for ue in ues for p in getattr(ue, "packet_log", [])]
+            ues,
+            [p for g in gnbs for p in g.packet_log]
+            + [p for ue in ues for p in getattr(ue, "packet_log", [])],
         )
-        print_core_stats("NR-U 5G Core", "NRU", nru_core_stats, "uplink packet")
+        print_core_stats("NR-U 5G Core", "NRU", nru_core_stats, "packet")
+    # Rashed-Step pre_17.A-10-04-2026-end
     # Rashed-Step 16.F-10-02-2026-end
+
+    # Rashed-Step pre_17.B-10-04-2026-start
+    # Wi-Fi uplink results - only when the flag is on, so default runs'
+    # stdout is unchanged. The "Wifi packet throughput" line above is
+    # AP (downlink) packets only, as before; uplink goodput is here.
+    wifi_ul_packets = []
+    if wifi_sta_uplink_enabled:
+        wifi_ul_packets = [p for sta in wifi_stas for p in getattr(sta, "packet_log", [])]
+        wifi_ul_stats = compute_packet_stats(wifi_ul_packets)
+        wifi_ul_delivered_bytes = sum(p.total_bytes() for p in wifi_ul_packets if p.status == "DELIVERED")
+        print("=== Wi-Fi Uplink ===")
+        print(f"Wifi uplink STAs: {len(wifi_stas)}")
+        print(f'Wifi uplink packets delivered: {wifi_ul_stats["delivered"]}')
+        print(f'Wifi uplink packets dropped: {wifi_ul_stats["dropped"]}')
+        print(f"Wifi uplink packet throughput (Mbps): {(wifi_ul_delivered_bytes * 8) / (simulation_time * 1e6)}")
+        print(f'Wifi uplink packet avg latency (us): {wifi_ul_stats["avg_latency_us"]}')
+    # Rashed-Step pre_17.B-10-04-2026-end
 
     # Rashed-Step 12.A-08-13-2026-start
     # No longer printed directly to stdout (see below, after every
@@ -671,10 +706,18 @@ def run_simulation(
     # own end-of-run block below, which always writes regardless of any
     # flag).
     if export_packets_csv_path is not None:
+        # Rashed-Step pre_17.B-10-04-2026-start
+        # With Wi-Fi uplink on, each STA's uplink packets are exported
+        # too, as their own WiFi nodes (node = STA name). Without it
+        # this dict is exactly wifi_node_logs, as before.
+        csv_wifi_logs = dict(wifi_node_logs)
+        if wifi_sta_uplink_enabled:
+            csv_wifi_logs.update({sta.name: getattr(sta, "packet_log", []) for sta in wifi_stas})
         rows_written = export_packets_csv(
             export_packets_csv_path, seed,
-            {"WiFi": wifi_node_logs, "NRU": nru_node_logs},
+            {"WiFi": csv_wifi_logs, "NRU": nru_node_logs},
         )
+        # Rashed-Step pre_17.B-10-04-2026-end
         print(f"packet-level CSV export: wrote {rows_written} row(s) to {export_packets_csv_path}")
     # Rashed-Step 9.D-08-07-2026-end
 

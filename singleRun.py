@@ -183,10 +183,13 @@ def parse_traffic_class_mix(raw_values, label: str):
 @click.option("--nru-rrc-enabled", "nru_rrc_enabled", is_flag=True, default=False, help="Enable the generic RRC attach state machine (Step 15.F) for every NR-U UE: IDLE -> CONNECTING -> CONNECTED, via a real RRCSetupRequest/RRCSetup/RRCSetupComplete exchange that genuinely waits through LBT contention. Requires --nru-ue-uplink-enabled too (RRC attach needs real uplink capability - fails fast otherwise). Once set, the gNB's own downlink scheduling AND each UE's own uplink data traffic (Step 15.G) are gated on rrc_state==CONNECTED - see Project details/Step pre_15.txt's STEP 15 - 15.G DONE section. Default (unset/False) = every UE has no rrc_state at all, byte-identical to every pre-15.F run.")
 # Rashed-Step 15.G-09-18-2026-end
 # Rashed-Step 16.F-10-02-2026-start
-@click.option("--nru-core-enabled", "nru_core_enabled", is_flag=True, default=False, help="Enable the minimal 5G Core (Step 16) for every NR-U UE (Wi-Fi untouched): registration with the AMF and a PDU session (SMF/UPF) after RRC connects (or from t=0 without --nru-rrc-enabled); the gNB's downlink and each UE's uplink carry no data for a UE until its session is ACTIVE. Prints an 'NR-U 5G Core' stdout block (its first-packet line counts uplink only - needs --nru-ue-uplink-enabled). Default (unset/False) = no Core, byte-identical to every pre-16.F run.")
+@click.option("--nru-core-enabled", "nru_core_enabled", is_flag=True, default=False, help="Enable the minimal 5G Core (Step 16) for every NR-U UE (Wi-Fi untouched): registration with the AMF and a PDU session (SMF/UPF) after RRC connects (or from t=0 without --nru-rrc-enabled); the gNB's downlink and each UE's uplink carry no data for a UE until its session is ACTIVE. Prints an 'NR-U 5G Core' stdout block (its first-packet line counts downlink and, with --nru-ue-uplink-enabled, uplink). Default (unset/False) = no Core, byte-identical to every pre-16.F run.")
 @click.option("--core-registration-delay-us", "core_registration_delay_us", type=float, default=None, help="Registration Request -> Accept time in us (default 90000, measured Open5GS testbed - see core/network.py). Requires --nru-core-enabled.")
 @click.option("--core-pdu-session-delay-us", "core_pdu_session_delay_us", type=float, default=None, help="PDU Session Establishment Request -> Accept time in us (default 125000, measured Open5GS testbed). Requires --nru-core-enabled.")
 # Rashed-Step 16.F-10-02-2026-end
+# Rashed-Step pre_17.B-10-04-2026-start
+@click.option("--wifi-sta-uplink-enabled", "wifi_sta_uplink_enabled", is_flag=True, default=False, help="Enable real Wi-Fi uplink (Step 15.B): every STA contends for the channel with the same CSMA/CA backoff as its AP and sends saturated uplink traffic to it. Prints a 'Wi-Fi Uplink' stdout block, and with --export-packets-csv adds each STA's uplink packets (node = STA name). Not supported with --rogue True. Default (unset/False) = STAs stay passive, byte-identical to every earlier run.")
+# Rashed-Step pre_17.B-10-04-2026-end
 
 def single_run(
         runs: int,
@@ -292,6 +295,9 @@ def single_run(
         nru_core_enabled: bool = False,
         core_registration_delay_us: float = None,
         core_pdu_session_delay_us: float = None,
+        # Rashed-Step pre_17.B-10-04-2026-start
+        wifi_sta_uplink_enabled: bool = False,
+        # Rashed-Step pre_17.B-10-04-2026-end
         # Rashed-Step 16.F-10-02-2026-end
 ):
     backoffs = {key: {ap_number: 0} for key in range(wifi_cw_max + 1)}
@@ -407,6 +413,14 @@ def single_run(
         core_config = core_config_from_cli(nru_core_enabled, core_registration_delay_us, core_pdu_session_delay_us)
     except ValueError as e:
         raise click.BadParameter(str(e))
+    # Rashed-Step pre_17.B-10-04-2026-start
+    if wifi_sta_uplink_enabled and rogue_wifi:
+        raise click.BadParameter(
+            "--wifi-sta-uplink-enabled is not supported with --rogue True "
+            "(the rogue AP never wires its STAs, so they would have no AP "
+            "to send uplink to)."
+        )
+    # Rashed-Step pre_17.B-10-04-2026-end
     # Rashed-Step 16.F-10-02-2026-end
 
     # Rashed-Step 8.B-08-06-2026-start
@@ -510,6 +524,9 @@ def single_run(
                        # Rashed-Step 16.F-10-02-2026-start
                        nru_core_enabled=nru_core_enabled,
                        core_config=core_config,
+                       # Rashed-Step pre_17.B-10-04-2026-start
+                       wifi_sta_uplink_enabled=wifi_sta_uplink_enabled,
+                       # Rashed-Step pre_17.B-10-04-2026-end
                        # Rashed-Step 16.F-10-02-2026-end
                        )
 

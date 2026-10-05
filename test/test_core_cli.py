@@ -186,9 +186,14 @@ def test_nru_cli_core_without_rrc_numbers():
     assert b["NRU registered"] == "1"
     assert b["NRU PDU sessions active"] == "1"
     assert b["NRU mean attach latency, start -> session active (us)"] == "215000.0"
-    # No --nru-ue-uplink-enabled: the uplink-only first-packet line is empty.
-    assert b["NRU UEs with a delivered uplink packet"] == "0"
-    assert b["NRU mean attach-to-first-uplink packet latency (us)"] == "None"
+    # Rashed-Step pre_17.A-10-04-2026-start
+    # Was "uplink only -> 0 / None" (16.F). Since the NR-U destination
+    # fix, downlink counts too: the first downlink to the UE lands after
+    # its session activates (215ms), never before.
+    assert b["NRU UEs with a delivered packet"] == "1"
+    first = float(b["NRU mean attach-to-first-packet latency (us)"])
+    assert 215_000.0 < first < 300_000.0
+    # Rashed-Step pre_17.A-10-04-2026-end
 
 
 def test_nru_cli_core_with_rrc_attach_includes_rrc_time():

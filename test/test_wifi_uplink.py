@@ -185,3 +185,68 @@ def test_uplink_retry_and_drop_under_forced_failure():
         assert p.retry_count == cfg.r_limit + 1
         assert p.source == "STA 1-1"
 # Rashed-Step 15.B-09-18-2026-end
+
+
+# Rashed-Step pre_17.B-10-04-2026-start
+# ---------------------------------------------------------------------
+# pre_17.B: singleRun.py --wifi-sta-uplink-enabled. CLI runs use click's
+# CliRunner inside isolated_filesystem() so packet.log / CSVs land in a
+# temp dir, not the repo.
+# ---------------------------------------------------------------------
+
+import csv
+
+from click.testing import CliRunner
+
+from singleRun import single_run
+
+_BASE = ["--ap-number", "1", "--gnb-number", "1", "--seed", "1", "-r", "1"]
+
+
+def _invoke(args):
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        result = runner.invoke(single_run, args)
+        rows = []
+        if os.path.exists("p.csv"):
+            with open("p.csv", newline="") as f:
+                rows = list(csv.DictReader(f))
+    return result, rows
+
+
+def _line_value(output, label):
+    for line in output.splitlines():
+        if line.startswith(label + ": "):
+            return line.split(": ", 1)[1]
+    raise AssertionError(f"{label!r} not in output")
+
+
+def test_cli_default_has_no_wifi_uplink_and_no_sta_rows():
+    result, rows = _invoke(_BASE + ["-t", "0.05", "--export-packets-csv", "p.csv"])
+    assert result.exit_code == 0, result.output
+    assert "Wi-Fi Uplink" not in result.output
+    assert not any(r["node"].startswith("STA") for r in rows)
+
+
+def test_cli_wifi_uplink_reports_and_exports_sta_packets():
+    result, rows = _invoke(_BASE + ["-t", "0.2", "--wifi-sta-uplink-enabled", "--export-packets-csv", "p.csv"])
+    assert result.exit_code == 0, (result.output, result.exception)
+    assert "=== Wi-Fi Uplink ===" in result.output
+    assert _line_value(result.output, "Wifi uplink STAs") == "1"
+    delivered = int(_line_value(result.output, "Wifi uplink packets delivered"))
+    assert delivered > 0
+    assert float(_line_value(result.output, "Wifi uplink packet throughput (Mbps)")) > 0.0
+    sta_rows = [r for r in rows if r["node"] == "STA 1-1"]
+    assert sum(r["status"] == "DELIVERED" for r in sta_rows) == delivered
+    assert all(r["technology"] == "WiFi" and r["source"] == "STA 1-1" and r["destination"] == "AP 1"
+               for r in sta_rows)
+    # The AP's downlink keeps running alongside.
+    assert any(r["node"] == "AP 1" and r["status"] == "DELIVERED" for r in rows)
+
+
+def test_cli_wifi_uplink_rejected_with_rogue_ap():
+    result, _ = _invoke(["--ap-number", "1", "--gnb-number", "0", "-t", "0.01", "-r", "1",
+                         "--rogue", "True", "--wifi-sta-uplink-enabled"])
+    assert result.exit_code != 0
+    assert "not supported with --rogue True" in result.output
+# Rashed-Step pre_17.B-10-04-2026-end

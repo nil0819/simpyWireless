@@ -499,8 +499,10 @@ def test_licensed_no_rrc_ue_in_core_gated_from_t0():
 
 class _RecordingGnb(Gnb):
     """NR-U gNB that records which UE each downlink transmission really
-    targets (tx.rx_ue) - Packet.destination is always ue_list[0] in
-    nru.Gnb._make_packet(), so it can't be used for this."""
+    targets (tx.rx_ue). Written in 16.E, when Packet.destination was
+    always ue_list[0]; since Step pre_17.A it matches tx.rx_ue (see
+    test_nru_destination.py), but recording rx_ue directly still tests
+    the gate independently of that fix."""
     def gen_new_transmission(self, packet=None):
         tx = super().gen_new_transmission(packet)
         self.rx_log = getattr(self, "rx_log", [])

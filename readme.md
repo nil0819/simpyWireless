@@ -5,7 +5,7 @@ Simulator created based on the master thesis `Jakub_Cichon_Master_s_Thesis.pdf` 
 * [Wi-Fi simulator](https://github.com/ToporPawel/DCF-Simpy)
 * [NR-U simulator](https://github.com/marekzajac97/nru-channel-access)
 
-This branch (`improved-simulator-2025`) extends that original process/collision-count-based simulator with a real physical layer (path loss, shadowing, SINR/capture-effect success decisions, per-technology MCS/frequency/bandwidth modeling, regulatory EIRP checks, node mobility), a shared real-packet abstraction (queueing/traffic models, retries, ACKs, latency/loss/jitter statistics), a protocol-agnostic generic wireless node usable as a spectrum analyzer or an attack base class, and packet-level attacker capabilities (spoofing, replay) - on top of the original Wi-Fi/NR-U CSMA/LBT coexistence logic, without changing that original access-protocol behavior. See "Project details/" for the full, chronological design/verification log of every change (one `Step N.txt` file per major step, each with a `DONE` section per sub-step listing exactly what changed and how it was verified).
+This branch (`improved-simulator-2025`) extends that original process/collision-count-based simulator with a real physical layer (path loss, shadowing, SINR/capture-effect success decisions, per-technology MCS/frequency/bandwidth modeling, regulatory EIRP checks, node mobility), a shared real-packet abstraction (queueing/traffic models, retries, ACKs, latency/loss/jitter statistics), a protocol-agnostic generic wireless node usable as a spectrum analyzer or an attack base class, and packet-level attacker capabilities (spoofing, replay) - on top of the original Wi-Fi/NR-U CSMA/LBT coexistence logic, without changing that original access-protocol behavior. Since Steps 15-16 it also models the uplink for all three technologies (Wi-Fi CSMA/CA, NR-U Cat-4 LBT, licensed NR TDD with grant-based scheduling), an RRC connection-setup state machine, and a minimal 5G Core (AMF/SMF/UPF: registration and PDU session establishment, with the RAN carrying a UE's data only once its session is active) - all opt-in, so every earlier run is unchanged. See "Project details/" for the full, chronological design/verification log of every change (one `Step N.txt` file per major step, each with a `DONE` section per sub-step listing exactly what changed and how it was verified).
 
 **New here?** See [`GETTING_STARTED.md`](GETTING_STARTED.md) for a short, hands-on walkthrough of all four scenarios - the sections below are the full reference.
 
@@ -42,6 +42,21 @@ channel/channel.py      - Channel: tx queues, ActiveTx, CCA/ED sensing, SINR
 wifi/wifi.py, wifi/sta.py       - Wi-Fi AP + STA (CSMA/CA)
 nru/nru.py, nru/ue.py           - NR-U gNB + UE (Cat-4 LBT, unlicensed)
 nr/nr.py, nr/ue.py              - Licensed 5G NR gNB + UE (scheduled, no LBT)
+ran/protocol/channel_access.py  - shared channel-access strategies (Cat-4
+                                   LBT, slot-scheduled DL/UL allocation)
+ran/protocol/rrc.py             - RRC attach state machine (IDLE ->
+                                   CONNECTING -> CONNECTED), shared by NR-U
+                                   and licensed NR
+ran/protocol/user_plane.py      - RAN-side UPF gate (no data before a UE's
+                                   PDU session is active)
+core/network.py                 - minimal 5G Core: Amf, Smf, Upf,
+                                   CoreNetwork, CoreConfig
+core/procedures.py              - registration + PDU session procedures and
+                                   their latency stats
+model/                          - analytical models (Bianchi DCF, CAD-paper
+                                   DTMC) and sweep harness for validation
+analysis/                       - scripts that generate the paper figures
+                                   into analysis/generated/
 generic/generic_device.py       - GenericWirelessDevice: protocol-agnostic
                                    sniff()/transmit() base class (spectrum
                                    analyzer, attacker base, or a custom-
@@ -84,6 +99,8 @@ Flag groups (see `--help` for exact names/defaults/full descriptions):
 - **QoS/QoE (Step 10.A-10.D, Wi-Fi)**: `--wifi-traffic-class-mix`/`--nru-traffic-class-mix` (repeatable `class=weight`, tags packets voice/video/best_effort/background), `--wifi-edca` (real 802.11e differentiated channel access per class, Wi-Fi only, requires `--wifi-traffic-model=saturated`) - printed per-class latency/loss/SLA-compliance stats and QoE scores (voice: real E-model MOS; video: a labeled heuristic proxy) come free once a class mix is set, no extra flag needed
 - **Dynamic rate adaptation (Step 11)**: `--wifi-rate-adapt` (per-STA ARF - Auto Rate Fallback, Kamerman & Monteban 1997: step MCS up after 10 consecutive successes, down after 2 consecutive failures, no channel-state feedback), `--nru-rate-adapt` (per-UE CQI-style - picks the MCS whose required-SINR threshold best fits the most recently measured link SINR, approximating 3GPP UE-reported Channel Quality Indicator feedback). Both default off (`-m`/`--mcs-value` and `--nru-mcs` stay fixed for the whole run, unchanged from every pre-Step-11 run).
 - **Rogue AP**: `--rogue True` (routes AP traffic through `attacker/roguewificad.py`'s CAD-attack model instead of benign Wi-Fi)
+- **Uplink (Steps 15.B/15.C, pre_17.B)**: `--wifi-sta-uplink-enabled` (every STA contends with CSMA/CA and sends saturated uplink to its AP; prints a "Wi-Fi Uplink" block; not with `--rogue True`), `--nru-ue-uplink-enabled` (every NR-U UE gets its own Cat-4 LBT uplink)
+- **RRC and 5G Core (Steps 15-16, NR-U only)**: `--nru-rrc-enabled` (RRC connection setup before any data; needs `--nru-ue-uplink-enabled`), `--nru-core-enabled` (registration + PDU session; no NR-U data to/from a UE until its session is active), `--core-registration-delay-us` / `--core-pdu-session-delay-us` (override the 90 ms / 125 ms defaults; need `--nru-core-enabled`). See "5G control plane" below.
 
 Example:
 ```bash
@@ -109,6 +126,34 @@ A full-scheduler licensed-spectrum NR gNB/UE model (round-robin or proportional-
 python singleRunNR.py --help
 python singleRunNR.py --gnb-number 1 --ues-per-gnb 4 -t 1 --scheduler proportional_fair
 ```
+
+Uplink, RRC and Core flags (Steps 15.E-16.F): `--tdd-enabled` / `--tdd-pattern` (TDD slot pattern, default `DDDU`), `--ue-uplink-enabled` (grant-based uplink after a one-time scheduling request), `--rrc-enabled` (needs `--ue-uplink-enabled`), `--core-enabled`, `--core-registration-delay-us` / `--core-pdu-session-delay-us`.
+
+```bash
+python singleRunNR.py --gnb-number 1 --ues-per-gnb 2 -t 0.5 --tdd-enabled --ue-uplink-enabled --rrc-enabled --core-enabled
+```
+
+### 5G control plane: RRC and 5G Core (Steps 15-16)
+
+With RRC and the Core turned on, every UE goes through one attach chain before it may carry data: **RRC connection setup -> NAS registration (AMF) -> PDU session establishment (SMF/UPF)**. The RAN schedulers (licensed NR downlink/uplink, NR-U downlink/uplink) only serve a UE once its session is active.
+
+| Stage | Default | Source / note |
+|---|---|---|
+| RRC setup, licensed NR | 4 ms | 2 x 1 ms uplink grant + 2 ms gNB processing; within 3GPP TR 38.913's 10 ms control-plane target |
+| RRC setup, NR-U | 4 ms + LBT wait | same grant cost plus real Cat-4 LBT contention, so never faster than licensed NR (5.6 ms on an idle channel; tens of ms when sharing with Wi-Fi) |
+| Registration | 90 ms | measured Open5GS 5G SA testbed (arXiv:2412.21162); `--core-registration-delay-us` |
+| PDU session | 125 ms | same testbed; `--core-pdu-session-delay-us` |
+
+Both CLIs print an "RRC Connection Setup" block and a "5G Core" block (registration, PDU session, full attach latency, attach-to-first-packet latency). Sample from the licensed-NR command above:
+```
+NR mean registration latency (us): 90000.0
+NR mean PDU session latency (us): 125000.0
+NR mean attach latency, start -> session active (us): 219000.0
+NR mean attach-to-first-packet latency (us): 219500.0
+```
+Keep runs longer than the attach time (about 0.22 s at defaults) - a shorter run carries no data at all. Scope is deliberately minimal: one Core per run, one data network, no slicing, and registration/sessions always succeed (no rejects or retries yet). The registration and PDU-session delays are fixed inputs, not something the simulator measures, so they dominate the attach time at defaults.
+
+Figures: `python -m analysis.rrc_connection_setup_latency` (RRC setup per technology) and `python -m analysis.core_attach_latency` (stacked RRC / registration / PDU session breakdown), written to `analysis/generated/`.
 
 ### Spectrum analyzer (`singleRunSpectrum.py`)
 
@@ -178,12 +223,12 @@ python singleRunNR.py --gnb-number 1 --ues-per-gnb 3 -t 0.1 --rate-adapt --rate-
 
 ## Testing
 
-Assert-based regression suite (no print-and-eyeball scripts for anything added since Step 5.H) - covers PHY primitives, the packet system, `GenericWirelessDevice`, and `PacketAttacker`:
+Assert-based regression suite (no print-and-eyeball scripts for anything added since Step 5.H) - covers PHY primitives, the packet system, `GenericWirelessDevice`, `PacketAttacker`, the analytical models, uplink for all three technologies, RRC, and the 5G Core (including CLI-level tests):
 ```bash
 pip install pytest
 pytest test/
 ```
-211 tests passing as of Step 13.E.3 - Step 13.E (SINR/ML-driven rate adaptation across all three technologies) is now fully complete. Individual files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
+328 tests passing as of Step pre_17. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
 
 ## Current Work Status
 
@@ -209,6 +254,11 @@ pytest test/
 ----> Step 13.D/13.E.1 FIX — found and fixed a real collapse bug (predictor could permanently lock a genuinely constant-SINR link onto an unreachable MCS); with the fix, the predictor is now provably safe on static links (identical to the heuristic) for both technologies, and gives a genuine modest win for Wi-Fi on mobile links (no meaningful difference for NR-U's mobile case)
 ----> Step 13.E.2 — SINR logging extended to GenericWirelessDevice/GenericTransmitter (`measured_sinr_db` populated on every completed transmission carrying a Packet); new `--export-packets-csv` flag on `singleRunGeneric.py`. No rate-adaptation counterpart - this device class has no MCS/data-rate concept
 ----> Step 13.E.3 — licensed NR (`nr/nr.py`) gains full Packet/SINR-logging parity plus a new opt-in ahead-of-time rate-adaptation mode (`--rate-adapt`/`--rate-adapt-ml-model`) alongside its existing oracle/post-hoc MCS pick. Honest result: oracle > heuristic > ML-driven consistently across 20 seeds, the clearest negative ML finding in Step 13 (likely domain mismatch - the reused model was trained on Wi-Fi/NR-U data). STEP 13.E (13.E.1-13.E.3) IS NOW FULLY COMPLETE
+----> Step 14 — `analysis/` figure scripts for the IEEE CCNC 2027 paper (model-vs-simulation occupancy with 95% CIs, sensing-region impact, mobility transition, Wi-Fi/NR-U performance comparison, ML figures), one shared house style
+----> Step pre_15 — 5G architecture assessment + roadmap; dead-code cleanup (channel2.py) and Pos/dist de-duplication
+----> Step 15 (15.A-15.H) — bidirectional links: shared channel-access strategies, uplink for Wi-Fi (CSMA/CA), NR-U (Cat-4 LBT) and licensed NR (TDD + scheduling request/grant), NR-U deployment modes (MultiFire default), generic RRC attach state machine, scheduler gating on RRC state, RRC setup-latency metric and figure
+----> Step 16 (16.A-16.H) — minimal 5G Core: RRC timing fix (licensed NR 4 ms, NR-U never faster), `core/` package (AMF/SMF/UPF), registration and PDU session procedures, RAN-side UPF gate, `--core-enabled` / `--nru-core-enabled` flags, attach-latency breakdown figure, whole-step regression
+----> Step pre_17 — NR-U downlink packets now record their real receiver (and retries keep it), `--wifi-sta-uplink-enabled` flag, this readme / GETTING_STARTED refresh
 
 Full detail (design rationale, exact verified numbers, what was deliberately left out) for every sub-step above is in `Project details/Step N.txt`; `Project details/STATUS - resume context.txt` is the current single-file "start here" summary.
 

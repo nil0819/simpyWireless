@@ -1,7 +1,8 @@
 # Getting Started
 
 A guided first run of this simulator: setup, then a short hands-on look at
-each of the four scenarios it supports. Each section is a real command you
+each of the four scenarios it supports, and at the uplink / 5G control-plane
+options. Each section is a real command you
 can copy-paste, followed by a sentence on what it's showing you. For the
 full flag reference and design/verification history, see `readme.md` and
 `Project details/`.
@@ -23,7 +24,7 @@ pip install pytest
 pytest test/
 ```
 
-You should see `83 passed`. If that's clean, you're ready to run simulations.
+You should see `328 passed` (as of Step pre_17). If that's clean, you're ready to run simulations.
 
 ## 2. Scenario 1 - Wi-Fi + NR-U coexistence
 
@@ -93,6 +94,44 @@ how many it spoofed (with the forged source name), how many it replayed,
 and its own channel occupancy - followed by the real Wi-Fi/NR-U
 success/failure counts, so you can see the attack ran alongside normal
 traffic rather than instead of it.
+
+## 6. Uplink and the 5G control plane
+
+By default every scenario above is downlink only, and UEs can send data
+from the first instant. These opt-in flags (Steps 15-16) add uplink, RRC
+connection setup, and a minimal 5G Core.
+
+Wi-Fi uplink - the STA contends for the channel just like its AP:
+
+```bash
+python singleRun.py --ap-number 1 --gnb-number 1 -t 0.5 -r 1 --wifi-sta-uplink-enabled
+```
+
+Adds a "Wi-Fi Uplink" block. With one AP and one STA you'll see the
+AP's downlink and the STA's uplink split the Wi-Fi airtime roughly
+evenly (about 5.4 vs 5.8 Mbps here).
+
+Licensed NR with the full attach chain - RRC setup, then registration
+with the AMF, then a PDU session; the gNB sends a UE nothing until its
+session is active:
+
+```bash
+python singleRunNR.py --gnb-number 1 --ues-per-gnb 2 -t 0.5 --tdd-enabled --ue-uplink-enabled --rrc-enabled --core-enabled
+```
+
+Look for the "RRC Connection Setup" block (4 ms) and the "5G Core" block:
+registration 90 ms, PDU session 125 ms, full attach 219 ms, first data
+packet 219.5 ms. The same chain for NR-U, sharing the channel with Wi-Fi:
+
+```bash
+python singleRun.py --ap-number 1 --gnb-number 1 -t 0.5 -r 1 --nru-ue-uplink-enabled --nru-rrc-enabled --nru-core-enabled
+```
+
+Here RRC setup takes about 35 ms instead of 4 ms - every NR-U RRC
+message has to win listen-before-talk against the Wi-Fi AP first.
+Keep `-t` above about 0.25 s with the Core on; the attach alone takes
+over 0.2 s, so a shorter run carries no data. The readme's "5G control
+plane" section lists where each default delay comes from.
 
 ## Where to go next
 

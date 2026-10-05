@@ -1003,6 +1003,29 @@ class Gnb:
         tx.packet = packet if packet is not None else self._make_packet()
         # Rashed-Step 8.B-08-06-2026-end
 
+        # Rashed-Step pre_17.A-10-04-2026-start
+        # BUGFIX (found in Step 16.E): _make_packet() stamps destination =
+        # ue_list[0] on every packet, but the real receiver is rx_ue,
+        # picked above - so multi-UE cells mislabeled packets, and
+        # packets sent with no eligible UE (rx_ue=None: mid-RRC or before
+        # a PDU session) were credited to ue_list[0]. Also, rx_ue was
+        # re-drawn on EVERY attempt, so a retry of the same packet could
+        # go to a different UE; real HARQ retransmits to the same one.
+        # Now: a retry (retry_count > 0 - its destination was set by the
+        # previous attempt, below) keeps that receiver while it's still
+        # eligible; destination = the UE actually picked, or this gNB's
+        # own name when there is none (no UE credited). The random draw
+        # above still always happens, so the RNG stream - and every
+        # single-UE cell's output - is unchanged.
+        if tx.packet.retry_count > 0:
+            previous_rx = next(
+                (ue for ue in candidate_ues if ue.name == tx.packet.destination), None
+            )
+            if previous_rx is not None:
+                rx_ue = previous_rx
+        tx.packet.destination = rx_ue.name if rx_ue is not None else self.name
+        # Rashed-Step pre_17.A-10-04-2026-end
+
         # Rashed-Step 5.G-02-06-2026-start
         # current_pos() instead of self.pos/rx_ue.pos for this diagnostic
         # snapshot (distance_m/pr_dbm are logged, not used for the actual
