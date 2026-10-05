@@ -241,3 +241,81 @@ def test_known_limitation_gnb_and_own_ue_collide_when_both_saturated():
     assert ue.succeeded_transmissions == 0
     assert gnb.succeeded_transmissions == 0
 # Rashed-Step 15.C-09-18-2026-end
+
+
+# Rashed-Step 17.A-10-04-2026-start
+# ---------------------------------------------------------------------
+# 17.A: pins the ROOT CAUSE of the 15.C self-collision, not just its
+# symptom: with AUTONOMOUS uplink, a gNB and its own UE start every
+# transmission at the exact same instant, on a shared sync-slot
+# boundary. Mode set explicitly so this keeps describing AUTONOMOUS
+# after COT_SHARING becomes the default (17.E).
+# ---------------------------------------------------------------------
+
+import random
+
+from nru.nru import NruUplinkAccessMode
+
+
+def test_autonomous_uplink_gnb_and_own_ue_start_in_lockstep():
+    for seed in range(1, 6):
+        random.seed(seed)
+        cfg = Config_NR(ul_access_mode=NruUplinkAccessMode.AUTONOMOUS)
+        env, channel, gnb, ue = _make_gnb_with_uplink_ue(config_nr=cfg, silence_gnb_downlink=False)
+        starts = {"Gnb 1": [], "UE 1-1": []}
+        original = channel.register_tx
+        def recording(tx, _orig=original):
+            starts[tx.tx_id].append(tx.tx_start)
+            return _orig(tx)
+        channel.register_tx = recording
+        env.run(until=50_000)
+
+        assert len(starts["UE 1-1"]) >= 3
+        # Every UE transmission starts at the same microsecond as one of
+        # its own gNB's...
+        assert set(starts["UE 1-1"]) <= set(starts["Gnb 1"]), seed
+        # ...and those instants are sync-slot boundaries (equally spaced
+        # by synchronization_slot_duration from the first one).
+        first = min(starts["Gnb 1"])
+        period = cfg.synchronization_slot_duration
+        assert all((t - first) % period == 0 for t in starts["UE 1-1"]), seed
+        # Consequence: nothing gets through in either direction.
+        assert ue.succeeded_transmissions == 0 and gnb.succeeded_transmissions == 0
+# Rashed-Step 17.A-10-04-2026-end
+
+
+# Rashed-Step 17.B-10-04-2026-start
+# ---------------------------------------------------------------------
+# 17.B: Config_NR.ul_access_mode / ul_cot_fraction.
+# ---------------------------------------------------------------------
+
+def test_uplink_access_mode_defaults():
+    cfg = Config_NR()
+    # AUTONOMOUS until COT_SHARING is built; flips in 17.E.
+    assert cfg.ul_access_mode is NruUplinkAccessMode.AUTONOMOUS
+    assert cfg.ul_cot_fraction == 0.5
+
+
+def test_ul_cot_fraction_must_be_strictly_between_0_and_1():
+    for bad in (0.0, 1.0, -0.1, 1.5):
+        try:
+            Config_NR(ul_cot_fraction=bad)
+        except ValueError as e:
+            assert "strictly between 0 and 1" in str(e)
+        else:
+            assert False, f"expected ValueError for {bad}"
+    assert Config_NR(ul_cot_fraction=0.25).ul_cot_fraction == 0.25
+
+
+def test_cot_sharing_not_built_yet_fails_loudly_only_with_uplink():
+    cfg = Config_NR(ul_access_mode=NruUplinkAccessMode.COT_SHARING)
+    try:
+        _make_gnb_with_uplink_ue(config_nr=cfg)
+    except NotImplementedError as e:
+        assert "COT_SHARING is not built yet" in str(e)
+    else:
+        assert False, "expected NotImplementedError"
+    # A UE without uplink ignores the setting entirely.
+    ue = NrUE(name="UE 1-1", pos=(0.0, 0.0), gnb_name="Gnb 1", config_nr=cfg)
+    assert ue.uplink_enabled is False
+# Rashed-Step 17.B-10-04-2026-end

@@ -78,6 +78,33 @@ class NruDeploymentMode(Enum):
 # Rashed-Step 15.D-09-18-2026-end
 
 
+# Rashed-Step 17.B-10-04-2026-start
+class NruUplinkAccessMode(Enum):
+    """
+    How an NR-U UE gets the channel for uplink (Project details/Step
+    17.txt). Only matters when a UE has uplink_enabled=True.
+
+    AUTONOMOUS: Step 15.C's behavior - each UE runs its own full Cat-4
+      LBT, independently of its gNB, then waits for the same sync-slot
+      boundary as the gNB. Kept for comparison: it makes a gNB and its
+      own UE start transmitting at the same instant and collide on
+      every saturated attempt (Step 17.A measured 100% lockstep and 0
+      packets delivered either way in a single cell).
+
+    COT_SHARING: real NR-U - the gNB wins Cat-4 LBT, uses the first
+      part of its channel occupancy time (COT) for downlink, and grants
+      the rest (Config_NR.ul_cot_fraction) to its own UEs, who send after
+      a single 25us Type 2A LBT check. Built in 17.C-17.E; becomes the
+      default once it works (Rashed's decision, 2026-10-04). Until then
+      AUTONOMOUS stays the default so existing uplink runs keep working,
+      and selecting COT_SHARING raises NotImplementedError in
+      NrUE.__post_init__.
+    """
+    AUTONOMOUS = "autonomous"
+    COT_SHARING = "cot_sharing"
+# Rashed-Step 17.B-10-04-2026-end
+
+
 # Rashed-Step 5.D-02-06-2026-start
 # NR-U never had an MCS/rate table before (unlike WiFi's Times.py MCS
 # dict) - transmission duration here is still purely mcot-based, not
@@ -209,6 +236,25 @@ class Config_NR:
     # defaults. Only read when a UE has rrc_enabled=True.
     rrc_ul_grant_delay_us: float = 1000.0
     # Rashed-Step 16.A-10-02-2026-end
+
+    # Rashed-Step 17.B-10-04-2026-start
+    # How UEs with uplink_enabled=True access the channel - see
+    # NruUplinkAccessMode. AUTONOMOUS until COT_SHARING is built (17.E).
+    ul_access_mode: NruUplinkAccessMode = NruUplinkAccessMode.AUTONOMOUS
+    # COT_SHARING only: share of the gNB's COT (mcot) granted to its UEs
+    # for uplink, after the downlink part. Fixed fraction, default 50/50
+    # (Rashed's decision, 2026-10-04). Must be strictly between 0 and 1 -
+    # checked in __post_init__ below.
+    ul_cot_fraction: float = 0.5
+
+    def __post_init__(self):
+        if not (0.0 < self.ul_cot_fraction < 1.0):
+            raise ValueError(
+                f"Config_NR.ul_cot_fraction must be strictly between 0 and 1 "
+                f"(got {self.ul_cot_fraction}) - the COT needs both a "
+                f"downlink and an uplink part."
+            )
+    # Rashed-Step 17.B-10-04-2026-end
 
 
 

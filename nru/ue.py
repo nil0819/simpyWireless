@@ -17,6 +17,9 @@ from nru.nru import Transmission_NR, NRU_MCS_SINR_THRESHOLDS_DB, NruDeploymentMo
 # Rashed-Step 15.F-09-18-2026-start
 from ran.protocol.rrc import RrcState
 # Rashed-Step 15.F-09-18-2026-end
+# Rashed-Step 17.B-10-04-2026-start
+from nru.nru import NruUplinkAccessMode
+# Rashed-Step 17.B-10-04-2026-end
 
 @dataclass
 class NrUE:
@@ -147,6 +150,17 @@ class NrUE:
                 "nru/nru.py and Step pre_15.txt's Section 3 roadmap "
                 "(Step 15.E)."
             )
+        # Rashed-Step 17.B-10-04-2026-start
+        # Same fail-loudly guard as LAA_ANCHORED above, until the COT
+        # sharing path exists (Step 17.C-17.E).
+        if self.config_nr.ul_access_mode == NruUplinkAccessMode.COT_SHARING:
+            raise NotImplementedError(
+                "NrUE: uplink_enabled=True with config_nr.ul_access_mode="
+                "NruUplinkAccessMode.COT_SHARING is not built yet (Step "
+                "17.C-17.E) - use NruUplinkAccessMode.AUTONOMOUS for now. "
+                "See NruUplinkAccessMode's docstring in nru/nru.py."
+            )
+        # Rashed-Step 17.B-10-04-2026-end
         self.traffic_config = (
             self.traffic_config if self.traffic_config is not None
             else TrafficConfig(mode="saturated")
