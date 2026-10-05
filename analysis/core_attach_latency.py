@@ -45,6 +45,9 @@ from core.network import CoreNetwork, CoreConfig
 from core.procedures import compute_pdu_session_stats
 
 from nru.nru import Gnb, Config_NR
+# Rashed-Step 17.F-10-04-2026-start
+from nru.nru import NruUplinkAccessMode
+# Rashed-Step 17.F-10-04-2026-end
 from nru.ue import NrUE
 
 from nr.nr import GnbLicensedNR, Config_NRL
@@ -94,7 +97,10 @@ def _stages_us(scenario: str, seed: int, core_config: CoreConfig = None):
                           env=env, config=cfg, uplink_enabled=True, rrc_enabled=True)
         gnb = GnbLicensedNR(env, "G1", channel, GNB_POS, [ue], cfg)
     else:
-        cfg = Config_NR()
+        # Rashed-Step 17.F-10-04-2026: pinned to the autonomous (Cat-4)
+        # RRC path these scenarios were defined with, so this figure is
+        # unchanged until 17.G revises the scenarios for COT sharing.
+        cfg = Config_NR(ul_access_mode=NruUplinkAccessMode.AUTONOMOUS)
         ue = NrUE(name="UE 1-1", pos=UE_POS, gnb_name="G1",
                   env=env, channel=channel, config_nr=cfg,
                   uplink_enabled=True, rrc_enabled=True)

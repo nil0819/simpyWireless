@@ -398,6 +398,12 @@ class Gnb:
         # Round-robin pointer over eligible UEs for uplink-window grants.
         self._ul_rr = 0
         # Rashed-Step 17.E-10-04-2026-end
+        # Rashed-Step 17.F-10-04-2026-start
+        # Fired (and replaced) at the end of every successful downlink in
+        # COT_SHARING mode - what a UE's RRC message waits on for its
+        # grant (see rrc_uplink_delay()). Never fired in AUTONOMOUS mode.
+        self._dl_cot_done = env.event()
+        # Rashed-Step 17.F-10-04-2026-end
 
         # Rashed-Step 15.A-09-18-2026-start
         # Shared, stateless Cat-4 LBT strategy (see ran/protocol/
@@ -638,6 +644,22 @@ class Gnb:
         # see Config_NR.rrc_ul_grant_delay_us.
         yield self.env.timeout(self.config_nr.rrc_ul_grant_delay_us)
         # Rashed-Step 16.A-10-02-2026-end
+        # Rashed-Step 17.F-10-04-2026-start
+        # COT sharing: the RRC message goes the same way as uplink data -
+        # its grant rides in this gNB's next successful downlink COT, and
+        # the UE sends at the start of that COT's uplink part after a
+        # 25us Type 2A check; if the check fails, it waits for the next
+        # COT. No Cat-4 by the UE. (Still a signaling delay, no airtime
+        # of its own - same as the autonomous version below.) Note: a
+        # gNB that never transmits never opens a COT, so the attach then
+        # never completes - by design, there is no grant to use.
+        if self.config_nr.ul_access_mode is NruUplinkAccessMode.COT_SHARING:
+            while True:
+                yield self._dl_cot_done
+                if (yield from ue.type2a_lbt()):
+                    return
+                ue.rrc_type2a_skips = getattr(ue, "rrc_type2a_skips", 0) + 1
+        # Rashed-Step 17.F-10-04-2026-end
         yield from self._channel_access.wait(ue)
     # Rashed-Step 15.F-09-18-2026-end
 
@@ -976,6 +998,14 @@ class Gnb:
         # only opens if that downlink got through. The gNB holds here
         # until its COT ends - it doesn't start a new LBT while its own
         # UEs are using the shared COT.
+        # Rashed-Step 17.F-10-04-2026-start
+        # Wake any UE whose RRC message is waiting for a grant (COT
+        # sharing only). Fired before the uplink window so an RRC message
+        # and a data grant can share the same COT end.
+        if was_sent and self.config_nr.ul_access_mode is NruUplinkAccessMode.COT_SHARING:
+            done, self._dl_cot_done = self._dl_cot_done, self.env.event()
+            done.succeed()
+        # Rashed-Step 17.F-10-04-2026-end
         if ul_window_us > 0 and was_sent:
             yield from self._run_ul_window(ul_window_us, cot_ul_ues)
         # Rashed-Step 17.C-10-04-2026-end

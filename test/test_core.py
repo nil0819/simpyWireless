@@ -252,7 +252,7 @@ def test_nru_registration_waits_for_rrc_connected():
     random.seed(1)
     env = simpy.Environment()
     channel = _make_channel(env)
-    cfg = Config_NR()
+    cfg = Config_NR(ul_access_mode=NruUplinkAccessMode.AUTONOMOUS)  # Rashed-Step 17.F-10-04-2026: pinned - autonomous (Cat-4) RRC path; COT sharing needs a transmitting gNB
     ue = NrUE(
         name="UE 1-1", pos=(10.0, 0.0), gnb_name="G1",
         env=env, channel=channel, config_nr=cfg,
@@ -367,7 +367,7 @@ def test_nru_session_follows_registration():
     random.seed(1)
     env = simpy.Environment()
     channel = _make_channel(env)
-    cfg = Config_NR()
+    cfg = Config_NR(ul_access_mode=NruUplinkAccessMode.AUTONOMOUS)  # Rashed-Step 17.F-10-04-2026: pinned - autonomous (Cat-4) RRC path; COT sharing needs a transmitting gNB
     ue = NrUE(
         name="UE 1-1", pos=(10.0, 0.0), gnb_name="G1",
         env=env, channel=channel, config_nr=cfg,

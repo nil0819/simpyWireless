@@ -360,3 +360,82 @@ def test_no_windows_until_pdu_session_active():
     assert gnb.ul_windows and all(w["start"] >= activated for w in gnb.ul_windows)
     assert all(p.created_at >= activated for p in ue.packet_log)
 # Rashed-Step 17.E-10-04-2026-end
+
+
+# Rashed-Step 17.F-10-04-2026-start
+# ---------------------------------------------------------------------
+# 17.F: RRC uplink messages in COT sharing - grant delay, then the next
+# successful downlink COT of the UE's own gNB, then a 25us Type 2A check
+# at its end (next COT if busy). No Cat-4 by the UE.
+# ---------------------------------------------------------------------
+
+def _rrc_cell(seed, gnb_cls=Gnb):
+    random.seed(seed)
+    env = simpy.Environment()
+    channel = _make_channel(env)
+    cfg = Config_NR()
+    ue = NrUE(name="UE 1-1", pos=(10.0, 0.0), gnb_name="Gnb 1",
+              env=env, channel=channel, config_nr=cfg,
+              uplink_enabled=True, rrc_enabled=True)
+    gnb = gnb_cls(env, "Gnb 1", channel, (0.0, 0.0), [ue], cfg)
+    dl_ends = []
+    original = channel.unregister_tx
+    def recording(tx, success=True):
+        if tx.tx_id == "Gnb 1" and success:
+            dl_ends.append(tx.t_end)
+        return original(tx, success=success)
+    channel.unregister_tx = recording
+    return env, cfg, gnb, ue, dl_ends
+
+
+def test_rrc_messages_ride_the_gnbs_downlink_cots():
+    for seed in range(1, 6):
+        env, cfg, gnb, ue, dl_ends = _rrc_cell(seed)
+        env.run(until=200_000)
+        assert ue.rrc_state is RrcState.CONNECTED, seed
+        sense = cfg.ul_type2a_sense_us
+        # Both uplink RRC messages leave exactly one Type 2A check after
+        # the end of one of this gNB's successful downlinks...
+        assert ue.rrc_setup_request_sent_at - sense in dl_ends, seed
+        assert ue.rrc_setup_complete_sent_at - sense in dl_ends, seed
+        # ...and not before the grant delay.
+        assert ue.rrc_setup_request_sent_at >= ue.rrc_attach_started_at + cfg.rrc_ul_grant_delay_us
+        assert ue.rrc_setup_complete_sent_at >= ue.rrc_setup_received_at + cfg.rrc_ul_grant_delay_us
+        # No data windows before CONNECTED (17.E), so these were
+        # full-COT downlinks.
+        assert all(w["start"] >= ue.rrc_connected_at for w in gnb.ul_windows)
+
+
+def test_rrc_cot_sharing_never_faster_than_licensed():
+    for seed in range(1, 11):
+        env, cfg, gnb, ue, dl_ends = _rrc_cell(seed)
+        env.run(until=200_000)
+        latency = ue.rrc_connected_at - ue.rrc_attach_started_at
+        assert latency >= 2 * cfg.rrc_ul_grant_delay_us + gnb._rrc_layer.setup_processing_delay_us
+
+
+def test_rrc_waits_for_next_cot_when_type2a_busy():
+    env, cfg, gnb, ue, dl_ends = _rrc_cell(1)
+    calls = {"n": 0}
+    original_busy = ue._channel_busy
+    def busy_on_first_check():
+        calls["n"] += 1
+        return True if calls["n"] == 1 else original_busy()
+    ue._channel_busy = busy_on_first_check
+    env.run(until=200_000)
+    assert ue.rrc_state is RrcState.CONNECTED
+    assert ue.rrc_type2a_skips == 1
+    sense = cfg.ul_type2a_sense_us
+    # The request went out after the SECOND downlink end it could use.
+    usable = [t for t in dl_ends if t >= ue.rrc_attach_started_at + cfg.rrc_ul_grant_delay_us]
+    assert ue.rrc_setup_request_sent_at == usable[1] + sense
+
+
+def test_rrc_never_completes_without_a_transmitting_gnb():
+    """By design: in COT sharing the grant comes in the gNB's COT, so a
+    gNB that never transmits never lets the UE attach."""
+    env, cfg, gnb, ue, dl_ends = _rrc_cell(1, gnb_cls=_QuietGnb)
+    env.run(until=200_000)
+    assert dl_ends == []
+    assert ue.rrc_state is RrcState.CONNECTING
+# Rashed-Step 17.F-10-04-2026-end
