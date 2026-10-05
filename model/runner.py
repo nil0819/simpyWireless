@@ -54,6 +54,15 @@ _PATTERNS = {
     "nru_throughput_mbps": r"NRU packet throughput \(Mbps\): ([\d.]+)",
     "nru_avg_latency_us": r"NRU packet avg latency \(us\): ([\d.]+|None)",
     # Rashed-Step 14.A-08-28-2026-end
+    # Rashed-Step 17.G-10-05-2026-start
+    # NR-U uplink block (17.G part 1, only printed with
+    # --nru-ue-uplink-enabled) and the NR-U RRC block (15.G, only with
+    # --nru-rrc-enabled) - None when the block isn't in the output.
+    "nru_ul_throughput_mbps": r"NRU uplink packet throughput \(Mbps\): ([\d.]+)",
+    "nru_ul_delivered": r"NRU uplink packets delivered: (\d+)",
+    "nru_ul_failed_attempts": r"NRU uplink attempts ok/failed: \d+/(\d+)",
+    "nru_rrc_latency_us": r"NRU RRC mean connection setup latency \(us\): ([\d.]+|None)",
+    # Rashed-Step 17.G-10-05-2026-end
 }
 _SUCC_FAIL_WIFI = r"succ WiFi: (\d+) fail WiFi: (\d+)"
 _SUCC_FAIL_NRU = r"succ NRU: (\d+) fail NRU: (\d+)"

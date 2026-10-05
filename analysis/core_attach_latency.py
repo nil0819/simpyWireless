@@ -14,6 +14,10 @@ hard-coded:
   Licensed NR (grant-based RRC), NR-U on an idle channel (gNB downlink
   silenced, isolated LBT), NR-U with the gNB's own saturated downlink
   (Step 15.C's self-collision case).
+  Rashed-Step 17.G (2026-10-05): the two NR-U scenarios are now NR-U with
+  COT sharing (the default since 17.E) and NR-U autonomous Cat-4 (the
+  legacy mode, gNB downlink active) - see rrc_connection_setup_latency.py
+  for why the "isolated" scenario no longer exists.
 
 Per UE: RRC = rrc_connected_at - rrc_attach_started_at, registration =
 registered_at - reg_requested_at, PDU session = activated_at -
@@ -63,8 +67,12 @@ RUN_UNTIL_US = 400_000.0
 
 SCENARIOS = [
     ("licensed", "Licensed NR\n(grant-based)"),
-    ("nru_isolated", "NR-U\n(isolated LBT)"),
-    ("nru_collision", "NR-U\n(gNB self-collision)"),
+    # Rashed-Step 17.G-10-05-2026-start
+    # Same revision as rrc_connection_setup_latency.py (see its module
+    # docstring): COT sharing (default) vs autonomous Cat-4, gNB active.
+    ("nru_cot", "NR-U\n(COT sharing)"),
+    ("nru_autonomous", "NR-U\n(autonomous Cat-4)"),
+    # Rashed-Step 17.G-10-05-2026-end
 ]
 
 
@@ -97,15 +105,15 @@ def _stages_us(scenario: str, seed: int, core_config: CoreConfig = None):
                           env=env, config=cfg, uplink_enabled=True, rrc_enabled=True)
         gnb = GnbLicensedNR(env, "G1", channel, GNB_POS, [ue], cfg)
     else:
-        # Rashed-Step 17.F-10-04-2026: pinned to the autonomous (Cat-4)
-        # RRC path these scenarios were defined with, so this figure is
-        # unchanged until 17.G revises the scenarios for COT sharing.
-        cfg = Config_NR(ul_access_mode=NruUplinkAccessMode.AUTONOMOUS)
+        # Rashed-Step 17.G-10-05-2026-start
+        mode = (NruUplinkAccessMode.COT_SHARING if scenario == "nru_cot"
+                else NruUplinkAccessMode.AUTONOMOUS)
+        cfg = Config_NR(ul_access_mode=mode)
         ue = NrUE(name="UE 1-1", pos=UE_POS, gnb_name="G1",
                   env=env, channel=channel, config_nr=cfg,
                   uplink_enabled=True, rrc_enabled=True)
-        gnb_cls = _NoAutoStartGnb if scenario == "nru_isolated" else Gnb
-        gnb = gnb_cls(env, "G1", channel, GNB_POS, [ue], cfg)
+        gnb = Gnb(env, "G1", channel, GNB_POS, [ue], cfg)
+        # Rashed-Step 17.G-10-05-2026-end
 
     CoreNetwork(env, core_config).start_ue(gnb, ue)
     env.run(until=RUN_UNTIL_US)

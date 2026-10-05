@@ -230,11 +230,11 @@ def test_attach_stages_licensed_nr_exact():
 
 
 def test_attach_stages_nru_rrc_slower_than_licensed_core_stages_identical():
-    for scenario in ("nru_isolated", "nru_collision"):
+    for scenario in ("nru_cot", "nru_autonomous"):  # Rashed-Step 17.G-10-05-2026: revised scenarios
         rrc, reg, pdu = cal._stages_us(scenario, seed=1)
         assert rrc > 4000.0
         assert (reg, pdu) == (90_000.0, 125_000.0)
-    assert cal._stages_us("nru_collision", 1)[0] > cal._stages_us("nru_isolated", 1)[0]
+    assert cal._stages_us("nru_autonomous", 1)[0] > cal._stages_us("nru_cot", 1)[0]
 
 
 def test_attach_stages_follow_custom_core_config():

@@ -2,6 +2,23 @@
 """
 Figure: RRC connection-setup latency, three scenarios.
 
+Rashed-Step 17.G (2026-10-05) - SCENARIOS REVISED for COT sharing (the
+NR-U default since 17.E). The original NR-U bars ("isolated LBT" with the
+gNB downlink silenced, and "gNB self-collision") both described the
+AUTONOMOUS (Cat-4) uplink. Under COT sharing a silent gNB never opens a
+COT, so an "isolated" UE can't attach at all - that scenario no longer
+exists. The three bars are now:
+  Licensed NR (grant-based)  - unchanged, 4000us every seed.
+  NR-U (COT sharing)         - the default: RRC messages wait the grant
+                               delay, then the gNB's next successful
+                               downlink COT, then a 25us Type 2A check
+                               (17.F).
+  NR-U (autonomous Cat-4)    - the legacy 15.C mode, gNB downlink active
+                               (formerly "gNB self-collision"), kept for
+                               comparison.
+Everything below the next paragraph is the original 15.G/16.A text,
+describing the old scenarios.
+
 Directly exercises Step 15.F's generic RrcLayer/RrcState machinery and
 Step 15.G's compute_connection_setup_stats() metric against REAL,
 live simulator runs (not hard-coded numbers, unlike analysis/
@@ -132,34 +149,36 @@ def _licensed_nr_latency_us(seed: int) -> float:
     return stats["latencies_us"][0]
 
 
-def _nru_latency_us(seed: int, isolated: bool) -> float:
+# Rashed-Step 17.G-10-05-2026-start
+def _nru_latency_us(seed: int, mode: "NruUplinkAccessMode") -> float:
+    """One NR-U UE attaching to a gNB whose downlink is ACTIVE, in the
+    given uplink access mode (17.G - was `isolated: bool`, see the module
+    docstring)."""
     random.seed(seed)
     env = simpy.Environment()
     channel = _make_channel(env)
-    # Rashed-Step 17.F-10-04-2026: pinned to the autonomous (Cat-4) RRC
-    # path these scenarios were defined with, so this figure is unchanged
-    # until 17.G revises the scenarios for COT sharing.
-    cfg = Config_NR(ul_access_mode=NruUplinkAccessMode.AUTONOMOUS)
+    cfg = Config_NR(ul_access_mode=mode)
     ue = NrUE(
         name="UE 1-1", pos=UE_POS, gnb_name="G1",
         env=env, channel=channel, config_nr=cfg, uplink_enabled=True, rrc_enabled=True,
     )
-    gnb_cls = _NoAutoStartGnb if isolated else Gnb
-    gnb_cls(env, "G1", channel, GNB_POS, [ue], cfg)
+    Gnb(env, "G1", channel, GNB_POS, [ue], cfg)
     env.run(until=RUN_UNTIL_US)
     stats = compute_connection_setup_stats([ue])
-    scenario = "isolated" if isolated else "gNB self-collision"
-    assert stats["connected"] == 1, f"seed {seed}: NR-U ({scenario}) UE never connected within {RUN_UNTIL_US}us"
+    assert stats["connected"] == 1, f"seed {seed}: NR-U ({mode.value}) UE never connected within {RUN_UNTIL_US}us"
     return stats["latencies_us"][0]
+# Rashed-Step 17.G-10-05-2026-end
 
 
 def generate(seeds=SEEDS):
     licensed_nr = [_licensed_nr_latency_us(s) for s in seeds]
-    nru_isolated = [_nru_latency_us(s, isolated=True) for s in seeds]
-    nru_collision = [_nru_latency_us(s, isolated=False) for s in seeds]
+    # Rashed-Step 17.G-10-05-2026-start
+    nru_cot = [_nru_latency_us(s, NruUplinkAccessMode.COT_SHARING) for s in seeds]
+    nru_autonomous = [_nru_latency_us(s, NruUplinkAccessMode.AUTONOMOUS) for s in seeds]
 
-    categories = ["Licensed NR\n(grant-based)", "NR-U\n(isolated LBT)", "NR-U\n(gNB self-collision)"]
-    means = [statistics.mean(licensed_nr), statistics.mean(nru_isolated), statistics.mean(nru_collision)]
+    categories = ["Licensed NR\n(grant-based)", "NR-U\n(COT sharing)", "NR-U\n(autonomous Cat-4)"]
+    means = [statistics.mean(licensed_nr), statistics.mean(nru_cot), statistics.mean(nru_autonomous)]
+    # Rashed-Step 17.G-10-05-2026-end
 
     paths = save_bar_figure(
         categories=categories,
@@ -174,8 +193,8 @@ def generate(seeds=SEEDS):
     return {
         "categories": categories,
         "licensed_nr_us": licensed_nr,
-        "nru_isolated_us": nru_isolated,
-        "nru_collision_us": nru_collision,
+        "nru_cot_us": nru_cot,
+        "nru_autonomous_us": nru_autonomous,
         "means_us": means,
     }, paths
 
@@ -186,8 +205,8 @@ if __name__ == "__main__":
     print("-" * 78)
     for label, values in (
         ("Licensed NR (grant-based)", results["licensed_nr_us"]),
-        ("NR-U (isolated LBT)", results["nru_isolated_us"]),
-        ("NR-U (gNB self-collision)", results["nru_collision_us"]),
+        ("NR-U (COT sharing)", results["nru_cot_us"]),
+        ("NR-U (autonomous Cat-4)", results["nru_autonomous_us"]),
     ):
         mean = statistics.mean(values)
         stdev = statistics.stdev(values) if len(values) > 1 else 0.0
