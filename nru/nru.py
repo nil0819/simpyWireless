@@ -378,6 +378,11 @@ class Gnb:
         # rationale - feeds common.packet.compute_packet_stats().
         self.packet_log = []
         # Rashed-Step 8.G-08-06-2026-end
+        # Rashed-Step 17.C-10-04-2026-start
+        # Every uplink window this gNB opened inside its COT (COT_SHARING
+        # only): {"start", "end", "ues"}. Stays empty otherwise.
+        self.ul_windows = []
+        # Rashed-Step 17.C-10-04-2026-end
 
         # Rashed-Step 15.A-09-18-2026-start
         # Shared, stateless Cat-4 LBT strategy (see ran/protocol/
@@ -822,6 +827,19 @@ class Gnb:
         tx_dur = self.transmission_to_send.transmission_time
         # Rashed-Step 5.G-02-06-2026-end
 
+        # Rashed-Step 17.C-10-04-2026-start
+        # COT sharing: if any of this gNB's UEs can send uplink right now,
+        # the downlink only uses the first (1 - ul_cot_fraction) of the
+        # COT and the rest becomes an uplink window for them (opened
+        # below, after the downlink). Otherwise - AUTONOMOUS mode, or no
+        # eligible UE - the whole COT is downlink, exactly as before.
+        cot_ul_ues = self._cot_ul_ues()
+        ul_window_us = 0.0
+        if cot_ul_ues:
+            ul_window_us = tx_dur * self.config_nr.ul_cot_fraction
+            tx_dur = tx_dur - ul_window_us
+        # Rashed-Step 17.C-10-04-2026-end
+
         active = ActiveTx(
             tx_id=self.name,
             tx_pos=tx_pos,
@@ -938,6 +956,15 @@ class Gnb:
             raise
             # Rashed-Step 5.I-02-06-2026-end
 
+        # Rashed-Step 17.C-10-04-2026-start
+        # The uplink grants travel in the downlink part, so the window
+        # only opens if that downlink got through. The gNB holds here
+        # until its COT ends - it doesn't start a new LBT while its own
+        # UEs are using the shared COT.
+        if ul_window_us > 0 and was_sent:
+            yield from self._run_ul_window(ul_window_us, cot_ul_ues)
+        # Rashed-Step 17.C-10-04-2026-end
+
         if was_sent:
             self.channel.airtime_control_NR[self.name] += self.transmission_to_send.rs_time
             # Rashed-Step 5.1-02-06-2026-start
@@ -952,6 +979,32 @@ class Gnb:
             return True
         else:
             return False
+
+    # Rashed-Step 17.C-10-04-2026-start
+    def _cot_ul_ues(self) -> list:
+        """UEs that get a slice of this gNB's next COT for uplink: only in
+        COT_SHARING mode, and only UEs with uplink on, RRC CONNECTED (or
+        no RRC) and allowed by the UPF gate - same eligibility filters as
+        the downlink destination pick. Empty list = whole COT downlink."""
+        if self.config_nr.ul_access_mode is not NruUplinkAccessMode.COT_SHARING:
+            return []
+        return [
+            ue for ue in self.ue_list
+            if getattr(ue, "uplink_enabled", False)
+            and getattr(ue, "rrc_state", RrcState.CONNECTED) is RrcState.CONNECTED
+            and user_plane_allows(ue)
+        ]
+
+    def _run_ul_window(self, duration_us: float, ues: list):
+        """Uplink part of a shared COT: records the window and holds the
+        gNB until it ends. 17.C stops here (the channel is simply idle,
+        so other nodes may take it); 17.D/17.E have the granted UEs
+        transmit inside it."""
+        start = self.env.now
+        self.ul_windows.append({"start": start, "end": start + duration_us,
+                                "ues": [ue.name for ue in ues]})
+        yield self.env.timeout(duration_us)
+    # Rashed-Step 17.C-10-04-2026-end
 
     def check_collision(self):  # check if the collision occurred
 
