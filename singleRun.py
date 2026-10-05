@@ -179,7 +179,7 @@ def parse_traffic_class_mix(raw_values, label: str):
 @click.option("--wifi-rate-adapt-ml-model", "wifi_rate_adapt_ml_model", type=str, default=None, help="Same idea as --nru-rate-adapt-ml-model, for Wi-Fi. When set, Wi-Fi's rate adaptation (--wifi-rate-adapt, required alongside this flag) switches from ARF's success/fail-streak logic to a CQI-style direct MCS pick from the model's PREDICTED next SINR, once a link has enough history. Default (unset/None) = every pre-Step-13.E run's exact ARF behavior. The same model file trained for NR-U works here too (it was trained with a technology_is_wifi feature already) - no separate Wi-Fi model needed.")
 # Rashed-Step 13.E.1-08-23-2026-end
 # Rashed-Step 15.G-09-18-2026-start
-@click.option("--nru-ue-uplink-enabled", "nru_ue_uplink_enabled", is_flag=True, default=False, help="Enable real NR-U uplink (Step 15.C): every UE gets a genuine Cat-4 LBT uplink transmit path (contention-based, saturated traffic only - see nru/ue.py's NrUE class docstring). Default (unset/False) = every UE stays the passive position+label object it always was, byte-identical to every pre-15.C run.")
+@click.option("--nru-ue-uplink-enabled", "nru_ue_uplink_enabled", is_flag=True, default=False, help="Enable real NR-U uplink (saturated traffic). How the UE gets the channel is set by --nru-ul-access-mode: by default (cot_sharing, Step 17) its gNB grants it the uplink part of the gNB's own channel occupancy time and the UE sends after a 25us Type 2A check; with autonomous (Step 15.C) every UE runs its own Cat-4 LBT, which makes it collide with its own gNB. Default (unset/False) = every UE stays the passive position+label object it always was, byte-identical to every pre-15.C run.")
 @click.option("--nru-rrc-enabled", "nru_rrc_enabled", is_flag=True, default=False, help="Enable the generic RRC attach state machine (Step 15.F) for every NR-U UE: IDLE -> CONNECTING -> CONNECTED, via a real RRCSetupRequest/RRCSetup/RRCSetupComplete exchange that genuinely waits through LBT contention. Requires --nru-ue-uplink-enabled too (RRC attach needs real uplink capability - fails fast otherwise). Once set, the gNB's own downlink scheduling AND each UE's own uplink data traffic (Step 15.G) are gated on rrc_state==CONNECTED - see Project details/Step pre_15.txt's STEP 15 - 15.G DONE section. Default (unset/False) = every UE has no rrc_state at all, byte-identical to every pre-15.F run.")
 # Rashed-Step 15.G-09-18-2026-end
 # Rashed-Step 16.F-10-02-2026-start
@@ -190,6 +190,10 @@ def parse_traffic_class_mix(raw_values, label: str):
 # Rashed-Step pre_17.B-10-04-2026-start
 @click.option("--wifi-sta-uplink-enabled", "wifi_sta_uplink_enabled", is_flag=True, default=False, help="Enable real Wi-Fi uplink (Step 15.B): every STA contends for the channel with the same CSMA/CA backoff as its AP and sends saturated uplink traffic to it. Prints a 'Wi-Fi Uplink' stdout block, and with --export-packets-csv adds each STA's uplink packets (node = STA name). Not supported with --rogue True. Default (unset/False) = STAs stay passive, byte-identical to every earlier run.")
 # Rashed-Step pre_17.B-10-04-2026-end
+# Rashed-Step 17.G-10-04-2026-start
+@click.option("--nru-ul-access-mode", "nru_ul_access_mode", type=click.Choice(["cot_sharing", "autonomous"]), default="cot_sharing", help="How NR-U UEs access the channel for uplink (only matters with --nru-ue-uplink-enabled). cot_sharing (default, Step 17): the gNB splits each channel occupancy time into a downlink part and an uplink part granted to one of its UEs (round-robin), who sends after a 25us Type 2A check. autonomous (Step 15.C): every UE runs its own Cat-4 LBT - kept for comparison; it makes a gNB and its own UE collide on every saturated attempt.")
+@click.option("--nru-ul-cot-fraction", "nru_ul_cot_fraction", type=float, default=0.5, help="cot_sharing only: share of the gNB's channel occupancy time given to uplink (strictly between 0 and 1; default 0.5).")
+# Rashed-Step 17.G-10-04-2026-end
 
 def single_run(
         runs: int,
@@ -297,6 +301,10 @@ def single_run(
         core_pdu_session_delay_us: float = None,
         # Rashed-Step pre_17.B-10-04-2026-start
         wifi_sta_uplink_enabled: bool = False,
+        # Rashed-Step 17.G-10-04-2026-start
+        nru_ul_access_mode: str = "cot_sharing",
+        nru_ul_cot_fraction: float = 0.5,
+        # Rashed-Step 17.G-10-04-2026-end
         # Rashed-Step pre_17.B-10-04-2026-end
         # Rashed-Step 16.F-10-02-2026-end
 ):
@@ -414,6 +422,12 @@ def single_run(
     except ValueError as e:
         raise click.BadParameter(str(e))
     # Rashed-Step pre_17.B-10-04-2026-start
+    # Rashed-Step 17.G-10-04-2026-start
+    if not (0.0 < nru_ul_cot_fraction < 1.0):
+        raise click.BadParameter(
+            f"--nru-ul-cot-fraction must be strictly between 0 and 1 (got {nru_ul_cot_fraction})."
+        )
+    # Rashed-Step 17.G-10-04-2026-end
     if wifi_sta_uplink_enabled and rogue_wifi:
         raise click.BadParameter(
             "--wifi-sta-uplink-enabled is not supported with --rogue True "
@@ -487,6 +501,10 @@ def single_run(
                                  # Rashed-Step 13.D-08-23-2026-start
                                  sinr_predictor=nru_sinr_predictor,
                                  # Rashed-Step 13.D-08-23-2026-end
+                                 # Rashed-Step 17.G-10-04-2026-start
+                                 ul_access_mode=NruUplinkAccessMode(nru_ul_access_mode),
+                                 ul_cot_fraction=nru_ul_cot_fraction,
+                                 # Rashed-Step 17.G-10-04-2026-end
                                  ),
                        # Rashed-Step 5.C-02-06-2026-end
                        backoffs, airtime_data, airtime_control, airtime_data_NR, airtime_control_NR, rogue_wifi,

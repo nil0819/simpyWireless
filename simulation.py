@@ -626,6 +626,29 @@ def run_simulation(
         print(f'Wifi uplink packet avg latency (us): {wifi_ul_stats["avg_latency_us"]}')
     # Rashed-Step pre_17.B-10-04-2026-end
 
+    # Rashed-Step 17.G-10-04-2026-start
+    # NR-U uplink results - only when NR-U uplink is on, so default runs'
+    # stdout is unchanged. "NRU packet throughput" above stays gNB
+    # (downlink) packets only, as before.
+    if nru_ue_uplink_enabled:
+        nru_ul_packets = [p for ue in ues for p in getattr(ue, "packet_log", [])]
+        nru_ul_stats = compute_packet_stats(nru_ul_packets)
+        nru_ul_bytes = sum(p.total_bytes() for p in nru_ul_packets if p.status == "DELIVERED")
+        print("=== NR-U Uplink ===")
+        print(f"NRU uplink access mode: {configNr.ul_access_mode.value}")
+        print(f"NRU uplink UEs: {len(ues)}")
+        print(f'NRU uplink packets delivered: {nru_ul_stats["delivered"]}')
+        print(f'NRU uplink packets dropped: {nru_ul_stats["dropped"]}')
+        print(f"NRU uplink attempts ok/failed: {sum(ue.succeeded_transmissions for ue in ues)}/"
+              f"{sum(ue.failed_transmissions for ue in ues)}")
+        print(f"NRU uplink packet throughput (Mbps): {(nru_ul_bytes * 8) / (simulation_time * 1e6)}")
+        print(f'NRU uplink packet avg latency (us): {nru_ul_stats["avg_latency_us"]}')
+        if configNr.ul_access_mode is NruUplinkAccessMode.COT_SHARING:
+            print(f"NRU COT uplink fraction: {configNr.ul_cot_fraction}")
+            print(f"NRU uplink windows opened: {sum(len(g.ul_windows) for g in gnbs)}")
+            print(f"NRU uplink grants skipped (Type 2A busy): {sum(ue.type2a_skips for ue in ues)}")
+    # Rashed-Step 17.G-10-04-2026-end
+
     # Rashed-Step 12.A-08-13-2026-start
     # No longer printed directly to stdout (see below, after every
     # section is computed) - collected into packet_report_sections

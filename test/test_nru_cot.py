@@ -439,3 +439,61 @@ def test_rrc_never_completes_without_a_transmitting_gnb():
     assert dl_ends == []
     assert ue.rrc_state is RrcState.CONNECTING
 # Rashed-Step 17.F-10-04-2026-end
+
+
+# Rashed-Step 17.G-10-04-2026-start
+# ---------------------------------------------------------------------
+# 17.G: singleRun.py --nru-ul-access-mode / --nru-ul-cot-fraction and the
+# "NR-U Uplink" stdout block. CliRunner in an isolated filesystem so
+# packet.log doesn't land in the repo.
+# ---------------------------------------------------------------------
+
+from click.testing import CliRunner
+from singleRun import single_run
+
+_CLI = ["--ap-number", "0", "--gnb-number", "1", "-t", "0.3", "-r", "1", "--seed", "1"]
+
+
+def _cli(args):
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        return runner.invoke(single_run, args)
+
+
+def _value(output, label):
+    for line in output.splitlines():
+        if line.startswith(label + ": "):
+            return line.split(": ", 1)[1]
+    raise AssertionError(f"{label!r} not in output")
+
+
+def test_cli_no_uplink_block_without_nru_uplink():
+    r = _cli(_CLI)
+    assert r.exit_code == 0, r.output
+    assert "NR-U Uplink" not in r.output
+
+
+def test_cli_default_mode_is_cot_sharing_and_delivers():
+    r = _cli(_CLI + ["--nru-ue-uplink-enabled"])
+    assert r.exit_code == 0, (r.output, r.exception)
+    assert _value(r.output, "NRU uplink access mode") == "cot_sharing"
+    assert int(_value(r.output, "NRU uplink packets delivered")) > 0
+    assert _value(r.output, "NRU COT uplink fraction") == "0.5"
+    assert int(_value(r.output, "NRU uplink windows opened")) > 0
+
+
+def test_cli_autonomous_mode_reproduces_self_collision():
+    r = _cli(_CLI + ["--nru-ue-uplink-enabled", "--nru-ul-access-mode", "autonomous"])
+    assert r.exit_code == 0, r.output
+    assert _value(r.output, "NRU uplink access mode") == "autonomous"
+    assert _value(r.output, "NRU uplink packets delivered") == "0"
+    assert "NRU uplink windows opened" not in r.output
+
+
+def test_cli_cot_fraction_changes_split_and_is_validated():
+    r = _cli(_CLI + ["--nru-ue-uplink-enabled", "--nru-ul-cot-fraction", "0.25"])
+    assert r.exit_code == 0, r.output
+    assert _value(r.output, "NRU COT uplink fraction") == "0.25"
+    bad = _cli(_CLI + ["--nru-ul-cot-fraction", "1.0"])
+    assert bad.exit_code != 0 and "strictly between 0 and 1" in bad.output
+# Rashed-Step 17.G-10-04-2026-end
