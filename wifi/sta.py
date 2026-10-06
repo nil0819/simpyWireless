@@ -13,6 +13,9 @@ from channel.channel import ActiveTx
 from Times import Times, WIFI_MCS_SINR_THRESHOLDS_DB
 # Rashed-Step pre_18.D-10-05-2026-start
 from ran.protocol.channel_access import DcfChannelAccess
+# Rashed-Step 18.A-10-06-2026-start
+from common.error_model import decode_ok
+# Rashed-Step 18.A-10-06-2026-end
 _DCF_ACCESS = DcfChannelAccess(Times.t_slot, Times.t_difs)
 # Rashed-Step pre_18.D-10-05-2026-end
 from common.common_phy import dist, rx_power_dbm, mcs_sinr_threshold_db
@@ -252,7 +255,9 @@ class WiFiSTA:
             self.frame_to_send.packet.measured_sinr_db = sinr
             required_sinr = self.required_sinr_db()
             log(self, f"Uplink TX->AP SINR(dB) = {sinr:.2f} dB, required (MCS {self.config.mcs}) = {required_sinr:.2f} dB")
-            was_sent = (sinr >= required_sinr)
+            # Rashed-Step 18.A-10-06-2026-start
+            was_sent = decode_ok(getattr(self.config, "error_model", None), sinr, required_sinr)
+            # Rashed-Step 18.A-10-06-2026-end
             if was_sent:
                 self.sent_completed()
             else:

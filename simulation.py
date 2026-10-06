@@ -45,6 +45,10 @@ from ran.protocol.rrc import compute_connection_setup_stats
 # Rashed-Step 16.F-10-02-2026-start
 from core.network import CoreNetwork, CoreConfig
 from core.procedures import compute_core_stats, print_core_stats
+# Rashed-Step 18.A-10-06-2026-start
+from dataclasses import replace as _dc_replace
+from common.error_model import ErrorModelConfig, make_error_model, print_error_model_stats
+# Rashed-Step 18.A-10-06-2026-end
 # Rashed-Step 16.F-10-02-2026-end
 
 
@@ -177,6 +181,12 @@ def run_simulation(
         # sta.ap) - singleRun.py rejects that combination.
         wifi_sta_uplink_enabled: bool = False,
         # Rashed-Step pre_17.B-10-04-2026-end
+        # Rashed-Step 18.A-10-06-2026-start
+        # Link error model shared by every Wi-Fi AP/STA and NR-U gNB/UE
+        # in this run (common/error_model.py). None (default) = the hard
+        # SINR-threshold rule, byte-identical to every earlier run.
+        error_model_config: Optional[ErrorModelConfig] = None,
+        # Rashed-Step 18.A-10-06-2026-end
 ):
     random.seed(seed)
     environment = simpy.Environment()
@@ -192,6 +202,17 @@ def run_simulation(
     else:
         wifi_config = config
     # Rashed-Step pre_5.D-02-06-2026-end
+    # Rashed-Step 18.A-10-06-2026-start
+    # One model per run, built from this run's seed. Copies of the
+    # configs carry it, so the caller's objects (reused across -r runs)
+    # are never mutated. The rogue AP's ConfigRoguesWiFi has no
+    # error_model field and keeps the threshold rule.
+    error_model = make_error_model(error_model_config, seed)
+    if error_model is not None:
+        if hasattr(wifi_config, "error_model"):
+            wifi_config = _dc_replace(wifi_config, error_model=error_model)
+        configNr = _dc_replace(configNr, error_model=error_model)
+    # Rashed-Step 18.A-10-06-2026-end
     # Rashed-Step 3.F-01-13-2026-start
     # channel = Channel(
     #     simpy.PreemptiveResource(environment, capacity=1),
@@ -648,6 +669,10 @@ def run_simulation(
             print(f"NRU uplink windows opened: {sum(len(g.ul_windows) for g in gnbs)}")
             print(f"NRU uplink grants skipped (Type 2A busy): {sum(ue.type2a_skips for ue in ues)}")
     # Rashed-Step 17.G-10-04-2026-end
+
+    # Rashed-Step 18.A-10-06-2026-start
+    print_error_model_stats(error_model)
+    # Rashed-Step 18.A-10-06-2026-end
 
     # Rashed-Step 12.A-08-13-2026-start
     # No longer printed directly to stdout (see below, after every

@@ -37,6 +37,9 @@ from ran.protocol.rrc import RrcState
 # Rashed-Step 15.G-09-18-2026-end
 # Rashed-Step 16.E-10-02-2026-start
 from ran.protocol.user_plane import user_plane_allows
+# Rashed-Step 18.A-10-06-2026-start
+from common.error_model import decode_ok
+# Rashed-Step 18.A-10-06-2026-end
 # Rashed-Step 16.E-10-02-2026-end
 
 
@@ -192,6 +195,12 @@ class Config_NRL:
     # / wifi.Config.sinr_predictor.
     sinr_predictor: Any = None
     # Rashed-Step 13.E.3-08-23-2026-end
+
+    # Rashed-Step 18.A-10-06-2026-start
+    # Shared BlerErrorModel (common/error_model.py). None (default) =
+    # the hard per-MCS threshold rule, byte-identical to earlier runs.
+    error_model: Any = None
+    # Rashed-Step 18.A-10-06-2026-end
 
     # Rashed-Step 15.E-09-18-2026-start
     # Opt-in TDD uplink. False (default): every slot is scheduled as
@@ -571,6 +580,24 @@ class GnbLicensedNR:
                 return select_mcs_for_sinr(predicted)
         return select_mcs_for_sinr(state["last_sinr_db"])
 
+    # Rashed-Step 18.A-10-06-2026-start
+    def _decode_mcs(self, sinr_db: float, mcs: Optional[int]) -> Optional[int]:
+        """
+        Post-hoc (oracle) link adaptation picked `mcs` from the measured
+        SINR. Threshold rule (no error model): that pick IS the outcome,
+        returned unchanged. BLER model: the block is still decoded with
+        a random draw - at the picked MCS, or at MCS 0 when even MCS 0's
+        threshold wasn't met (it may still get through below threshold).
+        Returns the MCS that delivered, or None for a block error.
+        """
+        if self.config.error_model is None:
+            return mcs
+        tried = 0 if mcs is None else mcs
+        if decode_ok(self.config.error_model, sinr_db, NR_MCS_TABLE[tried][0]):
+            return tried
+        return None
+    # Rashed-Step 18.A-10-06-2026-end
+
     def record_link_result(self, ue_name: str, measured_sinr_db: float) -> None:
         """Update this UE's ahead-of-time rate-adaptation state. No-op
         when rate_adapt_enabled is False (keeps link_state empty in that
@@ -709,7 +736,9 @@ class GnbLicensedNR:
                     # adaptation fallible, unlike the oracle fallback
                     # below.
                     required_db = NR_MCS_TABLE[chosen_mcs][0]
-                    if sinr >= required_db:
+                    # Rashed-Step 18.A-10-06-2026-start
+                    if decode_ok(self.config.error_model, sinr, required_db):
+                    # Rashed-Step 18.A-10-06-2026-end
                         mcs = chosen_mcs
                     else:
                         mcs = None
@@ -719,6 +748,9 @@ class GnbLicensedNR:
                     # post-hoc behavior, byte-identical when
                     # rate_adapt_enabled is False.
                     mcs = select_mcs_for_sinr(sinr)
+                    # Rashed-Step 18.A-10-06-2026-start
+                    mcs = self._decode_mcs(sinr, mcs)
+                    # Rashed-Step 18.A-10-06-2026-end
 
                 if mcs is not None:
                     eff = NR_MCS_TABLE[mcs][1]
@@ -820,6 +852,9 @@ class GnbLicensedNR:
                 sinr = self.channel.sinr_db(tx)
                 packet.measured_sinr_db = sinr
                 mcs = select_mcs_for_sinr(sinr)
+                # Rashed-Step 18.A-10-06-2026-start
+                mcs = self._decode_mcs(sinr, mcs)
+                # Rashed-Step 18.A-10-06-2026-end
                 if mcs is not None:
                     eff = NR_MCS_TABLE[mcs][1]
                     bits = eff * (rb_count * self.rb_bandwidth_hz) * (self.slot_us / 1e6)

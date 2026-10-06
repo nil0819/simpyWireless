@@ -26,6 +26,10 @@ from ran.protocol.rrc import compute_connection_setup_stats
 # Rashed-Step 16.F-10-02-2026-start
 from core.network import CoreNetwork, CoreConfig
 from core.procedures import compute_core_stats, print_core_stats
+# Rashed-Step 18.A-10-06-2026-start
+from dataclasses import replace as _dc_replace
+from common.error_model import ErrorModelConfig, make_error_model, print_error_model_stats
+# Rashed-Step 18.A-10-06-2026-end
 # Rashed-Step 16.F-10-02-2026-end
 
 
@@ -92,8 +96,18 @@ def run_simulation_licensed_nr(
         core_enabled: bool = False,
         core_config: Optional[CoreConfig] = None,
         # Rashed-Step 16.F-10-02-2026-end
+        # Rashed-Step 18.A-10-06-2026-start
+        # Link error model for every gNB/UE in this run. None (default)
+        # = the hard per-MCS threshold rule, byte-identical to earlier runs.
+        error_model_config: Optional[ErrorModelConfig] = None,
+        # Rashed-Step 18.A-10-06-2026-end
 ):
     random.seed(seed)
+    # Rashed-Step 18.A-10-06-2026-start
+    error_model = make_error_model(error_model_config, seed)
+    if error_model is not None:
+        config = _dc_replace(config, error_model=error_model)
+    # Rashed-Step 18.A-10-06-2026-end
     environment = simpy.Environment()
 
     # Channel() needs tx_queue/tx_lock for backward compatibility with
@@ -230,6 +244,10 @@ def run_simulation_licensed_nr(
         print_core_stats("Licensed 5G NR 5G Core", "NR", nr_core_stats, "packet")
     # Rashed-Step 16.F-10-02-2026-end
 
+    # Rashed-Step 18.A-10-06-2026-start
+    print_error_model_stats(error_model)
+    # Rashed-Step 18.A-10-06-2026-end
+
     # Rashed-Step 13.E.3-08-23-2026-start
     # Opt-in packet-level CSV export, same technology-agnostic
     # export_packets_csv() (Step 9.D) every other scenario uses - keyed
@@ -258,5 +276,9 @@ def run_simulation_licensed_nr(
         # None when core_enabled=False.
         "core_stats": nr_core_stats,
         # Rashed-Step 16.F-10-02-2026-end
+        # Rashed-Step 18.A-10-06-2026-start
+        # None with the default threshold rule.
+        "error_model_stats": dict(error_model.stats) if error_model is not None else None,
+        # Rashed-Step 18.A-10-06-2026-end
     }
 # Rashed-Step 6.B-07-31-2026-end

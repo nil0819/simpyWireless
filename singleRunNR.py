@@ -10,6 +10,9 @@ from simulation_nr import run_simulation_licensed_nr, parse_pos_list_nr
 from nr.nr import Config_NRL
 # Rashed-Step 16.F-10-02-2026-start
 from core.network import core_config_from_cli
+# Rashed-Step 18.A-10-06-2026-start
+from common.error_model import error_model_config_from_cli
+# Rashed-Step 18.A-10-06-2026-end
 # Rashed-Step 16.F-10-02-2026-end
 
 
@@ -48,6 +51,10 @@ from core.network import core_config_from_cli
 @click.option("--core-registration-delay-us", "core_registration_delay_us", type=float, default=None, help="Registration Request -> Accept time in us (default 90000, measured Open5GS testbed - see core/network.py). Requires --core-enabled.")
 @click.option("--core-pdu-session-delay-us", "core_pdu_session_delay_us", type=float, default=None, help="PDU Session Establishment Request -> Accept time in us (default 125000, measured Open5GS testbed). Requires --core-enabled.")
 # Rashed-Step 16.F-10-02-2026-end
+# Rashed-Step 18.A-10-06-2026-start
+@click.option("--error-model", "error_model", type=click.Choice(["threshold", "bler"]), default="threshold", help="Link error model for every technology in the run (Step 18.A). threshold (default): a frame/transport block decodes iff its SINR meets its MCS threshold, byte-identical to every earlier run. bler: a random draw against a block-error-rate curve that hits 10% at the MCS threshold (the 3GPP CQI definition) - needed for HARQ. Prints an 'Error Model' stdout block.")
+@click.option("--bler-slope-db", "bler_slope_db", type=float, default=None, help="bler only: steepness of the BLER curve in 1/dB (default 2.0: 90% -> 10% BLER over ~2.2 dB). Requires --error-model bler.")
+# Rashed-Step 18.A-10-06-2026-end
 def single_run_nr(
         runs, seed, gnb_number, ues_per_gnb, simulation_time,
         area_w, area_h, gnb_pos, ue_radius,
@@ -62,6 +69,9 @@ def single_run_nr(
         # Rashed-Step 16.F-10-02-2026-start
         core_enabled=False, core_registration_delay_us=None, core_pdu_session_delay_us=None,
         # Rashed-Step 16.F-10-02-2026-end
+        # Rashed-Step 18.A-10-06-2026-start
+        error_model="threshold", bler_slope_db=None,
+        # Rashed-Step 18.A-10-06-2026-end
 ):
     gnb_positions = parse_pos_list_nr(gnb_pos, "--gnb-pos") if gnb_pos else None
 
@@ -81,6 +91,12 @@ def single_run_nr(
     except ValueError as e:
         raise click.BadParameter(str(e))
     # Rashed-Step 16.F-10-02-2026-end
+    # Rashed-Step 18.A-10-06-2026-start
+    try:
+        error_model_config = error_model_config_from_cli(error_model, bler_slope_db)
+    except ValueError as e:
+        raise click.BadParameter(str(e))
+    # Rashed-Step 18.A-10-06-2026-end
 
     # Rashed-Step 13.E.3-08-23-2026-start
     if rate_adapt_ml_model and not rate_adapt:
@@ -137,6 +153,9 @@ def single_run_nr(
             core_enabled=core_enabled,
             core_config=core_config,
             # Rashed-Step 16.F-10-02-2026-end
+            # Rashed-Step 18.A-10-06-2026-start
+            error_model_config=error_model_config,
+            # Rashed-Step 18.A-10-06-2026-end
         )
 
 

@@ -20,6 +20,9 @@ _DCF_ACCESS = DcfChannelAccess(Times.t_slot, Times.t_difs)
 from common.common_phy import mcs_sinr_threshold_db
 from Times import WIFI_MCS_SINR_THRESHOLDS_DB
 from typing import Optional
+# Rashed-Step 18.A-10-06-2026-start
+from common.error_model import decode_ok
+# Rashed-Step 18.A-10-06-2026-end
 # Rashed-Step 5.D-02-06-2026-end
 # Rashed-Step 5.G-02-06-2026-start
 from typing import Any
@@ -131,6 +134,13 @@ class Config:
     # zero-cost-when-unused convention as nru.py's field.
     sinr_predictor: Any = None
     # Rashed-Step 13.E.1-08-23-2026-end
+
+    # Rashed-Step 18.A-10-06-2026-start
+    # Shared BlerErrorModel (common/error_model.py), also used by this
+    # AP's STAs. None (default) = the hard "SINR >= threshold" rule,
+    # byte-identical to every earlier run.
+    error_model: Any = None
+    # Rashed-Step 18.A-10-06-2026-end
 
 
 
@@ -628,7 +638,9 @@ class WiFi:
             # Rashed-Step 13.A-08-23-2026-end
             required_sinr = self.required_sinr_db()
             log(self, f"TX->RX SINR(dB) = {sinr:.2f} dB, required (MCS {self.config.mcs}) = {required_sinr:.2f} dB (EDCA {ac})")
-            was_sent = (sinr >= required_sinr)
+            # Rashed-Step 18.A-10-06-2026-start
+            was_sent = decode_ok(getattr(self.config, "error_model", None), sinr, required_sinr)
+            # Rashed-Step 18.A-10-06-2026-end
             # Rashed-Step 11.A-08-21-2026-start
             # Rashed-Step 13.E.1: also pass measured_sinr_db for the
             # predictor's rolling history (harmless no-op unless
@@ -1038,7 +1050,9 @@ class WiFi:
             log(self, f"TX->RX SINR(dB) = {sinr:.2f} dB, required (MCS {self.config.mcs}) = {required_sinr:.2f} dB")
             # Rashed-Step 5.D-02-06-2026-end
             #was_sent = self.check_collision()
-            was_sent = (sinr >= required_sinr)
+            # Rashed-Step 18.A-10-06-2026-start
+            was_sent = decode_ok(getattr(self.config, "error_model", None), sinr, required_sinr)
+            # Rashed-Step 18.A-10-06-2026-end
             # Rashed-Step 11.A-08-21-2026-start
             # ARF feedback - no-op when rate adaptation is disabled.
             # Rashed-Step 13.E.1: also pass measured_sinr_db (see the

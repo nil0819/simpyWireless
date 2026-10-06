@@ -4,6 +4,9 @@ import sys
 from simulation import *
 # Rashed-Step 16.F-10-02-2026-start
 from core.network import core_config_from_cli
+# Rashed-Step 18.A-10-06-2026-start
+from common.error_model import error_model_config_from_cli
+# Rashed-Step 18.A-10-06-2026-end
 # Rashed-Step 16.F-10-02-2026-end
 
 
@@ -194,6 +197,10 @@ def parse_traffic_class_mix(raw_values, label: str):
 @click.option("--nru-ul-access-mode", "nru_ul_access_mode", type=click.Choice(["cot_sharing", "autonomous"]), default="cot_sharing", help="How NR-U UEs access the channel for uplink (only matters with --nru-ue-uplink-enabled). cot_sharing (default, Step 17): the gNB splits each channel occupancy time into a downlink part and an uplink part granted to one of its UEs (round-robin), who sends after a 25us Type 2A check. autonomous (Step 15.C): every UE runs its own Cat-4 LBT - kept for comparison; it makes a gNB and its own UE collide on every saturated attempt.")
 @click.option("--nru-ul-cot-fraction", "nru_ul_cot_fraction", type=float, default=0.5, help="cot_sharing only: share of the gNB's channel occupancy time given to uplink (strictly between 0 and 1; default 0.5).")
 # Rashed-Step 17.G-10-04-2026-end
+# Rashed-Step 18.A-10-06-2026-start
+@click.option("--error-model", "error_model", type=click.Choice(["threshold", "bler"]), default="threshold", help="Link error model for every technology in the run (Step 18.A). threshold (default): a frame/transport block decodes iff its SINR meets its MCS threshold, byte-identical to every earlier run. bler: a random draw against a block-error-rate curve that hits 10% at the MCS threshold (the 3GPP CQI definition) - needed for HARQ. Prints an 'Error Model' stdout block.")
+@click.option("--bler-slope-db", "bler_slope_db", type=float, default=None, help="bler only: steepness of the BLER curve in 1/dB (default 2.0: 90% -> 10% BLER over ~2.2 dB). Requires --error-model bler.")
+# Rashed-Step 18.A-10-06-2026-end
 
 def single_run(
         runs: int,
@@ -304,6 +311,10 @@ def single_run(
         # Rashed-Step 17.G-10-04-2026-start
         nru_ul_access_mode: str = "cot_sharing",
         nru_ul_cot_fraction: float = 0.5,
+        # Rashed-Step 18.A-10-06-2026-start
+        error_model: str = "threshold",
+        bler_slope_db: float = None,
+        # Rashed-Step 18.A-10-06-2026-end
         # Rashed-Step 17.G-10-04-2026-end
         # Rashed-Step pre_17.B-10-04-2026-end
         # Rashed-Step 16.F-10-02-2026-end
@@ -428,6 +439,12 @@ def single_run(
             f"--nru-ul-cot-fraction must be strictly between 0 and 1 (got {nru_ul_cot_fraction})."
         )
     # Rashed-Step 17.G-10-04-2026-end
+    # Rashed-Step 18.A-10-06-2026-start
+    try:
+        error_model_config = error_model_config_from_cli(error_model, bler_slope_db)
+    except ValueError as e:
+        raise click.BadParameter(str(e))
+    # Rashed-Step 18.A-10-06-2026-end
     if wifi_sta_uplink_enabled and rogue_wifi:
         raise click.BadParameter(
             "--wifi-sta-uplink-enabled is not supported with --rogue True "
@@ -545,6 +562,9 @@ def single_run(
                        # Rashed-Step pre_17.B-10-04-2026-start
                        wifi_sta_uplink_enabled=wifi_sta_uplink_enabled,
                        # Rashed-Step pre_17.B-10-04-2026-end
+                       # Rashed-Step 18.A-10-06-2026-start
+                       error_model_config=error_model_config,
+                       # Rashed-Step 18.A-10-06-2026-end
                        # Rashed-Step 16.F-10-02-2026-end
                        )
 

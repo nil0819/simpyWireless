@@ -12,6 +12,9 @@ from common.packet import Packet, TrafficConfig
 from channel.channel import ActiveTx
 from common.common_phy import dist, rx_power_dbm, mcs_sinr_threshold_db
 from ran.protocol.channel_access import LbtChannelAccess
+# Rashed-Step 18.A-10-06-2026-start
+from common.error_model import decode_ok
+# Rashed-Step 18.A-10-06-2026-end
 from nru.nru import Transmission_NR, NRU_MCS_SINR_THRESHOLDS_DB, NruDeploymentMode
 # Rashed-Step 15.C-09-18-2026-end
 # Rashed-Step 15.F-09-18-2026-start
@@ -315,7 +318,9 @@ class NrUE:
             self.transmission_to_send.packet.measured_sinr_db = sinr
             required_sinr = self.required_sinr_db()
             log(self, f"Uplink TX->gNB SINR(dB) = {sinr:.2f} dB, required (MCS {self.config_nr.mcs}) = {required_sinr:.2f} dB")
-            was_sent = (sinr >= required_sinr)
+            # Rashed-Step 18.A-10-06-2026-start
+            was_sent = decode_ok(self.config_nr.error_model, sinr, required_sinr)
+            # Rashed-Step 18.A-10-06-2026-end
             if was_sent:
                 self.sent_completed()
             else:

@@ -37,6 +37,9 @@ from ran.protocol.user_plane import user_plane_allows
 # Rashed-Step 16.E-10-02-2026-end
 # Rashed-Step 15.D-09-18-2026-start
 from enum import Enum
+# Rashed-Step 18.A-10-06-2026-start
+from common.error_model import decode_ok
+# Rashed-Step 18.A-10-06-2026-end
 # Rashed-Step 15.D-09-18-2026-end
 
 
@@ -206,6 +209,13 @@ class Config_NR:
     # Only meaningful when rate_adapt_enabled is also True.
     sinr_predictor: Any = None
     # Rashed-Step 13.D-08-23-2026-end
+
+    # Rashed-Step 18.A-10-06-2026-start
+    # Shared BlerErrorModel (common/error_model.py) for this run, also
+    # used by this gNB's UEs. None (default) = the hard "SINR >=
+    # threshold" rule, byte-identical to every earlier run.
+    error_model: Any = None
+    # Rashed-Step 18.A-10-06-2026-end
 
     # Rashed-Step 5.C-02-06-2026-start
     # See wifi.Config's matching fields - same idea, drives the SINR noise
@@ -940,7 +950,9 @@ class Gnb:
             # Rashed-Step 5.D-02-06-2026-start
             required_sinr = self.required_sinr_db()
             log(self, f"TX->RX SINR(dB) = {sinr:.2f} dB, required (MCS {self.config_nr.mcs}) = {required_sinr:.2f} dB")
-            was_sent = (sinr >= required_sinr)
+            # Rashed-Step 18.A-10-06-2026-start
+            was_sent = decode_ok(self.config_nr.error_model, sinr, required_sinr)
+            # Rashed-Step 18.A-10-06-2026-end
             # Rashed-Step 5.D-02-06-2026-end
             # Rashed-Step 11.B-08-21-2026-start
             # CQI-style feedback: record this transmission's measured
