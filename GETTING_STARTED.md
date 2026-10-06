@@ -24,7 +24,7 @@ pip install pytest
 pytest test/
 ```
 
-You should see `328 passed` (as of Step pre_17). If that's clean, you're ready to run simulations.
+You should see `379 passed` (as of Step 17). If that's clean, you're ready to run simulations.
 
 ## 2. Scenario 1 - Wi-Fi + NR-U coexistence
 
@@ -109,7 +109,7 @@ python singleRun.py --ap-number 1 --gnb-number 1 -t 0.5 -r 1 --wifi-sta-uplink-e
 
 Adds a "Wi-Fi Uplink" block. With one AP and one STA you'll see the
 AP's downlink and the STA's uplink split the Wi-Fi airtime roughly
-evenly (about 5.4 vs 5.8 Mbps here).
+evenly (about 4.5 vs 4.1 Mbps here).
 
 Licensed NR with the full attach chain - RRC setup, then registration
 with the AMF, then a PDU session; the gNB sends a UE nothing until its
@@ -127,8 +127,12 @@ packet 219.5 ms. The same chain for NR-U, sharing the channel with Wi-Fi:
 python singleRun.py --ap-number 1 --gnb-number 1 -t 0.5 -r 1 --nru-ue-uplink-enabled --nru-rrc-enabled --nru-core-enabled
 ```
 
-Here RRC setup takes about 35 ms instead of 4 ms - every NR-U RRC
-message has to win listen-before-talk against the Wi-Fi AP first.
+Here RRC setup takes about 20 ms instead of 4 ms: each NR-U RRC
+message waits for its gNB's next channel occupancy time, which the gNB
+has to win against the Wi-Fi AP first. Add
+`--nru-ul-access-mode autonomous` to compare with the older uplink,
+where every UE runs its own Cat-4 LBT (about 41 ms here, and it
+collides with its own gNB).
 Keep `-t` above about 0.25 s with the Core on; the attach alone takes
 over 0.2 s, so a shorter run carries no data. The readme's "5G control
 plane" section lists where each default delay comes from.

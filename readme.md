@@ -40,10 +40,13 @@ common/packet.py        - Packet/TrafficConfig, latency/loss/jitter stats,
                           packet-level CSV export
 channel/channel.py      - Channel: tx queues, ActiveTx, CCA/ED sensing, SINR
 wifi/wifi.py, wifi/sta.py       - Wi-Fi AP + STA (CSMA/CA)
-nru/nru.py, nru/ue.py           - NR-U gNB + UE (Cat-4 LBT, unlicensed)
+nru/nru.py, nru/ue.py           - NR-U gNB + UE (Type 1 / Cat-4 LBT,
+                                   unlicensed; UE uplink inside the
+                                   gNB's channel occupancy time)
 nr/nr.py, nr/ue.py              - Licensed 5G NR gNB + UE (scheduled, no LBT)
-ran/protocol/channel_access.py  - shared channel-access strategies (Cat-4
-                                   LBT, slot-scheduled DL/UL allocation)
+ran/protocol/channel_access.py  - shared channel-access strategies: NR-U
+                                   Type 1 LBT, Wi-Fi DCF on a shared slot
+                                   grid, licensed-NR slot scheduling
 ran/protocol/rrc.py             - RRC attach state machine (IDLE ->
                                    CONNECTING -> CONNECTED), shared by NR-U
                                    and licensed NR
@@ -99,7 +102,7 @@ Flag groups (see `--help` for exact names/defaults/full descriptions):
 - **QoS/QoE (Step 10.A-10.D, Wi-Fi)**: `--wifi-traffic-class-mix`/`--nru-traffic-class-mix` (repeatable `class=weight`, tags packets voice/video/best_effort/background), `--wifi-edca` (real 802.11e differentiated channel access per class, Wi-Fi only, requires `--wifi-traffic-model=saturated`) - printed per-class latency/loss/SLA-compliance stats and QoE scores (voice: real E-model MOS; video: a labeled heuristic proxy) come free once a class mix is set, no extra flag needed
 - **Dynamic rate adaptation (Step 11)**: `--wifi-rate-adapt` (per-STA ARF - Auto Rate Fallback, Kamerman & Monteban 1997: step MCS up after 10 consecutive successes, down after 2 consecutive failures, no channel-state feedback), `--nru-rate-adapt` (per-UE CQI-style - picks the MCS whose required-SINR threshold best fits the most recently measured link SINR, approximating 3GPP UE-reported Channel Quality Indicator feedback). Both default off (`-m`/`--mcs-value` and `--nru-mcs` stay fixed for the whole run, unchanged from every pre-Step-11 run).
 - **Rogue AP**: `--rogue True` (routes AP traffic through `attacker/roguewificad.py`'s CAD-attack model instead of benign Wi-Fi)
-- **Uplink (Steps 15.B/15.C, pre_17.B)**: `--wifi-sta-uplink-enabled` (every STA contends with CSMA/CA and sends saturated uplink to its AP; prints a "Wi-Fi Uplink" block; not with `--rogue True`), `--nru-ue-uplink-enabled` (every NR-U UE gets its own Cat-4 LBT uplink)
+- **Uplink (Steps 15.B/15.C, pre_17.B)**: `--wifi-sta-uplink-enabled` (every STA contends with CSMA/CA and sends saturated uplink to its AP; prints a "Wi-Fi Uplink" block; not with `--rogue True`), `--nru-ue-uplink-enabled` (NR-U uplink; how UEs reach the channel is set by `--nru-ul-access-mode`: `cot_sharing` (default, Step 17) - the gNB splits each channel occupancy time into a downlink part and an uplink part granted to one of its UEs, who sends after a 25 us Type 2A check; `autonomous` (Step 15.C) - every UE runs its own Cat-4 LBT, which collides with its own gNB, kept for comparison), `--nru-ul-cot-fraction` (uplink share of the COT, default 0.5). With NR-U uplink on, an "NR-U Uplink" block reports throughput, attempts and (in cot_sharing) windows and skipped grants
 - **RRC and 5G Core (Steps 15-16, NR-U only)**: `--nru-rrc-enabled` (RRC connection setup before any data; needs `--nru-ue-uplink-enabled`), `--nru-core-enabled` (registration + PDU session; no NR-U data to/from a UE until its session is active), `--core-registration-delay-us` / `--core-pdu-session-delay-us` (override the 90 ms / 125 ms defaults; need `--nru-core-enabled`). See "5G control plane" below.
 
 Example:
@@ -140,7 +143,7 @@ With RRC and the Core turned on, every UE goes through one attach chain before i
 | Stage | Default | Source / note |
 |---|---|---|
 | RRC setup, licensed NR | 4 ms | 2 x 1 ms uplink grant + 2 ms gNB processing; within 3GPP TR 38.913's 10 ms control-plane target |
-| RRC setup, NR-U | 4 ms + LBT wait | same grant cost plus real Cat-4 LBT contention, so never faster than licensed NR (5.6 ms on an idle channel; tens of ms when sharing with Wi-Fi) |
+| RRC setup, NR-U | 4 ms + COT wait | same grant cost, then each RRC message waits for its gNB's next channel occupancy time and a 25 us Type 2A check (COT sharing, default) - never faster than licensed NR: ~13.7 ms in a single cell, ~20 ms alongside a Wi-Fi AP in the sample run below |
 | Registration | 90 ms | measured Open5GS 5G SA testbed (arXiv:2412.21162); `--core-registration-delay-us` |
 | PDU session | 125 ms | same testbed; `--core-pdu-session-delay-us` |
 
@@ -228,7 +231,7 @@ Assert-based regression suite (no print-and-eyeball scripts for anything added s
 pip install pytest
 pytest test/
 ```
-328 tests passing as of Step pre_17. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
+379 tests passing as of Step 17. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
 
 ## Current Work Status
 
@@ -259,6 +262,8 @@ pytest test/
 ----> Step 15 (15.A-15.H) — bidirectional links: shared channel-access strategies, uplink for Wi-Fi (CSMA/CA), NR-U (Cat-4 LBT) and licensed NR (TDD + scheduling request/grant), NR-U deployment modes (MultiFire default), generic RRC attach state machine, scheduler gating on RRC state, RRC setup-latency metric and figure
 ----> Step 16 (16.A-16.H) — minimal 5G Core: RRC timing fix (licensed NR 4 ms, NR-U never faster), `core/` package (AMF/SMF/UPF), registration and PDU session procedures, RAN-side UPF gate, `--core-enabled` / `--nru-core-enabled` flags, attach-latency breakdown figure, whole-step regression
 ----> Step pre_17 — NR-U downlink packets now record their real receiver (and retries keep it), `--wifi-sta-uplink-enabled` flag, this readme / GETTING_STARTED refresh
+----> Step 17 (17.A-17.H) — NR-U uplink inside the gNB's channel occupancy time (COT sharing, now the default): the gNB grants its UEs the uplink part of its COT, UEs send after a 25 us Type 2A check, RRC messages ride the same COT. Fixes the gNB/own-UE self-collision of the autonomous Cat-4 uplink (single cell: 0 -> 1.68 Mbps uplink). New flags `--nru-ul-access-mode` / `--nru-ul-cot-fraction`, an "NR-U Uplink" stdout block, and comparison figures (`python -m analysis.nru_ul_access_comparison`)
+----> Step pre_18 (A-E) — channel-model fixes found while validating Step 17: (A-B) SINR counts every transmission that overlapped the target at any point - Wi-Fi frames (one decode unit) at full power, NR-U/NR bursts weighted by the fraction covered - instead of only what was still on the air when the target ended (results used to depend on timing and processing order); (D) Wi-Fi DCF counts backoff on a shared 9 us slot grid with event-driven sensing and a fresh DIFS after every busy period; (E) NR-U LBT is 3GPP TS 37.213 Type 1 - a full 43 us defer period after every busy period. (C) Paper figures regenerated: the DTMC validation now matches the model within 0.8-2.7 points for Wi-Fi and 0.4-1.4 for NR-U
 
 Full detail (design rationale, exact verified numbers, what was deliberately left out) for every sub-step above is in `Project details/Step N.txt`; `Project details/STATUS - resume context.txt` is the current single-file "start here" summary.
 
