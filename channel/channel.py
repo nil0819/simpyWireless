@@ -69,6 +69,15 @@ class ActiveTx:
     # after the gNB, in the same slot. -1 = never registered.
     uid: int = field(default=-1, repr=False, compare=False)
     # Rashed-Step pre_18.A-10-04-2026-end
+    # Rashed-Step pre_18.F-10-06-2026-start
+    # Name of the cell whose scheduler placed this transmission on its
+    # own resource blocks (OFDMA), or None. Transmissions sharing a
+    # non-None value use orthogonal RBs of one carrier, so sinr_db()
+    # doesn't count them as interference to each other - the same way it
+    # already skips a gNB's own per-UE downlink allocations by tx_id.
+    # Set on licensed NR uplink (several UEs per slot, different tx_ids).
+    ofdma_cell: Optional[str] = field(default=None, compare=False)
+    # Rashed-Step pre_18.F-10-06-2026-end
 # Rashed-Step 3.B-01-12-2026-end
 
 
@@ -87,11 +96,17 @@ class TxSnapshot:
     pl_exp: float
     bandwidth_mhz: float
     uid: int = -1
+    # Rashed-Step pre_18.F-10-06-2026-start
+    ofdma_cell: Optional[str] = None
+    # Rashed-Step pre_18.F-10-06-2026-end
 
     @staticmethod
     def of(tx: "ActiveTx") -> "TxSnapshot":
         return TxSnapshot(tx.tx_id, tx.tx_pos, tx.tx_start, tx.t_end,
-                          tx.tx_power_dbm, tx.f_hz, tx.pl_exp, tx.bandwidth_mhz, tx.uid)
+                          tx.tx_power_dbm, tx.f_hz, tx.pl_exp, tx.bandwidth_mhz, tx.uid,
+                          # Rashed-Step pre_18.F-10-06-2026-start
+                          tx.ofdma_cell)
+                          # Rashed-Step pre_18.F-10-06-2026-end
 # Rashed-Step pre_18.A-10-04-2026-end
 
 
@@ -422,6 +437,10 @@ class Channel:
         for other in candidates:
             if other.tx_id == target.tx_id:
                 continue
+            # Rashed-Step pre_18.F-10-06-2026-start
+            if target.ofdma_cell is not None and getattr(other, "ofdma_cell", None) == target.ofdma_cell:
+                continue
+            # Rashed-Step pre_18.F-10-06-2026-end
 
             if not (other.tx_start < target.t_end and other.t_end > target.tx_start):
                 continue

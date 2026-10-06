@@ -223,6 +223,30 @@ def run_simulation_licensed_nr(
     print(f"TOTAL: slots_ok={total_succ} slots_failed={total_fail} "
           f"slot_success_rate={overall_success_rate:.4f} throughput={overall_thr_mbps:.3f} Mbps")
 
+    # Rashed-Step pre_18.F-10-06-2026-start
+    # Uplink results (Step 15.E's counters were never reported, which is
+    # how the same-cell UL interference bug went unnoticed). Only printed
+    # when uplink is on, so other runs' stdout is unchanged.
+    ul_thr_mbps = None
+    if nr_ue_uplink_enabled:
+        print("=== Licensed 5G NR Uplink Results ===")
+        ul_succ = ul_fail = 0
+        ul_bits = 0.0
+        for g in gnbs:
+            ul_succ += g.succeeded_transmissions_ul
+            ul_fail += g.failed_transmissions_ul
+            ul_bits += g.bits_delivered_ul
+            n = g.succeeded_transmissions_ul + g.failed_transmissions_ul
+            rate = (g.succeeded_transmissions_ul / n) if n else 0.0
+            thr = g.bits_delivered_ul / (simulation_time * 1e6) if simulation_time > 0 else 0.0
+            print(f"{g.name} UL: slots_ok={g.succeeded_transmissions_ul} slots_failed={g.failed_transmissions_ul} "
+                  f"slot_success_rate={rate:.4f} throughput={thr:.3f} Mbps")
+        n = ul_succ + ul_fail
+        ul_thr_mbps = ul_bits / (simulation_time * 1e6) if simulation_time > 0 else 0.0
+        print(f"TOTAL UL: slots_ok={ul_succ} slots_failed={ul_fail} "
+              f"slot_success_rate={(ul_succ / n) if n else 0.0:.4f} throughput={ul_thr_mbps:.3f} Mbps")
+    # Rashed-Step pre_18.F-10-06-2026-end
+
     # Rashed-Step 15.G-09-18-2026-start
     # RRC connection-setup metrics - only printed when at least one UE
     # actually opted into RRC (nr_rrc_enabled=True), so a default
@@ -286,6 +310,10 @@ def run_simulation_licensed_nr(
         "failed_slots": total_fail,
         "slot_success_rate": overall_success_rate,
         "throughput_mbps": overall_thr_mbps,
+        # Rashed-Step pre_18.F-10-06-2026-start
+        # None unless nr_ue_uplink_enabled.
+        "ul_throughput_mbps": ul_thr_mbps,
+        # Rashed-Step pre_18.F-10-06-2026-end
         # Rashed-Step 15.G-09-18-2026-start
         # Always present (not just when attempted>0, unlike the stdout
         # print above) so a caller (e.g. an analysis/ script) doesn't

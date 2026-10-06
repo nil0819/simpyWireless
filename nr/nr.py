@@ -510,6 +510,9 @@ class GnbLicensedNR:
             tech="NR",
             bandwidth_mhz=self.config.bandwidth_mhz,
             noise_figure_db=self.config.noise_figure_db,
+            # Rashed-Step pre_18.F-10-06-2026-start
+            ofdma_cell=self.name,
+            # Rashed-Step pre_18.F-10-06-2026-end
         )
         return self.channel.sinr_db(trial)
     # Rashed-Step 15.E-09-18-2026-end
@@ -969,6 +972,10 @@ class GnbLicensedNR:
                 bandwidth_mhz=bw_mhz_this_ue,
                 noise_figure_db=self.config.noise_figure_db,
                 packet=packet,
+                # Rashed-Step pre_18.F-10-06-2026-start
+                # This cell's other UEs this slot are on other RBs.
+                ofdma_cell=self.name,
+                # Rashed-Step pre_18.F-10-06-2026-end
             )
             self.channel.register_tx(tx)
             txs.append((tx, rb_count, packet))

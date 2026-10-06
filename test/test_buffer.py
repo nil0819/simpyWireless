@@ -183,14 +183,12 @@ def test_full_buffer_default_has_no_buffers():
 
 def test_buffered_uplink():
     cfg = Config_NRL(tdd_enabled=True, ul_traffic=TrafficConfig(mode="cbr", arrival_rate_pps=200.0))
-    # One UE: two UEs in the same UL slot currently interfere with each
-    # other despite separate RBs (pre-existing channel issue found in
-    # 18.B, tracked separately).
-    res = run_simulation_licensed_nr(1, 2, 0.2, cfg, nr_ues_per_gnb=1, ue_radius=40.0, nr_ue_uplink_enabled=True)
+    # Two UEs share UL slots on separate RBs (needs the pre_18.F fix).
+    res = run_simulation_licensed_nr(1, 2, 0.2, cfg, nr_ues_per_gnb=2, ue_radius=40.0, nr_ue_uplink_enabled=True)
     st = res["traffic_stats"]["ul"]
     assert "dl" not in res["traffic_stats"]
-    assert st["enqueued_packets"] == 39  # every 5 ms from 5 ms
-    assert st["delivered_packets"] >= 37
+    assert st["enqueued_packets"] == 78  # 2 UEs x 39 (every 5 ms from 5 ms)
+    assert st["delivered_packets"] >= 74
     assert st["dropped_tb_error"] == 0
 
 
