@@ -12,6 +12,9 @@ from nr.nr import Config_NRL
 from core.network import core_config_from_cli
 # Rashed-Step 18.A-10-06-2026-start
 from common.error_model import error_model_config_from_cli
+# Rashed-Step 18.B-10-06-2026-start
+from ran.protocol.buffer import traffic_configs_from_cli
+# Rashed-Step 18.B-10-06-2026-end
 # Rashed-Step 18.A-10-06-2026-end
 # Rashed-Step 16.F-10-02-2026-end
 
@@ -55,6 +58,14 @@ from common.error_model import error_model_config_from_cli
 @click.option("--error-model", "error_model", type=click.Choice(["threshold", "bler"]), default="threshold", help="Link error model for every technology in the run (Step 18.A). threshold (default): a frame/transport block decodes iff its SINR meets its MCS threshold, byte-identical to every earlier run. bler: a random draw against a block-error-rate curve that hits 10% at the MCS threshold (the 3GPP CQI definition) - needed for HARQ. Prints an 'Error Model' stdout block.")
 @click.option("--bler-slope-db", "bler_slope_db", type=float, default=None, help="bler only: steepness of the BLER curve in 1/dB (default 2.0: 90% -> 10% BLER over ~2.2 dB). Requires --error-model bler.")
 # Rashed-Step 18.A-10-06-2026-end
+# Rashed-Step 18.B-10-06-2026-start
+@click.option("--dl-traffic", "dl_traffic", type=click.Choice(["full_buffer", "poisson", "cbr"]), default="full_buffer", help="Downlink traffic per UE (Step 18.B). full_buffer (default): every scheduled UE always has data, byte-identical to every earlier run. poisson / cbr: packets arrive at --dl-arrival-rate-pps into a per-UE buffer at the gNB; only UEs with queued data are scheduled and a slot delivers what is queued. Prints a 'Licensed 5G NR DL Traffic' stdout block.")
+@click.option("--dl-arrival-rate-pps", "dl_arrival_rate_pps", type=float, default=None, help="Downlink packets per second per UE (default 100). Requires --dl-traffic poisson or cbr.")
+@click.option("--ul-traffic", "ul_traffic", type=click.Choice(["full_buffer", "poisson", "cbr"]), default="full_buffer", help="Uplink traffic per UE (Step 18.B). full_buffer (default): every scheduled UE always has data, byte-identical to every earlier run. poisson / cbr: packets arrive at --ul-arrival-rate-pps into a per-UE buffer at each UE; only UEs with queued data are scheduled and a slot delivers what is queued. Prints a 'Licensed 5G NR UL Traffic' stdout block. Requires --ue-uplink-enabled.")
+@click.option("--ul-arrival-rate-pps", "ul_arrival_rate_pps", type=float, default=None, help="Uplink packets per second per UE (default 100). Requires --ul-traffic poisson or cbr.")
+@click.option("--packet-size-bytes", "packet_size_bytes", type=int, default=None, help="Packet size for buffered traffic (default 1500). Requires --dl-traffic or --ul-traffic poisson/cbr.")
+@click.option("--buffer-limit-bytes", "buffer_limit_bytes", type=int, default=None, help="Drop-tail limit of each per-UE buffer (default unbounded). Requires --dl-traffic or --ul-traffic poisson/cbr.")
+# Rashed-Step 18.B-10-06-2026-end
 def single_run_nr(
         runs, seed, gnb_number, ues_per_gnb, simulation_time,
         area_w, area_h, gnb_pos, ue_radius,
@@ -72,6 +83,10 @@ def single_run_nr(
         # Rashed-Step 18.A-10-06-2026-start
         error_model="threshold", bler_slope_db=None,
         # Rashed-Step 18.A-10-06-2026-end
+        # Rashed-Step 18.B-10-06-2026-start
+        dl_traffic="full_buffer", dl_arrival_rate_pps=None, ul_traffic="full_buffer",
+        ul_arrival_rate_pps=None, packet_size_bytes=None, buffer_limit_bytes=None,
+        # Rashed-Step 18.B-10-06-2026-end
 ):
     gnb_positions = parse_pos_list_nr(gnb_pos, "--gnb-pos") if gnb_pos else None
 
@@ -97,6 +112,14 @@ def single_run_nr(
     except ValueError as e:
         raise click.BadParameter(str(e))
     # Rashed-Step 18.A-10-06-2026-end
+    # Rashed-Step 18.B-10-06-2026-start
+    try:
+        dl_traffic_config, ul_traffic_config = traffic_configs_from_cli(
+            dl_traffic, dl_arrival_rate_pps, ul_traffic, ul_arrival_rate_pps,
+            packet_size_bytes, buffer_limit_bytes, ue_uplink_enabled)
+    except ValueError as e:
+        raise click.BadParameter(str(e))
+    # Rashed-Step 18.B-10-06-2026-end
 
     # Rashed-Step 13.E.3-08-23-2026-start
     if rate_adapt_ml_model and not rate_adapt:
@@ -130,6 +153,11 @@ def single_run_nr(
         tdd_enabled=tdd_enabled,
         tdd_pattern=tdd_pattern,
         # Rashed-Step 15.G-09-18-2026-end
+        # Rashed-Step 18.B-10-06-2026-start
+        dl_traffic=dl_traffic_config,
+        ul_traffic=ul_traffic_config,
+        buffer_limit_bytes=buffer_limit_bytes,
+        # Rashed-Step 18.B-10-06-2026-end
     )
 
     for i in range(runs):

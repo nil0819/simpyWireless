@@ -24,6 +24,11 @@ from common.common import Pos, dist, log, colors
 from channel.channel import ActiveTx
 # Rashed-Step 13.E.3-08-23-2026-start
 from common.packet import Packet
+# Rashed-Step 18.B-10-06-2026-start
+from functools import partial
+from common.packet import TrafficConfig
+from ran.protocol.buffer import ByteBuffer, arrival_process, validate_buffered_traffic
+# Rashed-Step 18.B-10-06-2026-end
 # Rashed-Step 13.E.3-08-23-2026-end
 
 # Rashed-Step 15.A-09-18-2026-start
@@ -262,6 +267,22 @@ class Config_NRL:
     rrc_ul_grant_delay_us: float = 1000.0
     # Rashed-Step 16.A-10-02-2026-end
 
+    # Rashed-Step 18.B-10-06-2026-start
+    # Per-UE byte buffers (ran/protocol/buffer.py). None (default) =
+    # full buffer: every scheduled UE always has data and a decoded
+    # slot delivers its whole capacity - byte-identical to earlier runs.
+    # A TrafficConfig (mode "poisson" or "cbr") gives every UE its own
+    # arrival process into a downlink buffer at the gNB (dl_traffic) /
+    # an uplink buffer at each uplink-enabled UE (ul_traffic); only UEs
+    # with queued bytes are scheduled, and a slot delivers what is
+    # queued, up to its capacity. packet_size_bytes None = the
+    # packet_payload_bytes above.
+    dl_traffic: Optional[TrafficConfig] = None
+    ul_traffic: Optional[TrafficConfig] = None
+    # Drop-tail limit per buffer; None = unbounded.
+    buffer_limit_bytes: Optional[int] = None
+    # Rashed-Step 18.B-10-06-2026-end
+
 
 class GnbLicensedNR:
     def __init__(
@@ -374,6 +395,30 @@ class GnbLicensedNR:
         # current_mcs_for_ue()/record_link_result()).
         self.link_state: Dict[str, Dict[str, Any]] = {}
         # Rashed-Step 13.E.3-08-23-2026-end
+
+        # Rashed-Step 18.B-10-06-2026-start
+        # Buffered traffic (see Config_NRL.dl_traffic/ul_traffic). The
+        # arrival processes start before start() so a packet arriving at
+        # a slot boundary is already queued for that slot.
+        self.dl_buffers: Optional[Dict[str, ByteBuffer]] = None
+        if config.dl_traffic is not None:
+            validate_buffered_traffic(config.dl_traffic)
+            self.dl_buffers = {}
+            for ue in self.ue_list:
+                buf = ByteBuffer(config.buffer_limit_bytes)
+                self.dl_buffers[ue.name] = buf
+                env.process(arrival_process(env, buf, config.dl_traffic,
+                                            partial(self._make_traffic_packet, ue.name, False),
+                                            random.expovariate))
+        if config.ul_traffic is not None:
+            validate_buffered_traffic(config.ul_traffic)
+            for ue in self.ue_list:
+                if getattr(ue, "uplink_enabled", False):
+                    ue.ul_buffer = ByteBuffer(config.buffer_limit_bytes)
+                    env.process(arrival_process(env, ue.ul_buffer, config.ul_traffic,
+                                                partial(self._make_traffic_packet, ue.name, True),
+                                                random.expovariate))
+        # Rashed-Step 18.B-10-06-2026-end
 
         env.process(self.start())
 
@@ -580,6 +625,65 @@ class GnbLicensedNR:
                 return select_mcs_for_sinr(predicted)
         return select_mcs_for_sinr(state["last_sinr_db"])
 
+    # Rashed-Step 18.B-10-06-2026-start
+    def _make_traffic_packet(self, ue_name: str, ul: bool) -> Packet:
+        """A packet from a UE's buffered traffic source (18.B)."""
+        traffic = self.config.ul_traffic if ul else self.config.dl_traffic
+        size = traffic.packet_size_bytes if traffic.packet_size_bytes is not None else self.config.packet_payload_bytes
+        self._packet_seq += 1
+        return Packet(
+            packet_id=f"{self.name}-{'UL-' if ul else ''}{self._packet_seq:06d}",
+            source=ue_name if ul else self.name,
+            destination=self.name if ul else ue_name,
+            payload_bytes=size,
+            header_bytes=0,
+            created_at=self.env.now,
+        )
+
+    def _settle_tb(self, buffer: ByteBuffer, sinr_db: float, mcs: Optional[int],
+                   tried_mcs: Optional[int], rb_count: int, ul: bool) -> None:
+        """
+        Buffered traffic (18.B): fill this slot's transport block from
+        the UE's buffer and apply the outcome. `mcs` is the MCS that
+        delivered (None = block error). On an error the TB is sized at
+        the MCS that was tried - the rate-adapted pick, else the oracle
+        pick, else MCS 0 - and every packet with bytes in it is dropped
+        (no HARQ/ARQ until 18.E/18.F). Throughput counts delivered bytes,
+        not slot capacity.
+        """
+        if mcs is not None:
+            tb_mcs = mcs
+        elif tried_mcs is not None:
+            tb_mcs = tried_mcs
+        else:
+            tb_mcs = select_mcs_for_sinr(sinr_db) or 0
+        capacity_bits = NR_MCS_TABLE[tb_mcs][1] * (rb_count * self.rb_bandwidth_hz) * (self.slot_us / 1e6)
+        segs = buffer.segments(int(capacity_bits // 8))
+        for pkt, _nbytes, _last in segs:
+            pkt.measured_sinr_db = sinr_db
+        if mcs is not None:
+            bits = 8 * buffer.deliver(segs, self.env.now)
+            (self.sent_completed_ul if ul else self.sent_completed)(bits)
+        else:
+            buffer.lose(segs)
+            (self.sent_failed_ul if ul else self.sent_failed)()
+        self.packet_log.extend(buffer.drain_finished())
+
+    def all_buffers(self) -> Dict[str, List[ByteBuffer]]:
+        """This cell's buffers by direction (empty lists when off)."""
+        return {
+            "dl": list(self.dl_buffers.values()) if self.dl_buffers is not None else [],
+            "ul": [ue.ul_buffer for ue in self.ue_list if getattr(ue, "ul_buffer", None) is not None],
+        }
+
+    def flush_buffer_logs(self) -> None:
+        """Move packets that finished since the last slot (e.g. drop-tail
+        overflow) into packet_log; call once the run has ended."""
+        for bufs in self.all_buffers().values():
+            for buf in bufs:
+                self.packet_log.extend(buf.drain_finished())
+    # Rashed-Step 18.B-10-06-2026-end
+
     # Rashed-Step 18.A-10-06-2026-start
     def _decode_mcs(self, sinr_db: float, mcs: Optional[int]) -> Optional[int]:
         """
@@ -663,6 +767,10 @@ class GnbLicensedNR:
             and user_plane_allows(ue)
             # Rashed-Step 16.E-10-02-2026-end
         ]
+        # Rashed-Step 18.B-10-06-2026-start
+        if self.dl_buffers is not None:
+            candidate_ues = [ue for ue in candidate_ues if self.dl_buffers[ue.name].backlog_bytes > 0]
+        # Rashed-Step 18.B-10-06-2026-end
         alloc = self._channel_access.allocate_dl_for(self, candidate_ues)
         # Rashed-Step 15.G-09-18-2026-end
         if not alloc:
@@ -690,6 +798,11 @@ class GnbLicensedNR:
             # Rashed-Step 13.E.3-08-23-2026-start
             packet = self._make_packet(ue_name)
             chosen_mcs = self.current_mcs_for_ue(ue_name)
+            # Rashed-Step 18.B-10-06-2026-start
+            # (overrides the placeholder: _make_packet is only for full buffer)
+            if self.dl_buffers is not None:
+                packet = self.dl_buffers[ue_name].head()
+            # Rashed-Step 18.B-10-06-2026-end
             # Rashed-Step 13.E.3-08-23-2026-end
             tx = ActiveTx(
                 tx_id=self.name,
@@ -752,6 +865,12 @@ class GnbLicensedNR:
                     mcs = self._decode_mcs(sinr, mcs)
                     # Rashed-Step 18.A-10-06-2026-end
 
+                # Rashed-Step 18.B-10-06-2026-start
+                if self.dl_buffers is not None:
+                    self._settle_tb(self.dl_buffers[ue_name], sinr, mcs, chosen_mcs, rb_count, ul=False)
+                    self.channel.unregister_tx(tx, success=(mcs is not None))
+                    continue
+                # Rashed-Step 18.B-10-06-2026-end
                 if mcs is not None:
                     eff = NR_MCS_TABLE[mcs][1]
                     bits = eff * (rb_count * self.rb_bandwidth_hz) * (self.slot_us / 1e6)
@@ -810,6 +929,10 @@ class GnbLicensedNR:
             and user_plane_allows(ue)
             # Rashed-Step 16.E-10-02-2026-end
         ]
+        # Rashed-Step 18.B-10-06-2026-start
+        if self.config.ul_traffic is not None:
+            candidate_ues = [ue for ue in candidate_ues if ue.ul_buffer.backlog_bytes > 0]
+        # Rashed-Step 18.B-10-06-2026-end
         if not candidate_ues:
             yield self.env.timeout(self.slot_us)
             return
@@ -829,6 +952,10 @@ class GnbLicensedNR:
             # (smaller) max power - see Config_NRL.ue_tx_power_dbm.
             tx_power_dbm_this_ue = self.config.ue_tx_power_dbm + 10.0 * math.log10(rb_count / self.total_rbs)
             packet = self._make_packet_ul(ue_name)
+            # Rashed-Step 18.B-10-06-2026-start
+            if self.config.ul_traffic is not None:
+                packet = ue.ul_buffer.head()
+            # Rashed-Step 18.B-10-06-2026-end
             tx = ActiveTx(
                 tx_id=ue_name,
                 tx_pos=ue.current_pos(),
@@ -855,6 +982,12 @@ class GnbLicensedNR:
                 # Rashed-Step 18.A-10-06-2026-start
                 mcs = self._decode_mcs(sinr, mcs)
                 # Rashed-Step 18.A-10-06-2026-end
+                # Rashed-Step 18.B-10-06-2026-start
+                if self.config.ul_traffic is not None:
+                    self._settle_tb(ue_by_name[tx.tx_id].ul_buffer, sinr, mcs, None, rb_count, ul=True)
+                    self.channel.unregister_tx(tx, success=(mcs is not None))
+                    continue
+                # Rashed-Step 18.B-10-06-2026-end
                 if mcs is not None:
                     eff = NR_MCS_TABLE[mcs][1]
                     bits = eff * (rb_count * self.rb_bandwidth_hz) * (self.slot_us / 1e6)

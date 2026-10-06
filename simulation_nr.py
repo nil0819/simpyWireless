@@ -29,6 +29,9 @@ from core.procedures import compute_core_stats, print_core_stats
 # Rashed-Step 18.A-10-06-2026-start
 from dataclasses import replace as _dc_replace
 from common.error_model import ErrorModelConfig, make_error_model, print_error_model_stats
+# Rashed-Step 18.B-10-06-2026-start
+from ran.protocol.buffer import summarize_buffers, print_buffer_stats
+# Rashed-Step 18.B-10-06-2026-end
 # Rashed-Step 18.A-10-06-2026-end
 # Rashed-Step 16.F-10-02-2026-end
 
@@ -195,6 +198,10 @@ def run_simulation_licensed_nr(
     # Rashed-Step 16.F-10-02-2026-end
 
     environment.run(until=simulation_time * 1_000_000)
+    # Rashed-Step 18.B-10-06-2026-start
+    for g in gnbs:
+        g.flush_buffer_logs()
+    # Rashed-Step 18.B-10-06-2026-end
 
     print("=== Licensed 5G NR Results ===")
     total_succ = 0
@@ -244,6 +251,21 @@ def run_simulation_licensed_nr(
         print_core_stats("Licensed 5G NR 5G Core", "NR", nr_core_stats, "packet")
     # Rashed-Step 16.F-10-02-2026-end
 
+    # Rashed-Step 18.B-10-06-2026-start
+    # Buffered traffic (Config_NRL.dl_traffic/ul_traffic): only printed
+    # when on, so full-buffer runs' stdout is unchanged.
+    traffic_stats = {}
+    for direction, label, enabled in (("dl", "NR DL", config.dl_traffic is not None),
+                                      ("ul", "NR UL", config.ul_traffic is not None)):
+        if not enabled:
+            continue
+        bufs = [b for g in gnbs for b in g.all_buffers()[direction]]
+        pkts = [p for g in gnbs for p in g.packet_log
+                if (p.source == g.name) == (direction == "dl")]
+        traffic_stats[direction] = summarize_buffers(bufs, pkts, simulation_time)
+        print_buffer_stats(f"Licensed 5G NR {direction.upper()} Traffic", label, traffic_stats[direction])
+    # Rashed-Step 18.B-10-06-2026-end
+
     # Rashed-Step 18.A-10-06-2026-start
     print_error_model_stats(error_model)
     # Rashed-Step 18.A-10-06-2026-end
@@ -280,5 +302,9 @@ def run_simulation_licensed_nr(
         # None with the default threshold rule.
         "error_model_stats": dict(error_model.stats) if error_model is not None else None,
         # Rashed-Step 18.A-10-06-2026-end
+        # Rashed-Step 18.B-10-06-2026-start
+        # {"dl": ..., "ul": ...} per buffered direction; {} for full buffer.
+        "traffic_stats": traffic_stats,
+        # Rashed-Step 18.B-10-06-2026-end
     }
 # Rashed-Step 6.B-07-31-2026-end
