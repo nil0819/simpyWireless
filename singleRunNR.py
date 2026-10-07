@@ -108,6 +108,10 @@ from ran.protocol.inactive import inactive_config_from_cli
 @click.option("--inactivity-timer-ms", "inactivity_timer_ms", type=float, default=None, help="Idle time before release to INACTIVE (default 100 ms). Requires --rrc-inactive.")
 @click.option("--paging-cycle-ms", "paging_cycle_ms", type=float, default=None, help="RAN paging cycle for downlink-triggered resume (default 320 ms). Requires --rrc-inactive.")
 # Rashed-Step 19.B.3-10-07-2026-end
+# Rashed-Step 19.B.4-10-07-2026-start
+@click.option("--rrc-reconfig", "rrc_reconfig", is_flag=True, default=False, help="RRC reconfiguration (Step 19.B.4): after the Core accepts a PDU session (and after a re-establishment), the gNB sets up the data radio bearer with RRCReconfiguration - the UE processes it (--rrc-reconfig-ms, default 10 ms, TS 38.331 clause 12) and answers RRCReconfigurationComplete - before the user plane opens. Needs the 5G Core. Default (unset) = no reconfiguration step, byte-identical.")
+@click.option("--rrc-reconfig-ms", "rrc_reconfig_ms", type=float, default=None, help="UE processing time for RRCReconfiguration (default 10 ms). Requires --rrc-reconfig.")
+# Rashed-Step 19.B.4-10-07-2026-end
 def single_run_nr(
         runs, seed, gnb_number, ues_per_gnb, simulation_time,
         area_w, area_h, gnb_pos, ue_radius,
@@ -139,6 +143,9 @@ def single_run_nr(
         rlm=False, t310_ms=None, t311_ms=None,
         # Rashed-Step 19.B.3-10-07-2026-start
         rrc_inactive=False, inactivity_timer_ms=None, paging_cycle_ms=None,
+        # Rashed-Step 19.B.4-10-07-2026-start
+        rrc_reconfig=False, rrc_reconfig_ms=None,
+        # Rashed-Step 19.B.4-10-07-2026-end
         # Rashed-Step 19.B.3-10-07-2026-end
         # Rashed-Step 19.B.2-10-07-2026-end
         # Rashed-Step 19.A-10-07-2026-end
@@ -216,6 +223,15 @@ def single_run_nr(
         raise click.BadParameter(str(e))
     if inactive_config is not None and not (rrc_enabled and (dl_traffic_config is not None or ul_traffic_config is not None)):
         raise click.BadParameter("--rrc-inactive needs --rrc-enabled and --dl-traffic or --ul-traffic poisson/cbr.")
+    # Rashed-Step 19.B.4-10-07-2026-start
+    if rrc_reconfig_ms is not None and not rrc_reconfig:
+        raise click.BadParameter("--rrc-reconfig-ms requires --rrc-reconfig.")
+    if rrc_reconfig_ms is not None and rrc_reconfig_ms < 0:
+        raise click.BadParameter(f"--rrc-reconfig-ms must be >= 0 (got {rrc_reconfig_ms}).")
+    if rrc_reconfig and not core_enabled:
+        raise click.BadParameter("--rrc-reconfig needs --core-enabled (the bearer belongs to a PDU session).")
+    rrc_reconfig_us = None if not rrc_reconfig else (10_000.0 if rrc_reconfig_ms is None else rrc_reconfig_ms * 1000.0)
+    # Rashed-Step 19.B.4-10-07-2026-end
     # Rashed-Step 19.B.3-10-07-2026-end
     # Rashed-Step 19.B.2-10-07-2026-end
     # Rashed-Step 19.A-10-07-2026-end
@@ -270,6 +286,9 @@ def single_run_nr(
         rlm=rlm_config,
         # Rashed-Step 19.B.3-10-07-2026-start
         inactive=inactive_config,
+        # Rashed-Step 19.B.4-10-07-2026-start
+        rrc_reconfig_us=rrc_reconfig_us,
+        # Rashed-Step 19.B.4-10-07-2026-end
         # Rashed-Step 19.B.3-10-07-2026-end
         # Rashed-Step 19.B.2-10-07-2026-end
         # Rashed-Step 19.A-10-07-2026-end

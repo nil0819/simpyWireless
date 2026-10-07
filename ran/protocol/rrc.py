@@ -160,6 +160,28 @@ class RrcLayer:
 
 
 # Rashed-Step 15.G-09-18-2026-start
+# Rashed-Step 19.B.4-10-07-2026-start
+def rrc_reconfiguration(gnb: Any, ue: Any):
+    """Generator - one RRCReconfiguration exchange (TS 38.331 5.3.5):
+    the gNB sends RRCReconfiguration (e.g. the data radio bearer for a
+    new PDU session, with the NAS accept inside), the UE applies it -
+    gnb.rrc_reconfig_us, 10 ms by default, the UE processing time TS
+    38.331 clause 12 allows for it - and answers with
+    RRCReconfigurationComplete on the normal RRC uplink path."""
+    env = gnb.env
+    started = env.now
+    yield env.timeout(gnb.rrc_reconfig_us)
+    yield from gnb.rrc_uplink_delay(ue)
+    ue.rrc_reconfig_latencies_us = getattr(ue, "rrc_reconfig_latencies_us", []) + [env.now - started]
+
+
+def compute_reconfig_stats(ue_list: List[Any]) -> Dict[str, Any]:
+    lat = [x for ue in ue_list for x in getattr(ue, "rrc_reconfig_latencies_us", [])]
+    return {"reconfigurations": len(lat),
+            "mean_latency_us": (sum(lat) / len(lat)) if lat else None}
+# Rashed-Step 19.B.4-10-07-2026-end
+
+
 def compute_connection_setup_stats(ue_list: List[Any]) -> Dict[str, Any]:
     """
     Aggregate RRC connection-setup metrics across every UE in ue_list

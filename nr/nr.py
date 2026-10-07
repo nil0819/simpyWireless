@@ -318,6 +318,12 @@ class Config_NRL:
     # RRC_INACTIVE with resume (ran/protocol/inactive.py) for RRC UEs.
     # Needs buffered traffic. None (default) = UEs stay CONNECTED.
     inactive: Optional[InactiveConfig] = None
+    # Rashed-Step 19.B.4-10-07-2026-start
+    # RRCReconfiguration (data radio bearer setup) after each PDU session
+    # and after a re-establishment: UE processing time in us. None
+    # (default) = no reconfiguration step.
+    rrc_reconfig_us: Optional[float] = None
+    # Rashed-Step 19.B.4-10-07-2026-end
     # Rashed-Step 19.B.3-10-07-2026-end
     # Rashed-Step 19.B.2-10-07-2026-end
     # Rashed-Step 19.A-10-07-2026-end
@@ -382,6 +388,9 @@ class GnbLicensedNR:
         if config.inactive is not None and config.dl_traffic is None and config.ul_traffic is None:
             raise ValueError("Config_NRL.inactive needs buffered traffic (dl_traffic and/or ul_traffic).")
         self.inactive_config = config.inactive
+        # Rashed-Step 19.B.4-10-07-2026-start
+        self.rrc_reconfig_us = config.rrc_reconfig_us
+        # Rashed-Step 19.B.4-10-07-2026-end
         # Rashed-Step 19.B.3-10-07-2026-end
         # Rashed-Step 19.B.2-10-07-2026-end
         self.rach_cell = None

@@ -668,6 +668,13 @@ def run_simulation(
             + [p for ue in ues for p in getattr(ue, "packet_log", [])],
         )
         print_core_stats("NR-U 5G Core", "NRU", nru_core_stats, "packet")
+        # Rashed-Step 19.B.4-10-07-2026-start
+        if configNr.rrc_reconfig_us is not None:
+            from ran.protocol.rrc import compute_reconfig_stats
+            rc = compute_reconfig_stats(ues)
+            print(f'NRU RRC reconfigurations (DRB setup): {rc["reconfigurations"]}')
+            print(f'NRU RRC mean reconfiguration latency (us): {rc["mean_latency_us"]}')
+        # Rashed-Step 19.B.4-10-07-2026-end
     # Rashed-Step pre_17.A-10-04-2026-end
     # Rashed-Step 16.F-10-02-2026-end
 

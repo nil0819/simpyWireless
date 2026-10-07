@@ -307,6 +307,13 @@ def run_simulation_licensed_nr(
             [p for g in gnbs for p in g.packet_log],
         )
         print_core_stats("Licensed 5G NR 5G Core", "NR", nr_core_stats, "packet")
+        # Rashed-Step 19.B.4-10-07-2026-start
+        if config.rrc_reconfig_us is not None:
+            from ran.protocol.rrc import compute_reconfig_stats
+            rc = compute_reconfig_stats([ue for g in gnbs for ue in g.ue_list])
+            print(f'NR RRC reconfigurations (DRB setup): {rc["reconfigurations"]}')
+            print(f'NR RRC mean reconfiguration latency (us): {rc["mean_latency_us"]}')
+        # Rashed-Step 19.B.4-10-07-2026-end
     # Rashed-Step 16.F-10-02-2026-end
 
     # Rashed-Step 18.B-10-06-2026-start

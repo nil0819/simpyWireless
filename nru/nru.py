@@ -348,6 +348,12 @@ class Config_NR:
     # RRC_INACTIVE with resume (ran/protocol/inactive.py) for RRC UEs.
     # Needs cot_model "slots" (per-UE buffers). None (default) = off.
     inactive: Optional[InactiveConfig] = None
+    # Rashed-Step 19.B.4-10-07-2026-start
+    # RRCReconfiguration (data radio bearer setup) after each PDU session
+    # and after a re-establishment: UE processing time in us. None
+    # (default) = no reconfiguration step.
+    rrc_reconfig_us: Optional[float] = None
+    # Rashed-Step 19.B.4-10-07-2026-end
     # Rashed-Step 19.B.3-10-07-2026-end
     # Rashed-Step 19.B.2-10-07-2026-end
     # Rashed-Step 19.A-10-07-2026-end
@@ -547,6 +553,9 @@ class Gnb:
         self.rlm_config = config_nr.rlm
         # Rashed-Step 19.B.3-10-07-2026-start
         self.inactive_config = config_nr.inactive
+        # Rashed-Step 19.B.4-10-07-2026-start
+        self.rrc_reconfig_us = config_nr.rrc_reconfig_us
+        # Rashed-Step 19.B.4-10-07-2026-end
         # Rashed-Step 19.B.3-10-07-2026-end
         # Rashed-Step 19.B.2-10-07-2026-end
         self.rach_cell = None

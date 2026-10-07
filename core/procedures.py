@@ -82,6 +82,16 @@ def pdu_session_establishment(core: Any, ue: Any):
     env = core.env
     ue.pdu_session = core.smf.request_session(ue.name, now=env.now)
     yield env.timeout(core.config.pdu_session_delay_us)
+    # Rashed-Step 19.B.4-10-07-2026-start
+    # With RRC reconfiguration on (the serving gNB's rrc_reconfig_us), the
+    # gNB first sets up the UE's data radio bearer - RRCReconfiguration,
+    # carrying the NAS accept, and its Complete - and only then does
+    # the user plane open. ue.gnb: the back-reference every gNB sets.
+    gnb = getattr(ue, "gnb", None)
+    if gnb is not None and getattr(gnb, "rrc_reconfig_us", None) is not None:
+        from ran.protocol.rrc import rrc_reconfiguration
+        yield from rrc_reconfiguration(gnb, ue)
+    # Rashed-Step 19.B.4-10-07-2026-end
     core.smf.activate_session(ue.name, now=env.now)
     # Rashed-Step 16.E-10-02-2026-start
     # Release anything waiting on the user plane (NR-U's uplink loop) on

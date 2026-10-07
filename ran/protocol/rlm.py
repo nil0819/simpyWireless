@@ -140,6 +140,12 @@ def reestablish(gnb: Any, ue: Any, cfg: RlmConfig, rrc_layer: Any):
     yield from gnb.rrc_uplink_delay(ue)               # RRCReestablishmentRequest
     yield env.timeout(rrc_layer.setup_processing_delay_us)  # RRCReestablishment
     yield from gnb.rrc_uplink_delay(ue)               # RRCReestablishmentComplete
+    # Rashed-Step 19.B.4-10-07-2026-start
+    # Then RRCReconfiguration resumes the data radio bearers (19.B.4).
+    if getattr(gnb, "rrc_reconfig_us", None) is not None:
+        from ran.protocol.rrc import rrc_reconfiguration
+        yield from rrc_reconfiguration(gnb, ue)
+    # Rashed-Step 19.B.4-10-07-2026-end
     return True
 
 

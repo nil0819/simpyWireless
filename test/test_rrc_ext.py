@@ -255,3 +255,45 @@ def test_inactive_config_cli_and_licensed_run():
                           "--nru-ue-uplink-enabled", "--nru-rrc-enabled", "--rrc-inactive"])
     assert r.exit_code != 0 and "--nru-cot-model slots" in r.output
 # Rashed-Step 19.B.3-10-07-2026-end
+
+
+# Rashed-Step 19.B.4-10-07-2026-start
+# ---------------------------------------------------------------------
+# 19.B.4 RRC reconfiguration (DRB setup)
+# ---------------------------------------------------------------------
+def _attach_ms(output, label="NR"):
+    return float(re.search(label + r" mean attach latency, start -> session active \(us\): ([\d.]+)", output).group(1))
+
+
+def test_reconfiguration_adds_drb_setup_before_the_user_plane():
+    nr = ["--gnb-number", "1", "--ues-per-gnb", "2", "--seed", "1", "-t", "0.5",
+          "--tdd-enabled", "--ue-uplink-enabled", "--rrc-enabled", "--core-enabled"]
+    plain, rc = _cli(single_run_nr, nr), _cli(single_run_nr, nr + ["--rrc-reconfig"])
+    assert plain.exit_code == 0 and rc.exit_code == 0, (plain.output[-400:], rc.output[-400:])
+    # 10 ms UE processing + the 1 ms uplink grant for the Complete.
+    assert _attach_ms(rc.output) - _attach_ms(plain.output) == 11_000.0
+    assert "NR RRC reconfigurations (DRB setup): 2" in rc.output
+    assert "reconfigurations" not in plain.output
+    custom = _cli(single_run_nr, nr + ["--rrc-reconfig", "--rrc-reconfig-ms", "4"])
+    assert _attach_ms(custom.output) - _attach_ms(plain.output) == 5_000.0
+
+
+def test_reestablishment_restores_bearers_with_a_reconfiguration():
+    env = simpy.Environment()
+    g, ue = _FakeGnb(env, [(1e6, 10.0), (2.6e6, -20.0), (1e9, 10.0)]), _Ue()
+    g.rrc_reconfig_us = 10_000.0
+    ue.rrc_state = RrcState.CONNECTED
+    env.process(radio_link_monitor(g, ue, RlmConfig(), RrcLayer()))
+    env.run(until=5e6)
+    assert ue.reestablishments == 1 and ue.rrc_reconfig_latencies_us == [11_000.0]
+
+
+def test_reconfiguration_cli_validation():
+    nr = ["--gnb-number", "1", "--ues-per-gnb", "1", "-t", "0.05", "--tdd-enabled", "--ue-uplink-enabled", "--rrc-enabled"]
+    r = _cli(single_run_nr, nr + ["--rrc-reconfig"])
+    assert r.exit_code != 0 and "needs --core-enabled" in r.output
+    r = _cli(single_run_nr, nr + ["--core-enabled", "--rrc-reconfig-ms", "5"])
+    assert r.exit_code != 0 and "requires --rrc-reconfig" in r.output
+    r = _cli(single_run, ["--ap-number", "0", "--gnb-number", "1", "-t", "0.05", "-r", "1", "--rrc-reconfig"])
+    assert r.exit_code != 0 and "needs --nru-core-enabled" in r.output
+# Rashed-Step 19.B.4-10-07-2026-end
