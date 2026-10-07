@@ -18,6 +18,9 @@ from ran.protocol.buffer import traffic_configs_from_cli
 from ran.protocol.harq import harq_config_from_cli
 # Rashed-Step 18.F-10-06-2026-start
 from ran.protocol.l2 import l2_config_from_cli
+# Rashed-Step 19.A-10-07-2026-start
+from ran.protocol.rach import rach_config_from_cli
+# Rashed-Step 19.A-10-07-2026-end
 # Rashed-Step 18.F-10-06-2026-end
 # Rashed-Step 18.E-10-06-2026-end
 # Rashed-Step 18.B-10-06-2026-end
@@ -83,6 +86,12 @@ from ran.protocol.l2 import l2_config_from_cli
 @click.option("--rlc-am-max-retx", "rlc_am_max_retx", type=int, default=None, help="RLC AM retransmission rounds before a packet is dropped (default 4). Requires --rlc-mode am.")
 @click.option("--rlc-am-status-delay-ms", "rlc_am_status_delay_ms", type=float, default=None, help="Time from a lost transport block to its RLC AM retransmission (STATUS report delay, default 10 ms). Requires --rlc-mode am.")
 # Rashed-Step 18.F-10-06-2026-end
+# Rashed-Step 19.A-10-07-2026-start
+@click.option("--rach", "rach", is_flag=True, default=False, help="Run 4-step random access (Step 19.A) before RRC setup: preamble on the next PRACH occasion with power ramping, random access response, contention resolution; colliding UEs retry, and a UE that reaches the preamble limit goes back to IDLE (its attach is abandoned). Prints a RACH stdout block. Default (unset) = RRC starts straight away, byte-identical to earlier runs.")
+@click.option("--prach-period-ms", "prach_period_ms", type=float, default=None, help="PRACH occasion period (default 10 ms). Requires --rach.")
+@click.option("--rach-backoff-ms", "rach_backoff_ms", type=float, default=None, help="Random backoff after a lost contention, uniform in [0, value] (default 0 = no backoff indicator). Requires --rach.")
+@click.option("--rar-window-ms", "rar_window_ms", type=float, default=None, help="Random access response window (default 10 ms). Requires --rach.")
+# Rashed-Step 19.A-10-07-2026-end
 def single_run_nr(
         runs, seed, gnb_number, ues_per_gnb, simulation_time,
         area_w, area_h, gnb_pos, ue_radius,
@@ -108,6 +117,9 @@ def single_run_nr(
         harq=False, harq_max_tx=None, harq_rtt_slots=None,
         # Rashed-Step 18.F-10-06-2026-start
         rlc_mode="none", pdcp_sn_bits=None, rlc_am_max_retx=None, rlc_am_status_delay_ms=None,
+        # Rashed-Step 19.A-10-07-2026-start
+        rach=False, prach_period_ms=None, rach_backoff_ms=None, rar_window_ms=None,
+        # Rashed-Step 19.A-10-07-2026-end
         # Rashed-Step 18.F-10-06-2026-end
         # Rashed-Step 18.E-10-06-2026-end
 ):
@@ -161,6 +173,14 @@ def single_run_nr(
     # Rashed-Step 18.F-10-06-2026-start
     if l2_config is not None and dl_traffic_config is None and ul_traffic_config is None:
         raise click.BadParameter("--rlc-mode needs --dl-traffic or --ul-traffic poisson/cbr.")
+    # Rashed-Step 19.A-10-07-2026-start
+    try:
+        rach_config = rach_config_from_cli(rach, prach_period_ms, rach_backoff_ms, rar_window_ms)
+    except ValueError as e:
+        raise click.BadParameter(str(e))
+    if rach_config is not None and not rrc_enabled:
+        raise click.BadParameter("--rach requires --rrc-enabled (random access starts the RRC attach).")
+    # Rashed-Step 19.A-10-07-2026-end
     # Rashed-Step 18.F-10-06-2026-end
     # Rashed-Step 18.E-10-06-2026-end
     # Rashed-Step 18.B-10-06-2026-end
@@ -206,6 +226,9 @@ def single_run_nr(
         harq=harq_config,
         # Rashed-Step 18.F-10-06-2026-start
         l2=l2_config,
+        # Rashed-Step 19.A-10-07-2026-start
+        rach=rach_config,
+        # Rashed-Step 19.A-10-07-2026-end
         # Rashed-Step 18.F-10-06-2026-end
         # Rashed-Step 18.E-10-06-2026-end
     )

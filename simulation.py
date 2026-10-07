@@ -54,6 +54,9 @@ from ran.protocol.buffer import summarize_buffers, print_buffer_stats
 from ran.protocol.harq import sum_harq_stats, print_harq_stats
 # Rashed-Step 18.F-10-06-2026-start
 from ran.protocol.l2 import sum_l2_stats, print_l2_stats
+# Rashed-Step 19.A-10-07-2026-start
+from ran.protocol.rach import compute_rach_stats, print_rach_stats
+# Rashed-Step 19.A-10-07-2026-end
 # Rashed-Step 18.F-10-06-2026-end
 # Rashed-Step 18.E-10-06-2026-end
 # Rashed-Step 18.C-10-06-2026-end
@@ -624,6 +627,11 @@ def run_simulation(
         print(f'NRU RRC connected: {nru_rrc_stats["connected"]}')
         print(f'NRU RRC success_rate: {nru_rrc_stats["success_rate"]}')
         print(f'NRU RRC mean connection setup latency (us): {nru_rrc_stats["mean_latency_us"]}')
+        # Rashed-Step 19.A-10-07-2026-start
+        if configNr.rach is not None:
+            print(f'NRU RRC failed (random access): {nru_rrc_stats["failed"]}')
+            print_rach_stats("NR-U Random Access", "NRU", compute_rach_stats(ues))
+        # Rashed-Step 19.A-10-07-2026-end
     # Rashed-Step 15.G-09-18-2026-end
 
     # Rashed-Step 16.F-10-02-2026-start

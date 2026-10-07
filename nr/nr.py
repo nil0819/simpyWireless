@@ -32,6 +32,9 @@ from ran.protocol.buffer import ByteBuffer, arrival_process, validate_buffered_t
 from ran.protocol.harq import HarqConfig, HarqEntity, HarqTb
 # Rashed-Step 18.F-10-06-2026-start
 from ran.protocol.l2 import L2Config, make_buffer
+# Rashed-Step 19.A-10-07-2026-start
+from ran.protocol.rach import RachConfig, RachCell
+# Rashed-Step 19.A-10-07-2026-end
 # Rashed-Step 18.F-10-06-2026-end
 # Rashed-Step 18.E-10-06-2026-end
 # Rashed-Step 18.B-10-06-2026-end
@@ -297,6 +300,11 @@ class Config_NRL:
     # PDCP + RLC (ran/protocol/l2.py) on the buffered directions. None
     # (default) = no L2 headers / ARQ / reordering.
     l2: Optional[L2Config] = None
+    # Rashed-Step 19.A-10-07-2026-start
+    # 4-step random access before RRC (ran/protocol/rach.py), for UEs
+    # with RRC. None (default) = RRC starts straight away.
+    rach: Optional[RachConfig] = None
+    # Rashed-Step 19.A-10-07-2026-end
     # Rashed-Step 18.F-10-06-2026-end
     # Rashed-Step 18.E-10-06-2026-end
 
@@ -351,6 +359,13 @@ class GnbLicensedNR:
         # behavior change, just formalizes the existing dispatch behind
         # the same interface LbtChannelAccess uses.
         self._channel_access = SlotScheduledAccess()
+        # Rashed-Step 19.A-10-07-2026-start
+        self.rach_cell = None
+        if config.rach is not None:
+            self.rach_cell = RachCell(self, config.rach, ue_max_power_dbm=config.ue_tx_power_dbm,
+                                      f_hz=config.f_ghz, pl_exp=config.pl_exp, scs_khz=self.scs_khz,
+                                      noise_figure_db=config.noise_figure_db, lbt=False)
+        # Rashed-Step 19.A-10-07-2026-end
         # Rashed-Step 15.A-09-18-2026-end
 
         # Rashed-Step 15.F-09-18-2026-start

@@ -49,6 +49,9 @@ from ran.protocol.buffer import ByteBuffer, arrival_process
 from ran.protocol.harq import HarqConfig, HarqEntity, HarqTb
 # Rashed-Step 18.F-10-06-2026-start
 from ran.protocol.l2 import L2Config, make_buffer
+# Rashed-Step 19.A-10-07-2026-start
+from ran.protocol.rach import RachConfig, RachCell
+# Rashed-Step 19.A-10-07-2026-end
 # Rashed-Step 18.F-10-06-2026-end
 # Rashed-Step 18.E-10-06-2026-end
 COT_MODELS = ("burst", "slots")
@@ -319,6 +322,11 @@ class Config_NR:
     # PDCP + RLC (ran/protocol/l2.py) in "slots", both directions.
     # None (default) = no L2 headers / ARQ / reordering.
     l2: Optional[L2Config] = None
+    # Rashed-Step 19.A-10-07-2026-start
+    # 4-step random access before RRC (ran/protocol/rach.py), with LBT
+    # before Msg1 and the RAR riding a gNB COT. None (default) = off.
+    rach: Optional[RachConfig] = None
+    # Rashed-Step 19.A-10-07-2026-end
     # Rashed-Step 18.F-10-06-2026-end
     # Rashed-Step 18.E-10-06-2026-end
 
@@ -502,6 +510,14 @@ class Gnb:
 
         # Rashed-Step 18.C-10-06-2026-start
         self._rrc_ul_waiters = 0
+        # Rashed-Step 19.A-10-07-2026-start
+        self.rach_cell = None
+        if config_nr.rach is not None:
+            self.rach_cell = RachCell(self, config_nr.rach, ue_max_power_dbm=config_nr.tx_power_dbm,
+                                      f_hz=config_nr.f_ghz, pl_exp=config_nr.pl_exp,
+                                      scs_khz=NUMEROLOGY_SCS_KHZ[config_nr.numerology],
+                                      noise_figure_db=config_nr.noise_figure_db, lbt=True)
+        # Rashed-Step 19.A-10-07-2026-end
         if config_nr.cot_model == "slots":
             self.ue_list = ue_list  # (also set again below)
             self._init_slot_model()
@@ -996,7 +1012,9 @@ class Gnb:
             if self.failed_transmissions_in_row > cfg.r_limit:
                 self.failed_transmissions_in_row = 0
 
-        if was_sent and cfg.ul_access_mode is NruUplinkAccessMode.COT_SHARING:
+        # Rashed-Step 19.A-10-07-2026-start
+        if was_sent and (cfg.ul_access_mode is NruUplinkAccessMode.COT_SHARING or self._rrc_ul_waiters > 0):
+        # Rashed-Step 19.A-10-07-2026-end
             done, self._dl_cot_done = self._dl_cot_done, self.env.event()
             done.succeed()
         if ul_window_us > 0 and was_sent:
@@ -1661,7 +1679,10 @@ class Gnb:
         # Wake any UE whose RRC message is waiting for a grant (COT
         # sharing only). Fired before the uplink window so an RRC message
         # and a data grant can share the same COT end.
-        if was_sent and self.config_nr.ul_access_mode is NruUplinkAccessMode.COT_SHARING:
+        # Rashed-Step 19.A-10-07-2026-start
+        if was_sent and (self.config_nr.ul_access_mode is NruUplinkAccessMode.COT_SHARING
+                         or self._rrc_ul_waiters > 0):
+        # Rashed-Step 19.A-10-07-2026-end
             done, self._dl_cot_done = self._dl_cot_done, self.env.event()
             done.succeed()
         # Rashed-Step 17.F-10-04-2026-end

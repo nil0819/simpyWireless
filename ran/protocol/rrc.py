@@ -97,6 +97,17 @@ class RrcLayer:
         """
         ue.rrc_state = RrcState.CONNECTING
         ue.rrc_attach_started_at = gnb.env.now
+        # Rashed-Step 19.A-10-07-2026-start
+        # Random access first (ran/protocol/rach.py) when the cell runs it;
+        # Msg3/Msg4 are the RRCSetupRequest/RRCSetup below. A failed random
+        # access abandons the attach: the UE goes back to IDLE.
+        rach = getattr(gnb, "rach_cell", None)
+        if rach is not None:
+            if not (yield from rach.access(ue)):
+                ue.rrc_state = RrcState.IDLE
+                ue.rrc_failed_at = gnb.env.now
+                return
+        # Rashed-Step 19.A-10-07-2026-end
         # RRCSetupRequest (UE -> gNB)
         yield from gnb.rrc_uplink_delay(ue)
         ue.rrc_setup_request_sent_at = gnb.env.now
@@ -187,5 +198,9 @@ def compute_connection_setup_stats(ue_list: List[Any]) -> Dict[str, Any]:
         "success_rate": (len(connected) / len(opted)) if opted else None,
         "latencies_us": latencies_us,
         "mean_latency_us": (sum(latencies_us) / len(latencies_us)) if latencies_us else None,
+        # Rashed-Step 19.A-10-07-2026-start
+        # Attaches abandoned because random access failed.
+        "failed": sum(1 for ue in opted if getattr(ue, "rrc_failed_at", None) is not None),
+        # Rashed-Step 19.A-10-07-2026-end
     }
 # Rashed-Step 15.G-09-18-2026-end

@@ -230,6 +230,9 @@ def test_compute_connection_setup_stats_empty_list():
     assert stats == {
         "attempted": 0, "connected": 0, "success_rate": None,
         "latencies_us": [], "mean_latency_us": None,
+        # Rashed-Step 19.A-10-07-2026-start
+        "failed": 0,  # attaches abandoned after random access failed
+        # Rashed-Step 19.A-10-07-2026-end
     }
 
 
