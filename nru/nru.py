@@ -353,6 +353,13 @@ class Config_NR:
     # and after a re-establishment: UE processing time in us. None
     # (default) = no reconfiguration step.
     rrc_reconfig_us: Optional[float] = None
+    # Rashed-Step 19.C-10-07-2026-start
+    # One DRB per QoS flow / 5QI in each "slots" buffer, served in 5QI
+    # priority order; uplink packets then take their class from the
+    # same traffic_class_mix as downlink. Needs "slots". False (default)
+    # = one buffer per UE and direction.
+    qos_flows: bool = False
+    # Rashed-Step 19.C-10-07-2026-end
     # Rashed-Step 19.B.4-10-07-2026-end
     # Rashed-Step 19.B.3-10-07-2026-end
     # Rashed-Step 19.B.2-10-07-2026-end
@@ -374,6 +381,10 @@ class Config_NR:
             raise ValueError("Config_NR.l2 needs cot_model=\"slots\" (the burst model has no transport blocks).")
         # Rashed-Step 19.B.1-10-07-2026-start
         # Rashed-Step 19.B.3-10-07-2026-start
+        # Rashed-Step 19.C-10-07-2026-start
+        if self.qos_flows and self.cot_model != "slots":
+            raise ValueError("Config_NR.qos_flows needs cot_model=\"slots\" (per-UE buffers).")
+        # Rashed-Step 19.C-10-07-2026-end
         if self.inactive is not None and self.cot_model != "slots":
             raise ValueError("Config_NR.inactive needs cot_model=\"slots\" (per-UE buffers).")
         # Rashed-Step 19.B.3-10-07-2026-end
@@ -806,7 +817,7 @@ class Gnb:
         saturated = self.traffic_config.mode == "saturated"
         for ue in self.ue_list:
             # Rashed-Step 18.F-10-06-2026-start
-            buf = make_buffer(cfg.buffer_limit_bytes, on_enqueue=self._kick_slots, l2=cfg.l2)
+            buf = make_buffer(cfg.buffer_limit_bytes, on_enqueue=self._kick_slots, l2=cfg.l2, qos=cfg.qos_flows)  # 19.C qos
             # Rashed-Step 18.F-10-06-2026-end
             self.dl_buffers[ue.name] = buf
             if not saturated and self.ue_list:
@@ -823,7 +834,7 @@ class Gnb:
             if (getattr(ue, "uplink_enabled", False)
                     and cfg.ul_access_mode is NruUplinkAccessMode.COT_SHARING):
                 # Rashed-Step 18.F-10-06-2026-start
-                ue.ul_buffer = make_buffer(cfg.buffer_limit_bytes, on_enqueue=self._kick_slots, l2=cfg.l2)
+                ue.ul_buffer = make_buffer(cfg.buffer_limit_bytes, on_enqueue=self._kick_slots, l2=cfg.l2, qos=cfg.qos_flows)  # 19.C qos
                 # Rashed-Step 18.F-10-06-2026-end
                 if cfg.ul_traffic is not None:
                     self.env.process(arrival_process(self.env, ue.ul_buffer, cfg.ul_traffic,
@@ -864,6 +875,10 @@ class Gnb:
             payload_bytes=size,
             header_bytes=0,
             created_at=self.env.now,
+            # Rashed-Step 19.C-10-07-2026-start
+            traffic_class=(pick_traffic_class(self.traffic_config.traffic_class_mix)
+                           if self.config_nr.qos_flows and self.traffic_config.traffic_class_mix else "best_effort"),
+            # Rashed-Step 19.C-10-07-2026-end
         )
 
     def _eligible_dl_ues(self) -> list:

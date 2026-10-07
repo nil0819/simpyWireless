@@ -38,6 +38,9 @@ from ran.protocol.rach import RachConfig, RachCell
 from ran.protocol.rlm import RlmConfig
 # Rashed-Step 19.B.3-10-07-2026-start
 from ran.protocol.inactive import InactiveConfig
+# Rashed-Step 19.C-10-07-2026-start
+from common.packet import pick_traffic_class
+# Rashed-Step 19.C-10-07-2026-end
 # Rashed-Step 19.B.3-10-07-2026-end
 # Rashed-Step 19.B.2-10-07-2026-end
 # Rashed-Step 19.A-10-07-2026-end
@@ -323,6 +326,13 @@ class Config_NRL:
     # and after a re-establishment: UE processing time in us. None
     # (default) = no reconfiguration step.
     rrc_reconfig_us: Optional[float] = None
+    # Rashed-Step 19.C-10-07-2026-start
+    # One DRB per QoS flow / 5QI (ran/protocol/drb.py) in each buffer,
+    # served in 5QI priority order. Needs buffered traffic; packets get
+    # their class from the traffic config's traffic_class_mix. False
+    # (default) = one buffer per UE and direction.
+    qos_flows: bool = False
+    # Rashed-Step 19.C-10-07-2026-end
     # Rashed-Step 19.B.4-10-07-2026-end
     # Rashed-Step 19.B.3-10-07-2026-end
     # Rashed-Step 19.B.2-10-07-2026-end
@@ -390,6 +400,10 @@ class GnbLicensedNR:
         self.inactive_config = config.inactive
         # Rashed-Step 19.B.4-10-07-2026-start
         self.rrc_reconfig_us = config.rrc_reconfig_us
+        # Rashed-Step 19.C-10-07-2026-start
+        if config.qos_flows and config.dl_traffic is None and config.ul_traffic is None:
+            raise ValueError("Config_NRL.qos_flows needs buffered traffic (dl_traffic and/or ul_traffic).")
+        # Rashed-Step 19.C-10-07-2026-end
         # Rashed-Step 19.B.4-10-07-2026-end
         # Rashed-Step 19.B.3-10-07-2026-end
         # Rashed-Step 19.B.2-10-07-2026-end
@@ -471,7 +485,7 @@ class GnbLicensedNR:
             self.dl_buffers = {}
             for ue in self.ue_list:
                 # Rashed-Step 18.F-10-06-2026-start
-                buf = make_buffer(config.buffer_limit_bytes, l2=config.l2)
+                buf = make_buffer(config.buffer_limit_bytes, l2=config.l2, qos=config.qos_flows)  # 19.C qos
                 # Rashed-Step 18.F-10-06-2026-end
                 self.dl_buffers[ue.name] = buf
                 env.process(arrival_process(env, buf, config.dl_traffic,
@@ -495,7 +509,7 @@ class GnbLicensedNR:
             for ue in self.ue_list:
                 if getattr(ue, "uplink_enabled", False):
                     # Rashed-Step 18.F-10-06-2026-start
-                    ue.ul_buffer = make_buffer(config.buffer_limit_bytes, l2=config.l2)
+                    ue.ul_buffer = make_buffer(config.buffer_limit_bytes, l2=config.l2, qos=config.qos_flows)  # 19.C qos
                     # Rashed-Step 18.F-10-06-2026-end
                     env.process(arrival_process(env, ue.ul_buffer, config.ul_traffic,
                                                 partial(self._make_traffic_packet, ue.name, True),
@@ -748,6 +762,9 @@ class GnbLicensedNR:
             payload_bytes=size,
             header_bytes=0,
             created_at=self.env.now,
+            # Rashed-Step 19.C-10-07-2026-start
+            traffic_class=pick_traffic_class(traffic.traffic_class_mix) if traffic.traffic_class_mix else "best_effort",
+            # Rashed-Step 19.C-10-07-2026-end
         )
 
     def _settle_tb(self, buffer: ByteBuffer, sinr_db: float, mcs: Optional[int],

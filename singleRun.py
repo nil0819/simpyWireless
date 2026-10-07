@@ -252,6 +252,9 @@ def parse_traffic_class_mix(raw_values, label: str):
 @click.option("--rrc-reconfig", "rrc_reconfig", is_flag=True, default=False, help="RRC reconfiguration (Step 19.B.4): after the Core accepts a PDU session (and after a re-establishment), the gNB sets up the data radio bearer with RRCReconfiguration - the UE processes it (--rrc-reconfig-ms, default 10 ms, TS 38.331 clause 12) and answers RRCReconfigurationComplete - before the user plane opens. Needs the 5G Core. Default (unset) = no reconfiguration step, byte-identical.")
 @click.option("--rrc-reconfig-ms", "rrc_reconfig_ms", type=float, default=None, help="UE processing time for RRCReconfiguration (default 10 ms). Requires --rrc-reconfig.")
 # Rashed-Step 19.B.4-10-07-2026-end
+# Rashed-Step 19.C-10-07-2026-start
+@click.option("--qos-flows", "qos_flows", is_flag=True, default=False, help="NR-U slots only (Step 19.C): one data radio bearer per 5QI in each UE's buffers (voice=5QI 1, video=2, best_effort=8, background=9), transport blocks filled in 5QI priority order; packets get their class from --nru-traffic-class-mix (uplink too). Prints an NR-U QoS Flows block. Default (unset) = one buffer per UE, byte-identical.")
+# Rashed-Step 19.C-10-07-2026-end
 # Rashed-Step 19.B.1-10-07-2026-start
 @click.option("--nru-rrc-type1-fallback", "nru_rrc_type1_fallback", type=int, default=None, help="cot_sharing + --nru-rrc-enabled (Step 19.B.1): after this many failed Type 2A checks in a row for one RRC message, the UE sends it after its own Type 1 (Cat-4) LBT instead of waiting for more gNB COTs. Default (unset) = never fall back, byte-identical to earlier runs.")
 # Rashed-Step 19.B.1-10-07-2026-end
@@ -404,6 +407,9 @@ def single_run(
         # Rashed-Step 19.B.4-10-07-2026-start
         rrc_reconfig: bool = False,
         rrc_reconfig_ms: float = None,
+        # Rashed-Step 19.C-10-07-2026-start
+        qos_flows: bool = False,
+        # Rashed-Step 19.C-10-07-2026-end
         # Rashed-Step 19.B.4-10-07-2026-end
         # Rashed-Step 19.B.3-10-07-2026-end
         # Rashed-Step 19.B.2-10-07-2026-end
@@ -609,6 +615,10 @@ def single_run(
     if rrc_reconfig and not nru_core_enabled:
         raise click.BadParameter("--rrc-reconfig needs --nru-core-enabled (the bearer belongs to a PDU session).")
     rrc_reconfig_us = None if not rrc_reconfig else (10_000.0 if rrc_reconfig_ms is None else rrc_reconfig_ms * 1000.0)
+    # Rashed-Step 19.C-10-07-2026-start
+    if qos_flows and nru_cot_model != "slots":
+        raise click.BadParameter("--qos-flows needs --nru-cot-model slots.")
+    # Rashed-Step 19.C-10-07-2026-end
     # Rashed-Step 19.B.4-10-07-2026-end
     # Rashed-Step 19.B.3-10-07-2026-end
     # Rashed-Step 19.B.2-10-07-2026-end
@@ -721,6 +731,9 @@ def single_run(
                                  inactive=inactive_config,
                                  # Rashed-Step 19.B.4-10-07-2026-start
                                  rrc_reconfig_us=rrc_reconfig_us,
+                                 # Rashed-Step 19.C-10-07-2026-start
+                                 qos_flows=qos_flows,
+                                 # Rashed-Step 19.C-10-07-2026-end
                                  # Rashed-Step 19.B.4-10-07-2026-end
                                  # Rashed-Step 19.B.3-10-07-2026-end
                                  # Rashed-Step 19.B.2-10-07-2026-end

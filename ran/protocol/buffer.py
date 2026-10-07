@@ -92,6 +92,12 @@ class ByteBuffer:
     def head(self) -> Optional[Packet]:
         return self._queue[0] if self._queue else None
 
+    # Rashed-Step 19.C-10-07-2026-start
+    def queued_packets(self) -> List[Packet]:
+        """Packets still waiting (not yet fully sent), oldest first."""
+        return list(self._queue)
+    # Rashed-Step 19.C-10-07-2026-end
+
     def enqueue(self, packet: Packet) -> bool:
         size = packet.total_bytes()
         if self.limit_bytes is not None and self._backlog + size > self.limit_bytes:
@@ -251,7 +257,8 @@ def arrival_process(env, buffer: ByteBuffer, traffic: TrafficConfig, make_packet
 
 def traffic_configs_from_cli(dl_mode: str, dl_rate_pps: Optional[float], ul_mode: str,
                              ul_rate_pps: Optional[float], packet_size_bytes: Optional[int],
-                             buffer_limit_bytes: Optional[int], ue_uplink_enabled: bool
+                             buffer_limit_bytes: Optional[int], ue_uplink_enabled: bool,
+                             traffic_class_mix: Optional[dict] = None,  # 19.C
                              ) -> Tuple[Optional[TrafficConfig], Optional[TrafficConfig]]:
     """Map singleRunNR.py's traffic flags to (dl, ul) TrafficConfigs
     (None = full buffer); ValueError on misuse."""
@@ -261,7 +268,8 @@ def traffic_configs_from_cli(dl_mode: str, dl_rate_pps: Optional[float], ul_mode
                 raise ValueError(f"--{name}-arrival-rate-pps requires --{name}-traffic poisson or cbr.")
             return None
         tc = TrafficConfig(mode=mode, arrival_rate_pps=100.0 if rate is None else rate,
-                           packet_size_bytes=packet_size_bytes)
+                           packet_size_bytes=packet_size_bytes,
+                           traffic_class_mix=traffic_class_mix)  # 19.C
         validate_buffered_traffic(tc)
         return tc
     dl = one(dl_mode, dl_rate_pps, "dl")

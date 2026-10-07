@@ -258,7 +258,14 @@ class L2Buffer(ByteBuffer):
             self.finished.append(p)
 
 
-def make_buffer(limit_bytes, on_enqueue=None, l2: Optional[L2Config] = None) -> ByteBuffer:
+def make_buffer(limit_bytes, on_enqueue=None, l2: Optional[L2Config] = None, qos: bool = False) -> ByteBuffer:
+    # Rashed-Step 19.C-10-07-2026-start
+    # qos (19.C): one buffer per QoS flow / DRB behind the same interface.
+    if qos:
+        from ran.protocol.drb import QosBuffer
+        return QosBuffer(limit_bytes, on_enqueue,
+                         make_sub=lambda lim: make_buffer(lim, None, l2))
+    # Rashed-Step 19.C-10-07-2026-end
     if l2 is None:
         return ByteBuffer(limit_bytes, on_enqueue=on_enqueue)
     return L2Buffer(limit_bytes, on_enqueue=on_enqueue, l2=l2)

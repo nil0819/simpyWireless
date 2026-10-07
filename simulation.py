@@ -60,6 +60,9 @@ from ran.protocol.rach import compute_rach_stats, print_rach_stats
 from ran.protocol.rlm import compute_rlf_stats, print_rlf_stats
 # Rashed-Step 19.B.3-10-07-2026-start
 from ran.protocol.inactive import compute_inactive_stats, print_inactive_stats
+# Rashed-Step 19.C-10-07-2026-start
+from common.qos import compute_qos_flow_stats, print_qos_flow_stats
+# Rashed-Step 19.C-10-07-2026-end
 # Rashed-Step 19.B.3-10-07-2026-end
 # Rashed-Step 19.B.2-10-07-2026-end
 # Rashed-Step 19.A-10-07-2026-end
@@ -746,6 +749,19 @@ def run_simulation(
             if ss["ul_grants"]:
                 print_harq_stats("NR-U UL HARQ", "NRU UL", sum_harq_stats([e for g in gnbs for e in g.harq_entities(True)]))
         # Rashed-Step 18.F-10-06-2026-start
+        # Rashed-Step 19.C-10-07-2026-start
+        if configNr.qos_flows:
+            print_qos_flow_stats("NR-U DL QoS Flows", "NRU DL",
+                                 compute_qos_flow_stats([p for g in gnbs for p in g.packet_log],
+                                                [p for g in gnbs for b in g.dl_buffers.values() for p in b.queued_packets()],
+                                                environment.now))
+            ul_pk = [p for g in gnbs for ue in g.ue_list if getattr(ue, "ul_buffer", None) is not None
+                     for p in ue.packet_log]
+            if ul_pk:
+                print_qos_flow_stats("NR-U UL QoS Flows", "NRU UL", compute_qos_flow_stats(
+            ul_pk, [p for g in gnbs for ue in g.ue_list if getattr(ue, "ul_buffer", None) is not None
+                    for p in ue.ul_buffer.queued_packets()], environment.now))
+        # Rashed-Step 19.C-10-07-2026-end
         if configNr.l2 is not None:
             print_l2_stats("NR-U DL PDCP/RLC", "NRU DL", configNr.l2,
                            sum_l2_stats([b for g in gnbs for b in g.dl_buffers.values()]))

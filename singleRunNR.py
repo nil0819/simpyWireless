@@ -112,6 +112,10 @@ from ran.protocol.inactive import inactive_config_from_cli
 @click.option("--rrc-reconfig", "rrc_reconfig", is_flag=True, default=False, help="RRC reconfiguration (Step 19.B.4): after the Core accepts a PDU session (and after a re-establishment), the gNB sets up the data radio bearer with RRCReconfiguration - the UE processes it (--rrc-reconfig-ms, default 10 ms, TS 38.331 clause 12) and answers RRCReconfigurationComplete - before the user plane opens. Needs the 5G Core. Default (unset) = no reconfiguration step, byte-identical.")
 @click.option("--rrc-reconfig-ms", "rrc_reconfig_ms", type=float, default=None, help="UE processing time for RRCReconfiguration (default 10 ms). Requires --rrc-reconfig.")
 # Rashed-Step 19.B.4-10-07-2026-end
+# Rashed-Step 19.C-10-07-2026-start
+@click.option("--qos-flows", "qos_flows", is_flag=True, default=False, help="QoS flows (Step 19.C): one data radio bearer per 5QI in each UE's buffers (voice=5QI 1, video=2, best_effort=8, background=9 - TS 23.501), each transport block filled in 5QI priority order (MAC logical channel prioritization). Packets get their class from --traffic-class-mix. Prints a QoS Flows block (per-5QI latency and share within the delay budget). Needs buffered traffic. Default (unset) = one buffer per UE, byte-identical.")
+@click.option("--traffic-class-mix", "traffic_class_mix", type=str, multiple=True, help="Traffic-class mix for buffered traffic (both directions), repeatable 'class=weight', e.g. --traffic-class-mix voice=0.2 --traffic-class-mix best_effort=0.8. Requires --dl-traffic or --ul-traffic poisson/cbr.")
+# Rashed-Step 19.C-10-07-2026-end
 def single_run_nr(
         runs, seed, gnb_number, ues_per_gnb, simulation_time,
         area_w, area_h, gnb_pos, ue_radius,
@@ -145,6 +149,9 @@ def single_run_nr(
         rrc_inactive=False, inactivity_timer_ms=None, paging_cycle_ms=None,
         # Rashed-Step 19.B.4-10-07-2026-start
         rrc_reconfig=False, rrc_reconfig_ms=None,
+        # Rashed-Step 19.C-10-07-2026-start
+        qos_flows=False, traffic_class_mix=(),
+        # Rashed-Step 19.C-10-07-2026-end
         # Rashed-Step 19.B.4-10-07-2026-end
         # Rashed-Step 19.B.3-10-07-2026-end
         # Rashed-Step 19.B.2-10-07-2026-end
@@ -177,10 +184,15 @@ def single_run_nr(
         raise click.BadParameter(str(e))
     # Rashed-Step 18.A-10-06-2026-end
     # Rashed-Step 18.B-10-06-2026-start
+    # Rashed-Step 19.C-10-07-2026-start
+    from singleRun import parse_traffic_class_mix
+    class_mix = parse_traffic_class_mix(traffic_class_mix, "--traffic-class-mix") or None
+    # Rashed-Step 19.C-10-07-2026-end
     try:
         dl_traffic_config, ul_traffic_config = traffic_configs_from_cli(
             dl_traffic, dl_arrival_rate_pps, ul_traffic, ul_arrival_rate_pps,
-            packet_size_bytes, buffer_limit_bytes, ue_uplink_enabled)
+            packet_size_bytes, buffer_limit_bytes, ue_uplink_enabled,
+            traffic_class_mix=class_mix)  # 19.C
     except ValueError as e:
         raise click.BadParameter(str(e))
     # Rashed-Step 18.E-10-06-2026-start
@@ -231,6 +243,10 @@ def single_run_nr(
     if rrc_reconfig and not core_enabled:
         raise click.BadParameter("--rrc-reconfig needs --core-enabled (the bearer belongs to a PDU session).")
     rrc_reconfig_us = None if not rrc_reconfig else (10_000.0 if rrc_reconfig_ms is None else rrc_reconfig_ms * 1000.0)
+    # Rashed-Step 19.C-10-07-2026-start
+    if (qos_flows or class_mix) and dl_traffic_config is None and ul_traffic_config is None:
+        raise click.BadParameter("--qos-flows / --traffic-class-mix need --dl-traffic or --ul-traffic poisson/cbr.")
+    # Rashed-Step 19.C-10-07-2026-end
     # Rashed-Step 19.B.4-10-07-2026-end
     # Rashed-Step 19.B.3-10-07-2026-end
     # Rashed-Step 19.B.2-10-07-2026-end
@@ -288,6 +304,9 @@ def single_run_nr(
         inactive=inactive_config,
         # Rashed-Step 19.B.4-10-07-2026-start
         rrc_reconfig_us=rrc_reconfig_us,
+        # Rashed-Step 19.C-10-07-2026-start
+        qos_flows=qos_flows,
+        # Rashed-Step 19.C-10-07-2026-end
         # Rashed-Step 19.B.4-10-07-2026-end
         # Rashed-Step 19.B.3-10-07-2026-end
         # Rashed-Step 19.B.2-10-07-2026-end

@@ -41,6 +41,9 @@ from ran.protocol.rach import compute_rach_stats, print_rach_stats
 from ran.protocol.rlm import compute_rlf_stats, print_rlf_stats
 # Rashed-Step 19.B.3-10-07-2026-start
 from ran.protocol.inactive import compute_inactive_stats, print_inactive_stats
+# Rashed-Step 19.C-10-07-2026-start
+from common.qos import compute_qos_flow_stats, print_qos_flow_stats
+# Rashed-Step 19.C-10-07-2026-end
 # Rashed-Step 19.B.3-10-07-2026-end
 # Rashed-Step 19.B.2-10-07-2026-end
 # Rashed-Step 19.A-10-07-2026-end
@@ -339,6 +342,12 @@ def run_simulation_licensed_nr(
             ls = sum_l2_stats(bufs)
             traffic_stats[direction]["l2"] = ls
             print_l2_stats(f"Licensed 5G NR {direction.upper()} PDCP/RLC", label, config.l2, ls)
+        # Rashed-Step 19.C-10-07-2026-start
+        if config.qos_flows:
+            qs = compute_qos_flow_stats(pkts, [p for b in bufs for p in b.queued_packets()], environment.now)
+            traffic_stats[direction]["qos"] = qs
+            print_qos_flow_stats(f"Licensed 5G NR {direction.upper()} QoS Flows", label, qs)
+        # Rashed-Step 19.C-10-07-2026-end
         # Rashed-Step 18.F-10-06-2026-end
         # Rashed-Step 18.E-10-06-2026-end
     # Rashed-Step 18.B-10-06-2026-end
