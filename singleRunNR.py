@@ -24,6 +24,9 @@ from ran.protocol.rach import rach_config_from_cli
 from ran.protocol.rlm import rlm_config_from_cli
 # Rashed-Step 19.B.3-10-07-2026-start
 from ran.protocol.inactive import inactive_config_from_cli
+# Rashed-Step 19.D.1-10-07-2026-start
+from ran.protocol.handover import handover_config_from_cli
+# Rashed-Step 19.D.1-10-07-2026-end
 # Rashed-Step 19.B.3-10-07-2026-end
 # Rashed-Step 19.B.2-10-07-2026-end
 # Rashed-Step 19.A-10-07-2026-end
@@ -116,6 +119,11 @@ from ran.protocol.inactive import inactive_config_from_cli
 @click.option("--qos-flows", "qos_flows", is_flag=True, default=False, help="QoS flows (Step 19.C): one data radio bearer per 5QI in each UE's buffers (voice=5QI 1, video=2, best_effort=8, background=9 - TS 23.501), each transport block filled in 5QI priority order (MAC logical channel prioritization). Packets get their class from --traffic-class-mix. Prints a QoS Flows block (per-5QI latency and share within the delay budget). Needs buffered traffic. Default (unset) = one buffer per UE, byte-identical.")
 @click.option("--traffic-class-mix", "traffic_class_mix", type=str, multiple=True, help="Traffic-class mix for buffered traffic (both directions), repeatable 'class=weight', e.g. --traffic-class-mix voice=0.2 --traffic-class-mix best_effort=0.8. Requires --dl-traffic or --ul-traffic poisson/cbr.")
 # Rashed-Step 19.C-10-07-2026-end
+# Rashed-Step 19.D.1-10-07-2026-start
+@click.option("--handover", "handover", is_flag=True, default=False, help="Measurements + handover (Step 19.D.1) for RRC UEs: every 40 ms the UE measures RSRP of its cell and the other gNBs (L3-filtered); a neighbor better by --a3-offset-db + 1 dB for --ttt-ms (event A3) triggers a measurement report, Xn preparation, the HO command, execution, random access to the target if on and RRCReconfigurationComplete there; the downlink buffer is forwarded. Prints a Handover stdout block. Default (unset) = UEs stay with their first gNB, byte-identical.")
+@click.option("--a3-offset-db", "a3_offset_db", type=float, default=None, help="Event A3 offset (default 3 dB). Requires --handover.")
+@click.option("--ttt-ms", "ttt_ms", type=float, default=None, help="Event A3 time-to-trigger (default 160 ms). Requires --handover.")
+# Rashed-Step 19.D.1-10-07-2026-end
 def single_run_nr(
         runs, seed, gnb_number, ues_per_gnb, simulation_time,
         area_w, area_h, gnb_pos, ue_radius,
@@ -151,6 +159,9 @@ def single_run_nr(
         rrc_reconfig=False, rrc_reconfig_ms=None,
         # Rashed-Step 19.C-10-07-2026-start
         qos_flows=False, traffic_class_mix=(),
+        # Rashed-Step 19.D.1-10-07-2026-start
+        handover=False, a3_offset_db=None, ttt_ms=None,
+        # Rashed-Step 19.D.1-10-07-2026-end
         # Rashed-Step 19.C-10-07-2026-end
         # Rashed-Step 19.B.4-10-07-2026-end
         # Rashed-Step 19.B.3-10-07-2026-end
@@ -246,6 +257,14 @@ def single_run_nr(
     # Rashed-Step 19.C-10-07-2026-start
     if (qos_flows or class_mix) and dl_traffic_config is None and ul_traffic_config is None:
         raise click.BadParameter("--qos-flows / --traffic-class-mix need --dl-traffic or --ul-traffic poisson/cbr.")
+    # Rashed-Step 19.D.1-10-07-2026-start
+    try:
+        handover_config = handover_config_from_cli(handover, a3_offset_db, ttt_ms)
+    except ValueError as e:
+        raise click.BadParameter(str(e))
+    if handover_config is not None and not rrc_enabled:
+        raise click.BadParameter("--handover requires --rrc-enabled.")
+    # Rashed-Step 19.D.1-10-07-2026-end
     # Rashed-Step 19.C-10-07-2026-end
     # Rashed-Step 19.B.4-10-07-2026-end
     # Rashed-Step 19.B.3-10-07-2026-end
@@ -306,6 +325,9 @@ def single_run_nr(
         rrc_reconfig_us=rrc_reconfig_us,
         # Rashed-Step 19.C-10-07-2026-start
         qos_flows=qos_flows,
+        # Rashed-Step 19.D.1-10-07-2026-start
+        handover=handover_config,
+        # Rashed-Step 19.D.1-10-07-2026-end
         # Rashed-Step 19.C-10-07-2026-end
         # Rashed-Step 19.B.4-10-07-2026-end
         # Rashed-Step 19.B.3-10-07-2026-end

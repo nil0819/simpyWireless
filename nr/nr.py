@@ -38,6 +38,9 @@ from ran.protocol.rach import RachConfig, RachCell
 from ran.protocol.rlm import RlmConfig
 # Rashed-Step 19.B.3-10-07-2026-start
 from ran.protocol.inactive import InactiveConfig
+# Rashed-Step 19.D.1-10-07-2026-start
+from ran.protocol.handover import HandoverConfig
+# Rashed-Step 19.D.1-10-07-2026-end
 # Rashed-Step 19.C-10-07-2026-start
 from common.packet import pick_traffic_class
 # Rashed-Step 19.C-10-07-2026-end
@@ -332,6 +335,11 @@ class Config_NRL:
     # their class from the traffic config's traffic_class_mix. False
     # (default) = one buffer per UE and direction.
     qos_flows: bool = False
+    # Rashed-Step 19.D.1-10-07-2026-start
+    # Measurements + A3 handover between this run's gNBs for RRC UEs
+    # (ran/protocol/handover.py). None (default) = UEs stay put.
+    handover: Optional[HandoverConfig] = None
+    # Rashed-Step 19.D.1-10-07-2026-end
     # Rashed-Step 19.C-10-07-2026-end
     # Rashed-Step 19.B.4-10-07-2026-end
     # Rashed-Step 19.B.3-10-07-2026-end
@@ -400,6 +408,10 @@ class GnbLicensedNR:
         self.inactive_config = config.inactive
         # Rashed-Step 19.B.4-10-07-2026-start
         self.rrc_reconfig_us = config.rrc_reconfig_us
+        # Rashed-Step 19.D.1-10-07-2026-start
+        self.ho_config = config.handover
+        self.neighbors: list = []  # set by the orchestrator
+        # Rashed-Step 19.D.1-10-07-2026-end
         # Rashed-Step 19.C-10-07-2026-start
         if config.qos_flows and config.dl_traffic is None and config.ul_traffic is None:
             raise ValueError("Config_NRL.qos_flows needs buffered traffic (dl_traffic and/or ul_traffic).")
@@ -582,6 +594,43 @@ class GnbLicensedNR:
         return False
     
     # Rashed-Step 19.B.3-10-07-2026-end
+    # Rashed-Step 19.D.1-10-07-2026-start
+    def rsrp_dbm(self, ue) -> float:
+        """RSRP at the UE: received power per resource element."""
+        now = self.env.now
+        probe = ActiveTx(tx_id=self.name, tx_pos=self.current_pos(), tx_start=now, rx_pos=ue.current_pos(),
+                         tx_power_dbm=self.config.tx_power_dbm, f_hz=self.config.f_ghz, pl_exp=self.config.pl_exp,
+                         t_end=now + self.slot_us, tech="NR", bandwidth_mhz=self.config.bandwidth_mhz)
+        return self.channel._rx_pwr_dbm(probe, probe.rx_pos) - 10.0 * math.log10(12 * self.total_rbs)
+    
+    def release_ue_context(self, ue) -> dict:
+        """Handover out: the UE leaves this cell. HARQ is reset - TBs
+        waiting for a retransmission are given up (RLC AM re-sends them)."""
+        self.ue_list.remove(ue)
+        dl = self.dl_buffers.pop(ue.name, None) if self.dl_buffers is not None else None
+        for buf in (dl, getattr(ue, "ul_buffer", None)):
+            if buf is None:
+                continue
+            entry = self._harq_entities.pop(id(buf), None)
+            if entry is not None:
+                for tb in entry[1].drain():
+                    buf.drop(tb.segments, self.env.now)
+            self._slot_retx.pop(id(buf), None)
+            self.packet_log.extend(buf.drain_finished())
+        return {"dl": dl}
+    
+    def admit_ue_context(self, ue, ctx: dict) -> None:
+        """Handover in: the UE joins this cell with its forwarded downlink buffer."""
+        self.ue_list.append(ue)
+        ue.gnb = self
+        ue.gnb_name = self.name
+        if ctx.get("dl") is not None:
+            if self.dl_buffers is None:
+                self.dl_buffers = {}
+            self.dl_buffers[ue.name] = ctx["dl"]
+        self._pf_avg_rate.setdefault(ue.name, 1.0)
+    
+    # Rashed-Step 19.D.1-10-07-2026-end
     def dl_sinr_estimate(self, ue) -> float:
         """Downlink SINR a UE measures for radio link monitoring."""
         return self._trial_sinr_db(ue)

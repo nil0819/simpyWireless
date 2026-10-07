@@ -89,6 +89,9 @@ def radio_link_monitor(gnb: Any, ue: Any, cfg: RlmConfig, rrc_layer: Any):
             t310_started = None
             continue
         # Rashed-Step 19.B.3-10-07-2026-end
+        # Rashed-Step 19.D.1-10-07-2026-start
+        gnb = getattr(ue, "gnb", None) or gnb  # the serving cell, after handovers too
+        # Rashed-Step 19.D.1-10-07-2026-end
         sinr_db = gnb.dl_sinr_estimate(ue)
         samples.append((now, 10.0 ** (sinr_db / 10.0)))
         while samples and samples[0][0] <= now - keep_us:
@@ -130,10 +133,24 @@ def reestablish(gnb: Any, ue: Any, cfg: RlmConfig, rrc_layer: Any):
     random access fails."""
     env = gnb.env
     deadline = env.now + cfg.t311_us
-    while gnb.dl_sinr_estimate(ue) < cfg.qin_db:
+    # Rashed-Step 19.D.1-10-07-2026-start
+    # Cell selection: the best of the serving cell and its neighbors
+    # (19.D.1); re-establishing at another cell moves the UE's context.
+    def best():
+        cells = [gnb] + list(getattr(gnb, "neighbors", []))
+        return max(cells, key=lambda c: c.dl_sinr_estimate(ue))
+    cell = best()
+    while cell.dl_sinr_estimate(ue) < cfg.qin_db:
         if env.now + cfg.period_us > deadline:
             return False
         yield env.timeout(cfg.period_us)
+        cell = best()
+    if cell is not gnb:
+        from ran.protocol.handover import move_ue
+        move_ue(gnb, cell, ue)
+        ue.reestablished_elsewhere = getattr(ue, "reestablished_elsewhere", 0) + 1
+        gnb = cell
+    # Rashed-Step 19.D.1-10-07-2026-end
     rach = getattr(gnb, "rach_cell", None)
     if rach is not None and not (yield from rach.access(ue)):
         return False

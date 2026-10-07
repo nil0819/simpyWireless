@@ -153,6 +153,12 @@ class RrcLayer:
         if inactive_cfg is not None:
             from ran.protocol.inactive import inactivity_manager
             gnb.env.process(inactivity_manager(gnb, ue, inactive_cfg, self))
+        # Rashed-Step 19.D.1-10-07-2026-start
+        ho_cfg = getattr(gnb, "ho_config", None)
+        if ho_cfg is not None:
+            from ran.protocol.handover import measurement_process
+            gnb.env.process(measurement_process(ue, ho_cfg))
+        # Rashed-Step 19.D.1-10-07-2026-end
         # Rashed-Step 19.B.3-10-07-2026-end
         # Rashed-Step 19.B.2-10-07-2026-end
         # Rashed-Step 15.G-09-18-2026-end

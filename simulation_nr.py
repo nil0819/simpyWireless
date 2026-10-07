@@ -43,6 +43,9 @@ from ran.protocol.rlm import compute_rlf_stats, print_rlf_stats
 from ran.protocol.inactive import compute_inactive_stats, print_inactive_stats
 # Rashed-Step 19.C-10-07-2026-start
 from common.qos import compute_qos_flow_stats, print_qos_flow_stats
+# Rashed-Step 19.D.1-10-07-2026-start
+from ran.protocol.handover import compute_handover_stats, print_handover_stats
+# Rashed-Step 19.D.1-10-07-2026-end
 # Rashed-Step 19.C-10-07-2026-end
 # Rashed-Step 19.B.3-10-07-2026-end
 # Rashed-Step 19.B.2-10-07-2026-end
@@ -193,6 +196,11 @@ def run_simulation_licensed_nr(
         )
         gnbs.append(g)
 
+    # Rashed-Step 19.D.1-10-07-2026-start
+    # Every gNB knows the others (handover / re-establishment candidates).
+    for g in gnbs:
+        g.neighbors = [o for o in gnbs if o is not g]
+    # Rashed-Step 19.D.1-10-07-2026-end
     print("=== Licensed 5G NR Topology ===")
     scs_khz = NUMEROLOGY_SCS_KHZ[config.numerology]
     slot_us = slot_duration_us(config.numerology)
@@ -294,6 +302,12 @@ def run_simulation_licensed_nr(
     if config.inactive is not None:
         nr_inactive_stats = compute_inactive_stats([ue for g in gnbs for ue in g.ue_list])
         print_inactive_stats("Licensed 5G NR RRC Inactive", "NR", nr_inactive_stats)
+    # Rashed-Step 19.D.1-10-07-2026-start
+    nr_ho_stats = None
+    if config.handover is not None:
+        nr_ho_stats = compute_handover_stats([ue for g in gnbs for ue in g.ue_list])
+        print_handover_stats("Licensed 5G NR Handover", "NR", nr_ho_stats)
+    # Rashed-Step 19.D.1-10-07-2026-end
     # Rashed-Step 19.B.3-10-07-2026-end
     # Rashed-Step 19.B.2-10-07-2026-end
     # Rashed-Step 19.A-10-07-2026-end
@@ -328,8 +342,13 @@ def run_simulation_licensed_nr(
         if not enabled:
             continue
         bufs = [b for g in gnbs for b in g.all_buffers()[direction]]
+        # Rashed-Step 19.D.1-10-07-2026-start
+        # Downlink = sent by a gNB (after a handover, a cell's log also holds
+        # downlink packets another gNB created).
+        gnb_names = {g.name for g in gnbs}
         pkts = [p for g in gnbs for p in g.packet_log
-                if (p.source == g.name) == (direction == "dl")]
+                if (p.source in gnb_names) == (direction == "dl")]
+        # Rashed-Step 19.D.1-10-07-2026-end
         traffic_stats[direction] = summarize_buffers(bufs, pkts, simulation_time)
         print_buffer_stats(f"Licensed 5G NR {direction.upper()} Traffic", label, traffic_stats[direction])
         # Rashed-Step 18.E-10-06-2026-start
@@ -391,6 +410,9 @@ def run_simulation_licensed_nr(
         "rlf_stats": nr_rlf_stats,
         # Rashed-Step 19.B.3-10-07-2026-start
         "inactive_stats": nr_inactive_stats,
+        # Rashed-Step 19.D.1-10-07-2026-start
+        "handover_stats": nr_ho_stats,
+        # Rashed-Step 19.D.1-10-07-2026-end
         # Rashed-Step 19.B.3-10-07-2026-end
         # Rashed-Step 19.B.2-10-07-2026-end
         # Rashed-Step 19.A-10-07-2026-end

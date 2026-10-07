@@ -73,6 +73,9 @@ def inactivity_manager(gnb: Any, ue: Any, cfg: InactiveConfig, rrc_layer: Any):
             last_active = env.now
             yield env.timeout(cfg.check_period_us)
             continue
+        # Rashed-Step 19.D.1-10-07-2026-start
+        gnb = getattr(ue, "gnb", None) or gnb  # serving cell, after handovers too
+        # Rashed-Step 19.D.1-10-07-2026-end
         if gnb.ue_has_pending(ue):
             last_active = env.now
         if env.now - last_active < cfg.inactivity_timer_us:
