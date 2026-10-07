@@ -683,16 +683,24 @@ def run_simulation(
     # is unchanged.
     if configNr.cot_model == "slots" and gnbs:
         ss = {k: sum(g.slot_stats[k] for g in gnbs) for k in gnbs[0].slot_stats}
-        n_slots = ss["slots_ok"] + ss["slots_failed"]
+        # Rashed-Step 18.D-10-06-2026-start
+        # Per direction: transport blocks (one per UE per slot) since 18.D.
         print("=== NR-U Slots ===")
         print(f"NRU numerology mu={configNr.numerology} (SCS={gnbs[0].scs_khz} kHz, slot={gnbs[0].slot_us} us), "
-              f"RBs={gnbs[0].total_rbs} in {configNr.bandwidth_mhz} MHz")
+              f"RBs={gnbs[0].total_rbs} in {configNr.bandwidth_mhz} MHz, UL interlaces={gnbs[0].n_interlaces}")
         print(f'NRU COTs: {ss["cots"]} (reference slot failed: {ss["cots_failed"]}, '
               f'control only: {ss["control_only_cots"]})')
-        print(f'NRU DL slots ok/failed: {ss["slots_ok"]}/{ss["slots_failed"]}')
-        print(f'NRU DL slot error rate: {(ss["slots_failed"] / n_slots) if n_slots else 0.0}')
-        print(f'NRU DL mean MCS (decoded slots): {(ss["mcs_sum"] / ss["slots_ok"]) if ss["slots_ok"] else None}')
-        print(f'NRU DL slot throughput (Mbps): {ss["bits_delivered"] / (simulation_time * 1e6)}')
+        for d, lbl in (("dl", "DL"), ("ul", "UL")):
+            n_tb = ss[d + "_tbs_ok"] + ss[d + "_tbs_failed"]
+            if d == "ul" and n_tb == 0 and ss["ul_grants"] == 0:
+                continue
+            print(f'NRU {lbl} TBs ok/failed: {ss[d + "_tbs_ok"]}/{ss[d + "_tbs_failed"]}')
+            print(f'NRU {lbl} TB error rate: {(ss[d + "_tbs_failed"] / n_tb) if n_tb else 0.0}')
+            print(f'NRU {lbl} mean MCS (decoded TBs): {(ss[d + "_mcs_sum"] / ss[d + "_tbs_ok"]) if ss[d + "_tbs_ok"] else None}')
+            print(f'NRU {lbl} slot throughput (Mbps): {ss[d + "_bits"] / (simulation_time * 1e6)}')
+        if ss["ul_grants"]:
+            print(f'NRU UL grants: {ss["ul_grants"]} (Type 2A busy: {ss["ul_type2a_skips"]})')
+        # Rashed-Step 18.D-10-06-2026-end
         if nru_traffic_config is not None and nru_traffic_config.mode != "saturated":
             nru_bufs = [b for g in gnbs for b in g.dl_buffers.values()]
             nru_dl_pkts = [p for g in gnbs for p in g.packet_log]

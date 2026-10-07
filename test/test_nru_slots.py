@@ -116,13 +116,13 @@ def test_saturated_alone_matches_the_capacity_formula_and_burst_footprint():
     g = _run()[0]
     ss = g.slot_stats
     assert g.total_rbs == 51 and g.slot_us == 500.0
-    assert ss["slots_failed"] == 0 and ss["cots_failed"] == 0
+    assert ss["dl_tbs_failed"] == 0 and ss["cots_failed"] == 0
     # Every COT is 6 ms = 12 slots of downlink (no uplink sharing here).
     # (the run can end inside the last COT)
-    assert 12 * (ss["cots"] - 1) < ss["slots_ok"] <= 12 * ss["cots"]
-    assert ss["mcs_sum"] / ss["slots_ok"] == 15  # 7 m link: top MCS
+    assert 12 * (ss["cots"] - 1) < ss["dl_tbs_ok"] <= 12 * ss["cots"]
+    assert ss["dl_mcs_sum"] / ss["dl_tbs_ok"] == 15  # 7 m link: top MCS
     per_slot_bits = (NR_MCS_TABLE[15][1] * 51 * 12 * 30e3 * 500e-6) // 8 * 8
-    assert ss["bits_delivered"] == per_slot_bits * ss["slots_ok"]
+    assert ss["dl_bits"] == per_slot_bits * ss["dl_tbs_ok"]
     burst = _run(cfg_nr=Config_NR())[0]
     # Same channel occupancy as the burst model.
     assert g.channel.airtime_data_NR[g.name] == burst.channel.airtime_data_NR[burst.name]
@@ -134,7 +134,7 @@ def test_light_buffered_load_shortens_cots_and_delivers_everything():
     assert st["enqueued_packets"] == 99
     assert st["delivered_packets"] >= 98
     # One packet per COT needs one slot, not 12.
-    assert g.slot_stats["slots_ok"] + g.slot_stats["slots_failed"] <= g.slot_stats["cots"] + 1
+    assert g.slot_stats["dl_tbs_ok"] + g.slot_stats["dl_tbs_failed"] <= g.slot_stats["cots"] + 1
     assert g.channel.airtime_data_NR[g.name] < 0.1 * 0.5e6
 
 
@@ -153,8 +153,8 @@ def test_arrival_rate_is_a_per_gnb_total_split_over_ues():
 def test_wifi_interference_fails_individual_slots_not_whole_cots():
     g = _run(n_ap=1, seed=1, t=1.0)[0]
     ss = g.slot_stats
-    assert ss["slots_failed"] > 0
-    assert ss["slots_ok"] > 5 * ss["slots_failed"]
+    assert ss["dl_tbs_failed"] > 0
+    assert ss["dl_tbs_ok"] > 5 * ss["dl_tbs_failed"]
     # Failed COTs are exactly the ones whose first (reference) slot failed.
     assert g.channel.failed_transmissions_NR == ss["cots_failed"]
 

@@ -204,6 +204,8 @@ def parse_traffic_class_mix(raw_values, label: str):
 # Rashed-Step 18.C-10-06-2026-start
 @click.option("--nru-cot-model", "nru_cot_model", type=click.Choice(["burst", "slots"]), default="burst", help="How an NR-U COT's downlink carries data (Step 18.C). burst (default): one transmission with one packet at --nru-mcs, byte-identical to every earlier run. slots: a run of NR slots (--nru-numerology), each a transport block sized from MCS x RBs x slot time with its own SINR; MCS from the UE's last reported SINR; data from per-UE buffers (--nru-traffic-model; --nru-arrival-rate-pps stays a per-gNB total). Prints an 'NR-U Slots' stdout block.")
 @click.option("--nru-numerology", "nru_numerology", type=int, default=None, help="slots only: NR numerology mu (default 1 = 30 kHz SCS, 500 us slots).")
+@click.option("--nru-ul-traffic-model", "nru_ul_traffic_model", type=click.Choice(["saturated", "poisson", "cbr"]), default="saturated", help="slots + --nru-ue-uplink-enabled with cot_sharing (Step 18.D): uplink traffic per UE. saturated (default): every UE always has uplink data. poisson / cbr: packets arrive at --nru-ul-arrival-rate-pps per UE into its uplink buffer.")
+@click.option("--nru-ul-arrival-rate-pps", "nru_ul_arrival_rate_pps", type=float, default=None, help="Uplink packets per second per UE (default 100). Requires --nru-ul-traffic-model poisson or cbr.")
 @click.option("--nru-buffer-limit-bytes", "nru_buffer_limit_bytes", type=int, default=None, help="slots only: drop-tail limit of each per-UE downlink buffer (default unbounded).")
 # Rashed-Step 18.C-10-06-2026-end
 
@@ -323,6 +325,10 @@ def single_run(
         nru_cot_model: str = "burst",
         nru_numerology: int = None,
         nru_buffer_limit_bytes: int = None,
+        # Rashed-Step 18.D-10-06-2026-start
+        nru_ul_traffic_model: str = "saturated",
+        nru_ul_arrival_rate_pps: float = None,
+        # Rashed-Step 18.D-10-06-2026-end
         # Rashed-Step 18.C-10-06-2026-end
         # Rashed-Step 18.A-10-06-2026-end
         # Rashed-Step 17.G-10-04-2026-end
@@ -458,6 +464,20 @@ def single_run(
     # Rashed-Step 18.C-10-06-2026-start
     if nru_cot_model != "slots" and (nru_numerology is not None or nru_buffer_limit_bytes is not None):
         raise click.BadParameter("--nru-numerology / --nru-buffer-limit-bytes require --nru-cot-model slots.")
+    # Rashed-Step 18.D-10-06-2026-start
+    if nru_ul_traffic_model != "saturated" and nru_cot_model != "slots":
+        raise click.BadParameter("--nru-ul-traffic-model poisson/cbr requires --nru-cot-model slots.")
+    if nru_ul_traffic_model != "saturated" and not nru_ue_uplink_enabled:
+        raise click.BadParameter("--nru-ul-traffic-model poisson/cbr requires --nru-ue-uplink-enabled.")
+    if nru_ul_arrival_rate_pps is not None and nru_ul_traffic_model == "saturated":
+        raise click.BadParameter("--nru-ul-arrival-rate-pps requires --nru-ul-traffic-model poisson or cbr.")
+    if nru_ul_arrival_rate_pps is not None and nru_ul_arrival_rate_pps <= 0:
+        raise click.BadParameter(f"--nru-ul-arrival-rate-pps must be > 0 (got {nru_ul_arrival_rate_pps}).")
+    nru_ul_traffic = None
+    if nru_ul_traffic_model != "saturated":
+        nru_ul_traffic = TrafficConfig(mode=nru_ul_traffic_model,
+                                       arrival_rate_pps=100.0 if nru_ul_arrival_rate_pps is None else nru_ul_arrival_rate_pps)
+    # Rashed-Step 18.D-10-06-2026-end
     if nru_buffer_limit_bytes is not None and nru_buffer_limit_bytes <= 0:
         raise click.BadParameter(f"--nru-buffer-limit-bytes must be > 0 (got {nru_buffer_limit_bytes}).")
     # Rashed-Step 18.C-10-06-2026-end
@@ -541,6 +561,9 @@ def single_run(
                                  cot_model=nru_cot_model,
                                  numerology=1 if nru_numerology is None else nru_numerology,
                                  buffer_limit_bytes=nru_buffer_limit_bytes,
+                                 # Rashed-Step 18.D-10-06-2026-start
+                                 ul_traffic=nru_ul_traffic,
+                                 # Rashed-Step 18.D-10-06-2026-end
                                  # Rashed-Step 18.C-10-06-2026-end
                                  # Rashed-Step 17.G-10-04-2026-end
                                  ),

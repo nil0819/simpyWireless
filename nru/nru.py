@@ -46,6 +46,9 @@ from nr.nr import (NR_MCS_TABLE, NUMEROLOGY_SCS_KHZ, resource_block_count, selec
                    slot_duration_us)
 from ran.protocol.buffer import ByteBuffer, arrival_process
 COT_MODELS = ("burst", "slots")
+# Rashed-Step 18.D-10-06-2026-start
+NRU_UL_INTERLACES = {0: 10, 1: 5}  # TS 38.211 4.4.4.6
+# Rashed-Step 18.D-10-06-2026-end
 # Rashed-Step 18.C-10-06-2026-end
 # Rashed-Step 15.D-09-18-2026-end
 
@@ -295,6 +298,13 @@ class Config_NR:
     # Drop-tail limit of each per-UE buffer in "slots"; None = unbounded.
     buffer_limit_bytes: Optional[int] = None
     # Rashed-Step 18.C-10-06-2026-end
+    # Rashed-Step 18.D-10-06-2026-start
+    # "slots" + COT sharing: uplink traffic per UE. None (default) =
+    # saturated (each UE's uplink buffer is refilled on demand); a
+    # TrafficConfig (poisson/cbr) = arrivals into each UE's buffer at
+    # arrival_rate_pps per UE.
+    ul_traffic: Optional[TrafficConfig] = None
+    # Rashed-Step 18.D-10-06-2026-end
 
     def __post_init__(self):
         # Rashed-Step 18.C-10-06-2026-start
@@ -676,8 +686,13 @@ class Gnb:
     # all already exist on self), so this is a one-line delegation, not
     # a rewrite - same yields, same order, same simulated timing.
     # Rashed-Step 18.C-10-06-2026-start
+    # Rashed-Step 18.D-10-06-2026-start
     # ------------------------------------------------------------------
     # "slots" COT model (Config_NR.cot_model) - see that field's comment.
+    # 18.C built it for one UE per COT; 18.D shares each downlink slot
+    # among the cell's UEs (resource blocks split max-min fair) and turns
+    # the COT-sharing uplink window into slots shared by several UEs on
+    # separate interlaces.
     # ------------------------------------------------------------------
     def _init_slot_model(self):
         cfg = self.config_nr
@@ -685,10 +700,15 @@ class Gnb:
         self.scs_khz = NUMEROLOGY_SCS_KHZ[cfg.numerology]
         self.total_rbs = resource_block_count(cfg.bandwidth_mhz, self.scs_khz)
         self.rb_bandwidth_hz = 12 * self.scs_khz * 1000.0
+        # Uplink interlaces (TS 38.211 4.4.4.6): 10 at 15 kHz, 5 at 30 kHz.
+        self.n_interlaces = NRU_UL_INTERLACES.get(cfg.numerology, 5)
         self._cqi_db = {}
+        self._ul_cqi_db = {}
         self._slots_kick = self.env.event()
-        self.slot_stats = {"cots": 0, "cots_failed": 0, "slots_ok": 0, "slots_failed": 0,
-                           "bits_delivered": 0, "mcs_sum": 0, "control_only_cots": 0}
+        self.slot_stats = {"cots": 0, "cots_failed": 0, "control_only_cots": 0,
+                           "dl_tbs_ok": 0, "dl_tbs_failed": 0, "dl_bits": 0, "dl_mcs_sum": 0,
+                           "ul_tbs_ok": 0, "ul_tbs_failed": 0, "ul_bits": 0, "ul_mcs_sum": 0,
+                           "ul_grants": 0, "ul_type2a_skips": 0}
         self.dl_buffers = {}
         saturated = self.traffic_config.mode == "saturated"
         for ue in self.ue_list:
@@ -703,6 +723,15 @@ class Gnb:
                 self.env.process(arrival_process(self.env, buf, per_ue,
                                                  lambda n=ue.name: self._make_dl_packet(n),
                                                  random.expovariate))
+            # Uplink buffer at each uplink UE (COT sharing only; autonomous
+            # uplink keeps its own one-packet path).
+            if (getattr(ue, "uplink_enabled", False)
+                    and cfg.ul_access_mode is NruUplinkAccessMode.COT_SHARING):
+                ue.ul_buffer = ByteBuffer(cfg.buffer_limit_bytes, on_enqueue=self._kick_slots)
+                if cfg.ul_traffic is not None:
+                    self.env.process(arrival_process(self.env, ue.ul_buffer, cfg.ul_traffic,
+                                                     lambda n=ue.name: self._make_ul_packet(n),
+                                                     random.expovariate))
 
     def _kick_slots(self):
         if not self._slots_kick.triggered:
@@ -727,6 +756,19 @@ class Gnb:
             traffic_class=traffic_class,
         )
 
+    def _make_ul_packet(self, ue_name: str) -> Packet:
+        ul = self.config_nr.ul_traffic
+        size = ul.packet_size_bytes if ul is not None and ul.packet_size_bytes is not None else 1500
+        self._packet_seq += 1
+        return Packet(
+            packet_id=f"{ue_name}-UL-{self._packet_seq:06d}",
+            source=ue_name,
+            destination=self.name,
+            payload_bytes=size,
+            header_bytes=0,
+            created_at=self.env.now,
+        )
+
     def _eligible_dl_ues(self) -> list:
         return [
             ue for ue in self.ue_list
@@ -734,21 +776,27 @@ class Gnb:
             and user_plane_allows(ue)
         ]
 
-    def _slots_pick_ue(self):
-        """The UE this COT serves: random among eligible UEs with queued
-        data (any eligible UE for saturated traffic). None = no DL data."""
+    def _dl_slot_ues(self) -> list:
+        """UEs with downlink data (every eligible UE for saturated traffic)."""
         ues = self._eligible_dl_ues()
         if self.traffic_config.mode != "saturated":
             ues = [ue for ue in ues if self.dl_buffers[ue.name].backlog_bytes > 0]
-        return random.choice(ues) if ues else None
+        return ues
+
+    def _ul_slot_ues(self) -> list:
+        """COT-sharing UEs with uplink data (every one for saturated)."""
+        ues = [ue for ue in self._cot_ul_ues() if getattr(ue, "ul_buffer", None) is not None]
+        if self.config_nr.ul_traffic is not None:
+            ues = [ue for ue in ues if ue.ul_buffer.backlog_bytes > 0]
+        return ues
 
     def _slots_have_work(self) -> bool:
         if self.traffic_config.mode == "saturated":
             return True  # contends every time, like the burst model
-        if any(self.dl_buffers[ue.name].backlog_bytes > 0 for ue in self._eligible_dl_ues()):
+        if self._dl_slot_ues() or self._ul_slot_ues():
             return True
-        # A COT is also needed to carry uplink grants.
-        return bool(self._cot_ul_ues()) or self._rrc_ul_waiters > 0
+        # A UE waiting to send an RRC message needs a COT too.
+        return self._rrc_ul_waiters > 0
 
     def _start_slots(self):
         while True:
@@ -764,14 +812,16 @@ class Gnb:
             yield self.process
             yield self.env.process(self._send_cot_slots())
 
-    def _slot_mcs(self, ue) -> int:
-        """MCS for this UE's next slot from its last reported SINR (CQI);
-        before any report, the interference-free SINR (initial CSI).
-        MCS 0 when even that is below MCS 0's threshold."""
-        sinr = self._cqi_db.get(ue.name)
+    def _slot_mcs(self, ue, ul: bool = False) -> int:
+        """MCS for this UE's next transport block from its last measured
+        SINR in that direction (CQI for downlink, the gNB's own measurement
+        for uplink); before any, the interference-free SINR. MCS 0 when even
+        that is below MCS 0's threshold."""
+        sinr = (self._ul_cqi_db if ul else self._cqi_db).get(ue.name)
         if sinr is None:
-            trial = ActiveTx(tx_id=self.name, tx_pos=self.current_pos(), tx_start=self.env.now,
-                             rx_pos=ue.current_pos(), tx_power_dbm=self.config_nr.tx_power_dbm,
+            a, b = (ue.current_pos(), self.current_pos()) if ul else (self.current_pos(), ue.current_pos())
+            trial = ActiveTx(tx_id=ue.name if ul else self.name, tx_pos=a, tx_start=self.env.now,
+                             rx_pos=b, tx_power_dbm=self.config_nr.tx_power_dbm,
                              f_hz=self.config_nr.f_ghz, pl_exp=self.config_nr.pl_exp,
                              t_end=self.env.now + self.slot_us, tech="NRU",
                              bandwidth_mhz=self.config_nr.bandwidth_mhz,
@@ -781,51 +831,80 @@ class Gnb:
         mcs = select_mcs_for_sinr(sinr)
         return 0 if mcs is None else mcs
 
-    def _tb_bytes(self, mcs: int, duration_us: float) -> int:
-        bits = NR_MCS_TABLE[mcs][1] * (self.total_rbs * self.rb_bandwidth_hz) * (duration_us / 1e6)
+    def _tb_bytes(self, mcs: int, duration_us: float, rbs: Optional[int] = None) -> int:
+        rbs = self.total_rbs if rbs is None else rbs
+        bits = NR_MCS_TABLE[mcs][1] * (rbs * self.rb_bandwidth_hz) * (duration_us / 1e6)
         return int(bits // 8)
 
+    def _rbs_needed(self, backlog_bytes: int, mcs: int, duration_us: float) -> int:
+        per_rb = max(1, self._tb_bytes(mcs, duration_us, 1))
+        return max(1, -(-backlog_bytes // per_rb))
+
+    @staticmethod
+    def _maxmin_rbs(total: int, needs: dict) -> dict:
+        """Split `total` RBs max-min fair: smallest need first, nobody gets
+        more than it needs or more than an equal share of what's left."""
+        out = {}
+        remaining = total
+        order = sorted(needs, key=lambda k: needs[k])
+        for i, name in enumerate(order):
+            give = min(needs[name], remaining // (len(order) - i))
+            out[name] = give
+            remaining -= give
+        return out
+
+    def _dl_slot_alloc(self, ues: list, duration_us: float, saturated: bool) -> dict:
+        needs = {}
+        for ue in ues:
+            if saturated:
+                needs[ue.name] = self.total_rbs
+            else:
+                needs[ue.name] = self._rbs_needed(self.dl_buffers[ue.name].backlog_bytes,
+                                                  self._slot_mcs(ue), duration_us)
+        return self._maxmin_rbs(self.total_rbs, needs)
+
     def _send_cot_slots(self):
-        """One COT under the "slots" model: optional reservation signal, then
-        downlink slots for one UE, then (COT sharing) the uplink window.
-        The downlink is still ONE ActiveTx on the channel - the same
-        footprint as the burst model - but each slot is decoded on its own,
-        with the SINR over just that slot."""
+        """One COT under the "slots" model: optional reservation signal,
+        downlink slots shared by the cell's UEs, then (COT sharing) an
+        uplink window of slots shared by up to n_interlaces UEs. The
+        downlink is still ONE ActiveTx on the channel - the same footprint
+        as the burst model - but each UE's transport block in each slot is
+        decoded on its own, with that UE's SINR over just that slot."""
         cfg = self.config_nr
         saturated = self.traffic_config.mode == "saturated"
         tx_start = self.env.now
         total_us = cfg.mcot * 1000
         rs_time = 0 if gap else (self.next_sync_slot_boundry - self.env.now)
-        cot_ul_ues = self._cot_ul_ues()
-        ul_window_us = total_us * cfg.ul_cot_fraction if cot_ul_ues else 0.0
+        ul_ues = self._ul_slot_ues()
+        ul_window_us = total_us * cfg.ul_cot_fraction if ul_ues else 0.0
         data_us = max(0.0, total_us - ul_window_us - rs_time)
         n_full = int(data_us // self.slot_us)
         slots = [self.slot_us] * n_full
         if data_us - n_full * self.slot_us > 1e-9:
             slots.append(data_us - n_full * self.slot_us)  # partial last slot
 
-        rx_ue = self._slots_pick_ue()
-        if rx_ue is None:
+        dl_ues = self._dl_slot_ues()
+        if not dl_ues:
             # No downlink data: a single slot carrying only control (the
             # uplink grants).
             slots = slots[:1]
             self.slot_stats["control_only_cots"] += 1
         elif not saturated:
-            # Only as many slots as the queued data needs at the current CQI.
-            per_slot = max(1, self._tb_bytes(self._slot_mcs(rx_ue), self.slot_us))
-            needed = -(-self.dl_buffers[rx_ue.name].backlog_bytes // per_slot)
-            slots = slots[:max(1, needed)]
+            # Only as many slots as the queued data needs at current CQIs:
+            # the sum of each UE's share of a full-carrier slot.
+            need = sum(self.dl_buffers[ue.name].backlog_bytes
+                       / max(1, self._tb_bytes(self._slot_mcs(ue), self.slot_us)) for ue in dl_ues)
+            slots = slots[:max(1, math.ceil(need))]
         dl_us = rs_time + sum(slots)
 
-        buf = self.dl_buffers[rx_ue.name] if rx_ue is not None else None
-        head = buf.head() if buf is not None else None
+        head = self.dl_buffers[dl_ues[0].name].head() if dl_ues else None
         self.transmission_to_send = Transmission_NR(total_us, self.name, self.col, tx_start, dl_us - rs_time, rs_time)
-        self.transmission_to_send.rx_ue = rx_ue
+        self.transmission_to_send.rx_ue = dl_ues[0] if dl_ues else None
         self.transmission_to_send.packet = head
         active = ActiveTx(
             tx_id=self.name,
             tx_pos=self.current_pos(),
-            rx_pos=rx_ue.current_pos() if rx_ue is not None else self.current_pos(),
+            rx_pos=dl_ues[0].current_pos() if dl_ues else self.current_pos(),
             tx_start=tx_start,
             tx_power_dbm=cfg.tx_power_dbm,
             f_hz=cfg.f_ghz,
@@ -847,12 +926,12 @@ class Gnb:
             for d in slots:
                 t0 = self.env.now
                 yield self.env.timeout(d)
-                if rx_ue is None:
-                    ok = True  # control only; nothing to decode
-                else:
-                    ok = self._decode_slot(active, rx_ue, buf, t0, d, saturated)
+                n_ok, n_fail = self._decode_dl_slot(active, dl_ues, t0, d, saturated)
                 if ref_ok is None:
-                    ref_ok = ok
+                    # TS 37.213: the contention window doubles when at least
+                    # 80% of the reference slot's transport blocks fail.
+                    n = n_ok + n_fail
+                    ref_ok = n == 0 or n_fail < 0.8 * n
             was_sent = bool(ref_ok)
             # Same zero-duration tick before unregistering as the burst model.
             yield self.env.timeout(0)
@@ -861,7 +940,6 @@ class Gnb:
             self.channel.unregister_tx(active, success=was_sent)
             raise
 
-        # Contention window: the reference (first) slot decides (TS 37.213).
         if was_sent:
             self.channel.succeeded_transmissions_NR += 1
             self.succeeded_transmissions += 1
@@ -878,32 +956,159 @@ class Gnb:
             done, self._dl_cot_done = self._dl_cot_done, self.env.event()
             done.succeed()
         if ul_window_us > 0 and was_sent:
-            yield from self._run_ul_window(ul_window_us, cot_ul_ues)
+            yield from self._run_ul_slots(ul_window_us, ul_ues)
         if was_sent:
             self.channel.airtime_control_NR[self.name] += rs_time
         return was_sent
 
-    def _decode_slot(self, active, ue, buf, t0: float, duration_us: float, saturated: bool) -> bool:
-        mcs = self._slot_mcs(ue)
-        tb = self._tb_bytes(mcs, duration_us)
-        if saturated:
+    def _dl_view(self, active, ue):
+        """The COT's downlink as seen at one UE: same transmission (and
+        overlap history), received at that UE. Constant power per RB, so a
+        UE's SINR doesn't depend on its RB share."""
+        view = ActiveTx(tx_id=self.name, tx_pos=active.tx_pos, tx_start=active.tx_start,
+                        rx_pos=ue.current_pos(), tx_power_dbm=active.tx_power_dbm, f_hz=active.f_hz,
+                        pl_exp=active.pl_exp, t_end=active.t_end, tech="NRU",
+                        bandwidth_mhz=active.bandwidth_mhz, noise_figure_db=active.noise_figure_db)
+        view.overlap_history = active.overlap_history
+        return view
+
+    def _decode_dl_slot(self, active, dl_ues: list, t0: float, duration_us: float, saturated: bool):
+        """Decode one downlink slot for every UE given RBs in it; returns
+        (transport blocks ok, failed)."""
+        ues = dl_ues if saturated else [ue for ue in dl_ues if self.dl_buffers[ue.name].backlog_bytes > 0]
+        if not ues:
+            return 0, 0
+        alloc = self._dl_slot_alloc(ues, duration_us, saturated)
+        n_ok = n_fail = 0
+        for ue in ues:
+            rbs = alloc.get(ue.name, 0)
+            if rbs <= 0:
+                continue
+            buf = self.dl_buffers[ue.name]
+            mcs = self._slot_mcs(ue)
+            tb = self._tb_bytes(mcs, duration_us, rbs)
+            if saturated:
+                while buf.backlog_bytes < tb:
+                    buf.enqueue(self._make_dl_packet(ue.name))
+            sinr = self.channel.sinr_db(self._dl_view(active, ue), window=(t0, t0 + duration_us))
+            self._cqi_db[ue.name] = sinr  # the UE reports what it measured, pass or fail
+            ok = decode_ok(self.config_nr.error_model, sinr, NR_MCS_TABLE[mcs][0])
+            segs = buf.segments(tb)
+            for pkt, _n, _last in segs:
+                pkt.measured_sinr_db = sinr
+            if ok:
+                n_ok += 1
+                self.slot_stats["dl_tbs_ok"] += 1
+                self.slot_stats["dl_mcs_sum"] += mcs
+                self.slot_stats["dl_bits"] += 8 * buf.deliver(segs, self.env.now)
+            else:
+                n_fail += 1
+                self.slot_stats["dl_tbs_failed"] += 1
+                buf.lose(segs)
+            self.packet_log.extend(buf.drain_finished())
+            log(self, f"DL slot {'OK' if ok else 'FAILED'} to {ue.name}: SINR={sinr:.2f} dB, MCS={mcs}, RBs={rbs}, TB={tb} B")
+        return n_ok, n_fail
+
+    def _interlace_rbs(self, interlaces: list) -> int:
+        return sum(len(range(m, self.total_rbs, self.n_interlaces)) for m in interlaces)
+
+    def _run_ul_slots(self, window_us: float, ues: list):
+        """Uplink part of a shared COT: up to n_interlaces UEs (round-robin
+        across COTs) each get whole interlaces; all run Type 2A together,
+        the ones that pass transmit their transport blocks slot by slot on
+        their own interlaces (no interference between them - ofdma_cell).
+        The gNB holds until the window ends."""
+        cfg = self.config_nr
+        start = self.env.now
+        k = min(len(ues), self.n_interlaces)
+        sched = [ues[(self._ul_rr + i) % len(ues)] for i in range(k)]
+        self._ul_rr += k
+        lanes = {ue.name: [] for ue in sched}
+        for m in range(self.n_interlaces):
+            lanes[sched[m % k].name].append(m)
+        record = {"start": start, "end": start + window_us, "ues": [u.name for u in ues],
+                  "granted": [u.name for u in sched], "result": {}}
+        self.ul_windows.append(record)
+        self.slot_stats["ul_grants"] += k
+
+        # Everyone senses at the same time, before anyone transmits, so the
+        # cell's own UEs don't block each other.
+        checks = [self.env.process(ue.type2a_lbt()) for ue in sched]
+        yield self.env.all_of(checks)
+        senders = []
+        for ue, chk in zip(sched, checks):
+            ue.ul_grants_received += 1
+            if chk.value:
+                senders.append(ue)
+            else:
+                ue.type2a_skips += 1
+                self.slot_stats["ul_type2a_skips"] += 1
+                record["result"][ue.name] = None
+
+        data_us = max(0.0, start + window_us - self.env.now)
+        n_full = int(data_us // self.slot_us)
+        slots = [self.slot_us] * n_full
+        if data_us - n_full * self.slot_us > 1e-9:
+            slots.append(data_us - n_full * self.slot_us)
+
+        txs = {}
+        now = self.env.now
+        for ue in senders:
+            rbs = self._interlace_rbs(lanes[ue.name])
+            tx = ActiveTx(
+                tx_id=ue.name, tx_pos=ue.current_pos(), tx_start=now, rx_pos=self.current_pos(),
+                # Same constant power per RB as licensed NR uplink.
+                tx_power_dbm=cfg.tx_power_dbm + 10.0 * math.log10(rbs / self.total_rbs),
+                f_hz=cfg.f_ghz, pl_exp=cfg.pl_exp, t_end=now + data_us, tech="NRU",
+                bandwidth_mhz=cfg.bandwidth_mhz * rbs / self.total_rbs,
+                noise_figure_db=cfg.noise_figure_db,
+                packet=ue.ul_buffer.head(),
+                ofdma_cell=self.name,
+            )
+            self.channel.register_tx(tx)
+            txs[ue.name] = (ue, tx, rbs, [0, 0])
+        try:
+            for d in slots:
+                t0 = self.env.now
+                yield self.env.timeout(d)
+                for ue, tx, rbs, counts in txs.values():
+                    ok = self._decode_ul_tb(ue, tx, rbs, t0, d)
+                    counts[0 if ok else 1] += 1
+            yield self.env.timeout(0)
+            for ue, tx, rbs, counts in txs.values():
+                self.channel.unregister_tx(tx, success=counts[0] > 0)
+                record["result"][ue.name] = counts[0] > 0
+        except BaseException:
+            for ue, tx, rbs, counts in txs.values():
+                self.channel.unregister_tx(tx, success=False)
+            raise
+        remaining = start + window_us - self.env.now
+        if remaining > 0:
+            yield self.env.timeout(remaining)
+
+    def _decode_ul_tb(self, ue, tx, rbs: int, t0: float, duration_us: float) -> bool:
+        buf = ue.ul_buffer
+        mcs = self._slot_mcs(ue, ul=True)
+        tb = self._tb_bytes(mcs, duration_us, rbs)
+        if self.config_nr.ul_traffic is None:  # saturated uplink
             while buf.backlog_bytes < tb:
-                buf.enqueue(self._make_dl_packet(ue.name))
-        sinr = self.channel.sinr_db(active, window=(t0, t0 + duration_us))
-        self._cqi_db[ue.name] = sinr  # the UE reports what it measured, pass or fail
+                buf.enqueue(self._make_ul_packet(ue.name))
+        sinr = self.channel.sinr_db(tx, window=(t0, t0 + duration_us))
+        self._ul_cqi_db[ue.name] = sinr
         ok = decode_ok(self.config_nr.error_model, sinr, NR_MCS_TABLE[mcs][0])
         segs = buf.segments(tb)
         for pkt, _n, _last in segs:
             pkt.measured_sinr_db = sinr
         if ok:
-            self.slot_stats["slots_ok"] += 1
-            self.slot_stats["mcs_sum"] += mcs
-            self.slot_stats["bits_delivered"] += 8 * buf.deliver(segs, self.env.now)
+            ue.succeeded_transmissions += 1
+            self.slot_stats["ul_tbs_ok"] += 1
+            self.slot_stats["ul_mcs_sum"] += mcs
+            self.slot_stats["ul_bits"] += 8 * buf.deliver(segs, self.env.now)
         else:
-            self.slot_stats["slots_failed"] += 1
+            ue.failed_transmissions += 1
+            self.slot_stats["ul_tbs_failed"] += 1
             buf.lose(segs)
-        self.packet_log.extend(buf.drain_finished())
-        log(self, f"slot {'OK' if ok else 'FAILED'} to {ue.name}: SINR={sinr:.2f} dB, MCS={mcs}, TB={tb} B")
+        ue.packet_log.extend(buf.drain_finished())
         return ok
 
     def flush_buffer_logs(self) -> None:
@@ -911,6 +1116,10 @@ class Gnb:
         overflow) into packet_log; call once the run has ended."""
         for buf in getattr(self, "dl_buffers", {}).values():
             self.packet_log.extend(buf.drain_finished())
+        for ue in self.ue_list:
+            if getattr(ue, "ul_buffer", None) is not None:
+                ue.packet_log.extend(ue.ul_buffer.drain_finished())
+    # Rashed-Step 18.D-10-06-2026-end
     # Rashed-Step 18.C-10-06-2026-end
 
     def wait_back_off_gap_after(self):
