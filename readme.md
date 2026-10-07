@@ -38,6 +38,8 @@ common/common_phy.py   - path loss, shadowing, thermal noise, MCS/SINR tables,
                           spectral overlap, EIRP caps, WaypointMobility
 common/packet.py        - Packet/TrafficConfig, latency/loss/jitter stats,
                           packet-level CSV export
+common/error_model.py   - link error model: hard SINR threshold (default)
+                          or a BLER curve per MCS (Step 18.A)
 channel/channel.py      - Channel: tx queues, ActiveTx, CCA/ED sensing, SINR
 wifi/wifi.py, wifi/sta.py       - Wi-Fi AP + STA (CSMA/CA)
 nru/nru.py, nru/ue.py           - NR-U gNB + UE (Type 1 / Cat-4 LBT,
@@ -52,6 +54,11 @@ ran/protocol/rrc.py             - RRC attach state machine (IDLE ->
                                    and licensed NR
 ran/protocol/user_plane.py      - RAN-side UPF gate (no data before a UE's
                                    PDU session is active)
+ran/protocol/buffer.py          - per-UE byte buffers and traffic arrivals
+                                   (segmentation across transport blocks)
+ran/protocol/harq.py            - HARQ processes with chase combining
+ran/protocol/l2.py              - PDCP (SN, headers, in-order delivery) +
+                                   RLC UM/AM (segmentation headers, ARQ)
 core/network.py                 - minimal 5G Core: Amf, Smf, Upf,
                                    CoreNetwork, CoreConfig
 core/procedures.py              - registration + PDU session procedures and
@@ -103,6 +110,7 @@ Flag groups (see `--help` for exact names/defaults/full descriptions):
 - **Dynamic rate adaptation (Step 11)**: `--wifi-rate-adapt` (per-STA ARF - Auto Rate Fallback, Kamerman & Monteban 1997: step MCS up after 10 consecutive successes, down after 2 consecutive failures, no channel-state feedback), `--nru-rate-adapt` (per-UE CQI-style - picks the MCS whose required-SINR threshold best fits the most recently measured link SINR, approximating 3GPP UE-reported Channel Quality Indicator feedback). Both default off (`-m`/`--mcs-value` and `--nru-mcs` stay fixed for the whole run, unchanged from every pre-Step-11 run).
 - **Rogue AP**: `--rogue True` (routes AP traffic through `attacker/roguewificad.py`'s CAD-attack model instead of benign Wi-Fi)
 - **Uplink (Steps 15.B/15.C, pre_17.B)**: `--wifi-sta-uplink-enabled` (every STA contends with CSMA/CA and sends saturated uplink to its AP; prints a "Wi-Fi Uplink" block; not with `--rogue True`), `--nru-ue-uplink-enabled` (NR-U uplink; how UEs reach the channel is set by `--nru-ul-access-mode`: `cot_sharing` (default, Step 17) - the gNB splits each channel occupancy time into a downlink part and an uplink part granted to one of its UEs, who sends after a 25 us Type 2A check; `autonomous` (Step 15.C) - every UE runs its own Cat-4 LBT, which collides with its own gNB, kept for comparison), `--nru-ul-cot-fraction` (uplink share of the COT, default 0.5). With NR-U uplink on, an "NR-U Uplink" block reports throughput, attempts and (in cot_sharing) windows and skipped grants
+- **NR-U user plane (Step 18, opt-in)**: `--nru-cot-model slots` (the COT's downlink becomes NR slots with one transport block per UE per slot, RBs shared max-min fair, per-slot SINR and a CQI-based MCS; the COT-sharing uplink window becomes slots on interlaces shared by up to 5 UEs; prints an "NR-U Slots" block), `--nru-numerology`, `--nru-buffer-limit-bytes`, `--nru-ul-traffic-model` / `--nru-ul-arrival-rate-pps`; with slots also `--harq` (+ `--harq-max-tx`, `--harq-rtt-slots`) and `--rlc-mode um|am` (+ `--pdcp-sn-bits`, `--rlc-am-max-retx`, `--rlc-am-status-delay-ms`). `--error-model bler` (any model) replaces the hard SINR threshold with a block-error-rate curve, for Wi-Fi too. See "5G user plane" below
 - **RRC and 5G Core (Steps 15-16, NR-U only)**: `--nru-rrc-enabled` (RRC connection setup before any data; needs `--nru-ue-uplink-enabled`), `--nru-core-enabled` (registration + PDU session; no NR-U data to/from a UE until its session is active), `--core-registration-delay-us` / `--core-pdu-session-delay-us` (override the 90 ms / 125 ms defaults; need `--nru-core-enabled`). See "5G control plane" below.
 
 Example:
@@ -136,6 +144,8 @@ Uplink, RRC and Core flags (Steps 15.E-16.F): `--tdd-enabled` / `--tdd-pattern` 
 python singleRunNR.py --gnb-number 1 --ues-per-gnb 2 -t 0.5 --tdd-enabled --ue-uplink-enabled --rrc-enabled --core-enabled
 ```
 
+User-plane flags (Step 18): `--dl-traffic` / `--ul-traffic` `full_buffer|poisson|cbr` with `--dl-arrival-rate-pps` / `--ul-arrival-rate-pps`, `--packet-size-bytes`, `--buffer-limit-bytes` (per-UE buffers; only UEs with data are scheduled), `--error-model bler`, and on buffered traffic `--harq` and `--rlc-mode um|am`. With uplink on, a "Licensed 5G NR Uplink Results" block is printed (Step pre_18.F).
+
 ### 5G control plane: RRC and 5G Core (Steps 15-16)
 
 With RRC and the Core turned on, every UE goes through one attach chain before it may carry data: **RRC connection setup -> NAS registration (AMF) -> PDU session establishment (SMF/UPF)**. The RAN schedulers (licensed NR downlink/uplink, NR-U downlink/uplink) only serve a UE once its session is active.
@@ -157,6 +167,25 @@ NR mean attach-to-first-packet latency (us): 219500.0
 Keep runs longer than the attach time (about 0.22 s at defaults) - a shorter run carries no data at all. Scope is deliberately minimal: one Core per run, one data network, no slicing, and registration/sessions always succeed (no rejects or retries yet). The registration and PDU-session delays are fixed inputs, not something the simulator measures, so they dominate the attach time at defaults.
 
 Figures: `python -m analysis.rrc_connection_setup_latency` (RRC setup per technology) and `python -m analysis.core_attach_latency` (stacked RRC / registration / PDU session breakdown), written to `analysis/generated/`.
+
+### 5G user plane: error model, buffers, slots, HARQ, PDCP/RLC (Step 18)
+
+All opt-in; every default run is unchanged. The layers stack from the radio up:
+
+| Layer | Flag | What it does |
+|---|---|---|
+| Error model | `--error-model bler` | a frame/transport block decodes with a probability from a BLER curve per MCS (10% at the MCS's SINR threshold, the 3GPP CQI definition) instead of a hard threshold; all technologies |
+| Buffers | `--dl-traffic` / `--ul-traffic` (NR), `--nru-traffic-model` (NR-U slots) | per-UE byte queues; a transport block carries what is queued, splitting packets across blocks |
+| NR-U slots | `--nru-cot-model slots` | the COT's downlink is a run of NR slots (30 kHz: 500 us, 51 RBs in 20 MHz) shared by the cell's UEs; uplink window on interlaces (TS 38.211) after one joint Type 2A check; TS 37.213 reference-slot rule for the contention window |
+| HARQ | `--harq` | failed blocks retransmitted after a round trip with chase combining, up to 4 attempts |
+| PDCP / RLC | `--rlc-mode um\|am` | PDCP sequence numbers, headers and in-order delivery; RLC/MAC segmentation headers; AM retransmits what HARQ couldn't recover |
+
+Example (licensed NR, error model on, 8 UEs heavily loaded, 1 s): block-error drops 6131 packets -> 17 with `--harq` -> 0 with `--harq --rlc-mode am`. NR-U alone goes from 1.7 Mbps (burst: one packet per 6 ms COT) to 92.7 Mbps with `--nru-cot-model slots`. Not modeled yet: uplink power control, PDCCH/DMRS overhead, delayed CSI/HARQ feedback, ROHC/ciphering.
+
+```bash
+python singleRunNR.py --gnb-number 2 --ues-per-gnb 4 --seed 2 -t 1 --error-model bler --dl-traffic poisson --dl-arrival-rate-pps 3000 --harq --rlc-mode am
+python singleRun.py --ap-number 1 --gnb-number 1 -t 1 -r 1 --nru-cot-model slots --nru-ue-uplink-enabled --nru-traffic-model poisson --nru-arrival-rate-pps 1500 --harq --rlc-mode am
+```
 
 ### Spectrum analyzer (`singleRunSpectrum.py`)
 
@@ -231,7 +260,7 @@ Assert-based regression suite (no print-and-eyeball scripts for anything added s
 pip install pytest
 pytest test/
 ```
-379 tests passing as of Step 17. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
+463 tests passing as of Step 18. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
 
 ## Current Work Status
 
@@ -263,6 +292,7 @@ pytest test/
 ----> Step 16 (16.A-16.H) — minimal 5G Core: RRC timing fix (licensed NR 4 ms, NR-U never faster), `core/` package (AMF/SMF/UPF), registration and PDU session procedures, RAN-side UPF gate, `--core-enabled` / `--nru-core-enabled` flags, attach-latency breakdown figure, whole-step regression
 ----> Step pre_17 — NR-U downlink packets now record their real receiver (and retries keep it), `--wifi-sta-uplink-enabled` flag, this readme / GETTING_STARTED refresh
 ----> Step 17 (17.A-17.H) — NR-U uplink inside the gNB's channel occupancy time (COT sharing, now the default): the gNB grants its UEs the uplink part of its COT, UEs send after a 25 us Type 2A check, RRC messages ride the same COT. Fixes the gNB/own-UE self-collision of the autonomous Cat-4 uplink (single cell: 0 -> 1.68 Mbps uplink). New flags `--nru-ul-access-mode` / `--nru-ul-cot-fraction`, an "NR-U Uplink" stdout block, and comparison figures (`python -m analysis.nru_ul_access_comparison`)
+----> Step 18 (18.A-18.F) — 5G user plane, all opt-in: BLER error model (`--error-model bler`), per-UE byte buffers and traffic for licensed NR, NR-U COTs made of slots with transport blocks and several UEs per COT (`--nru-cot-model slots`, uplink on interlaces), HARQ with chase combining (`--harq`), PDCP + RLC UM/AM (`--rlc-mode`). Step pre_18.F: licensed NR uplink UEs of one cell on separate RBs no longer interfere with each other, and uplink results are now printed
 ----> Step pre_18 (A-E) — channel-model fixes found while validating Step 17: (A-B) SINR counts every transmission that overlapped the target at any point - Wi-Fi frames (one decode unit) at full power, NR-U/NR bursts weighted by the fraction covered - instead of only what was still on the air when the target ended (results used to depend on timing and processing order); (D) Wi-Fi DCF counts backoff on a shared 9 us slot grid with event-driven sensing and a fresh DIFS after every busy period; (E) NR-U LBT is 3GPP TS 37.213 Type 1 - a full 43 us defer period after every busy period. (C) Paper figures regenerated: the DTMC validation now matches the model within 0.8-2.7 points for Wi-Fi and 0.4-1.4 for NR-U
 
 Full detail (design rationale, exact verified numbers, what was deliberately left out) for every sub-step above is in `Project details/Step N.txt`; `Project details/STATUS - resume context.txt` is the current single-file "start here" summary.

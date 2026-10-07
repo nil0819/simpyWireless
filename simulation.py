@@ -52,6 +52,9 @@ from common.error_model import ErrorModelConfig, make_error_model, print_error_m
 from ran.protocol.buffer import summarize_buffers, print_buffer_stats
 # Rashed-Step 18.E-10-06-2026-start
 from ran.protocol.harq import sum_harq_stats, print_harq_stats
+# Rashed-Step 18.F-10-06-2026-start
+from ran.protocol.l2 import sum_l2_stats, print_l2_stats
+# Rashed-Step 18.F-10-06-2026-end
 # Rashed-Step 18.E-10-06-2026-end
 # Rashed-Step 18.C-10-06-2026-end
 # Rashed-Step 18.A-10-06-2026-end
@@ -708,6 +711,14 @@ def run_simulation(
             print_harq_stats("NR-U DL HARQ", "NRU DL", sum_harq_stats([e for g in gnbs for e in g.harq_entities(False)]))
             if ss["ul_grants"]:
                 print_harq_stats("NR-U UL HARQ", "NRU UL", sum_harq_stats([e for g in gnbs for e in g.harq_entities(True)]))
+        # Rashed-Step 18.F-10-06-2026-start
+        if configNr.l2 is not None:
+            print_l2_stats("NR-U DL PDCP/RLC", "NRU DL", configNr.l2,
+                           sum_l2_stats([b for g in gnbs for b in g.dl_buffers.values()]))
+            ul_bufs = [ue.ul_buffer for g in gnbs for ue in g.ue_list if getattr(ue, "ul_buffer", None) is not None]
+            if ul_bufs:
+                print_l2_stats("NR-U UL PDCP/RLC", "NRU UL", configNr.l2, sum_l2_stats(ul_bufs))
+        # Rashed-Step 18.F-10-06-2026-end
         # Rashed-Step 18.E-10-06-2026-end
         # Rashed-Step 18.D-10-06-2026-end
         if nru_traffic_config is not None and nru_traffic_config.mode != "saturated":

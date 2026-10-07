@@ -16,6 +16,9 @@ from common.error_model import error_model_config_from_cli
 from ran.protocol.buffer import traffic_configs_from_cli
 # Rashed-Step 18.E-10-06-2026-start
 from ran.protocol.harq import harq_config_from_cli
+# Rashed-Step 18.F-10-06-2026-start
+from ran.protocol.l2 import l2_config_from_cli
+# Rashed-Step 18.F-10-06-2026-end
 # Rashed-Step 18.E-10-06-2026-end
 # Rashed-Step 18.B-10-06-2026-end
 # Rashed-Step 18.A-10-06-2026-end
@@ -74,6 +77,12 @@ from ran.protocol.harq import harq_config_from_cli
 @click.option("--harq-max-tx", "harq_max_tx", type=int, default=None, help="Transmissions per transport block, first one included (default 4). Requires --harq.")
 @click.option("--harq-rtt-slots", "harq_rtt_slots", type=int, default=None, help="Slots from a failed attempt to its earliest retransmission (default 4). Requires --harq.")
 # Rashed-Step 18.E-10-06-2026-end
+# Rashed-Step 18.F-10-06-2026-start
+@click.option("--rlc-mode", "rlc_mode", type=click.Choice(["none", "um", "am"]), default="none", help="Enable PDCP + RLC (Step 18.F): PDCP sequence numbers and headers with in-order delivery; RLC segmentation headers (+ MAC subheaders) on every piece of a transport block. um: a lost piece drops its packet. am: lost pieces are retransmitted after --rlc-am-status-delay-ms, packet dropped after --rlc-am-max-retx rounds. Prints an L2 stdout block. Default none = no L2, byte-identical to earlier runs. Needs --dl-traffic or --ul-traffic poisson/cbr.")
+@click.option("--pdcp-sn-bits", "pdcp_sn_bits", type=click.Choice(["12", "18"]), default=None, help="PDCP (and RLC AM) sequence number length (default 12: 2-byte headers; 18: 3-byte). Requires --rlc-mode um or am.")
+@click.option("--rlc-am-max-retx", "rlc_am_max_retx", type=int, default=None, help="RLC AM retransmission rounds before a packet is dropped (default 4). Requires --rlc-mode am.")
+@click.option("--rlc-am-status-delay-ms", "rlc_am_status_delay_ms", type=float, default=None, help="Time from a lost transport block to its RLC AM retransmission (STATUS report delay, default 10 ms). Requires --rlc-mode am.")
+# Rashed-Step 18.F-10-06-2026-end
 def single_run_nr(
         runs, seed, gnb_number, ues_per_gnb, simulation_time,
         area_w, area_h, gnb_pos, ue_radius,
@@ -97,6 +106,9 @@ def single_run_nr(
         # Rashed-Step 18.B-10-06-2026-end
         # Rashed-Step 18.E-10-06-2026-start
         harq=False, harq_max_tx=None, harq_rtt_slots=None,
+        # Rashed-Step 18.F-10-06-2026-start
+        rlc_mode="none", pdcp_sn_bits=None, rlc_am_max_retx=None, rlc_am_status_delay_ms=None,
+        # Rashed-Step 18.F-10-06-2026-end
         # Rashed-Step 18.E-10-06-2026-end
 ):
     gnb_positions = parse_pos_list_nr(gnb_pos, "--gnb-pos") if gnb_pos else None
@@ -139,6 +151,17 @@ def single_run_nr(
     # Rashed-Step 18.E-10-06-2026-start
     if harq_config is not None and dl_traffic_config is None and ul_traffic_config is None:
         raise click.BadParameter("--harq needs --dl-traffic or --ul-traffic poisson/cbr (full buffer has no data to recover).")
+    # Rashed-Step 18.F-10-06-2026-start
+    try:
+        l2_config = l2_config_from_cli(rlc_mode, None if pdcp_sn_bits is None else int(pdcp_sn_bits),
+                                       rlc_am_max_retx, rlc_am_status_delay_ms)
+    except ValueError as e:
+        raise click.BadParameter(str(e))
+    # Rashed-Step 18.F-10-06-2026-end
+    # Rashed-Step 18.F-10-06-2026-start
+    if l2_config is not None and dl_traffic_config is None and ul_traffic_config is None:
+        raise click.BadParameter("--rlc-mode needs --dl-traffic or --ul-traffic poisson/cbr.")
+    # Rashed-Step 18.F-10-06-2026-end
     # Rashed-Step 18.E-10-06-2026-end
     # Rashed-Step 18.B-10-06-2026-end
 
@@ -181,6 +204,9 @@ def single_run_nr(
         # Rashed-Step 18.B-10-06-2026-end
         # Rashed-Step 18.E-10-06-2026-start
         harq=harq_config,
+        # Rashed-Step 18.F-10-06-2026-start
+        l2=l2_config,
+        # Rashed-Step 18.F-10-06-2026-end
         # Rashed-Step 18.E-10-06-2026-end
     )
 

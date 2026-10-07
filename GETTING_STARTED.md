@@ -24,7 +24,7 @@ pip install pytest
 pytest test/
 ```
 
-You should see `379 passed` (as of Step 17). If that's clean, you're ready to run simulations.
+You should see `463 passed` (as of Step 18). If that's clean, you're ready to run simulations.
 
 ## 2. Scenario 1 - Wi-Fi + NR-U coexistence
 
@@ -136,6 +136,27 @@ collides with its own gNB).
 Keep `-t` above about 0.25 s with the Core on; the attach alone takes
 over 0.2 s, so a shorter run carries no data. The readme's "5G control
 plane" section lists where each default delay comes from.
+
+## 7. The 5G user plane (Step 18)
+
+All off by default. Licensed NR with real traffic instead of a full
+buffer, a block-error-rate error model, HARQ and RLC AM:
+
+```bash
+python singleRunNR.py --gnb-number 2 --ues-per-gnb 4 --seed 2 -t 1 --error-model bler --dl-traffic poisson --dl-arrival-rate-pps 3000 --harq --rlc-mode am
+```
+
+Look for the "DL Traffic", "DL HARQ" and "DL PDCP/RLC" blocks: drop
+`--harq --rlc-mode am` and about 6000 packets are lost to block errors;
+with them, none. NR-U with its COTs made of NR slots (several UEs per
+COT, uplink on interlaces):
+
+```bash
+python singleRun.py --ap-number 1 --gnb-number 1 -t 1 -r 1 --nru-cot-model slots --nru-ue-uplink-enabled --nru-traffic-model poisson --nru-arrival-rate-pps 1500
+```
+
+The "NR-U Slots" block shows downlink and uplink transport blocks,
+their error rate (Wi-Fi frames hitting single slots) and the MCS used.
 
 ## Where to go next
 

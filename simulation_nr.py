@@ -33,6 +33,9 @@ from common.error_model import ErrorModelConfig, make_error_model, print_error_m
 from ran.protocol.buffer import summarize_buffers, print_buffer_stats
 # Rashed-Step 18.E-10-06-2026-start
 from ran.protocol.harq import sum_harq_stats, print_harq_stats
+# Rashed-Step 18.F-10-06-2026-start
+from ran.protocol.l2 import sum_l2_stats, print_l2_stats
+# Rashed-Step 18.F-10-06-2026-end
 # Rashed-Step 18.E-10-06-2026-end
 # Rashed-Step 18.B-10-06-2026-end
 # Rashed-Step 18.A-10-06-2026-end
@@ -296,6 +299,12 @@ def run_simulation_licensed_nr(
             hs = sum_harq_stats([e for g in gnbs for e in g.harq_entities(direction == "ul")])
             traffic_stats[direction]["harq"] = hs
             print_harq_stats(f"Licensed 5G NR {direction.upper()} HARQ", label, hs)
+        # Rashed-Step 18.F-10-06-2026-start
+        if config.l2 is not None:
+            ls = sum_l2_stats(bufs)
+            traffic_stats[direction]["l2"] = ls
+            print_l2_stats(f"Licensed 5G NR {direction.upper()} PDCP/RLC", label, config.l2, ls)
+        # Rashed-Step 18.F-10-06-2026-end
         # Rashed-Step 18.E-10-06-2026-end
     # Rashed-Step 18.B-10-06-2026-end
 

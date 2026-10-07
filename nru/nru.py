@@ -47,6 +47,9 @@ from nr.nr import (NR_MCS_TABLE, NUMEROLOGY_SCS_KHZ, resource_block_count, selec
 from ran.protocol.buffer import ByteBuffer, arrival_process
 # Rashed-Step 18.E-10-06-2026-start
 from ran.protocol.harq import HarqConfig, HarqEntity, HarqTb
+# Rashed-Step 18.F-10-06-2026-start
+from ran.protocol.l2 import L2Config, make_buffer
+# Rashed-Step 18.F-10-06-2026-end
 # Rashed-Step 18.E-10-06-2026-end
 COT_MODELS = ("burst", "slots")
 # Rashed-Step 18.D-10-06-2026-start
@@ -312,6 +315,11 @@ class Config_NR:
     # HARQ in "slots" (ran/protocol/harq.py), both directions. None
     # (default) = a failed TB's packets are dropped.
     harq: Optional[HarqConfig] = None
+    # Rashed-Step 18.F-10-06-2026-start
+    # PDCP + RLC (ran/protocol/l2.py) in "slots", both directions.
+    # None (default) = no L2 headers / ARQ / reordering.
+    l2: Optional[L2Config] = None
+    # Rashed-Step 18.F-10-06-2026-end
     # Rashed-Step 18.E-10-06-2026-end
 
     def __post_init__(self):
@@ -323,6 +331,10 @@ class Config_NR:
         # Rashed-Step 18.E-10-06-2026-start
         if self.harq is not None and self.cot_model != "slots":
             raise ValueError("Config_NR.harq needs cot_model=\"slots\" (the burst model has no transport blocks).")
+        # Rashed-Step 18.F-10-06-2026-start
+        if self.l2 is not None and self.cot_model != "slots":
+            raise ValueError("Config_NR.l2 needs cot_model=\"slots\" (the burst model has no transport blocks).")
+        # Rashed-Step 18.F-10-06-2026-end
         # Rashed-Step 18.E-10-06-2026-end
         # Rashed-Step 18.C-10-06-2026-end
         if not (0.0 < self.ul_cot_fraction < 1.0):
@@ -718,6 +730,9 @@ class Gnb:
         self._ul_cqi_db = {}
         # Rashed-Step 18.E-10-06-2026-start
         self._harq_entities = {}
+        # Rashed-Step 18.F-10-06-2026-start
+        self._harq_cfg = cfg.harq if cfg.harq is not None else (HarqConfig(max_tx=1) if cfg.l2 else None)
+        # Rashed-Step 18.F-10-06-2026-end
         # Rashed-Step 18.E-10-06-2026-end
         self._slots_kick = self.env.event()
         self.slot_stats = {"cots": 0, "cots_failed": 0, "control_only_cots": 0,
@@ -727,7 +742,9 @@ class Gnb:
         self.dl_buffers = {}
         saturated = self.traffic_config.mode == "saturated"
         for ue in self.ue_list:
-            buf = ByteBuffer(cfg.buffer_limit_bytes, on_enqueue=self._kick_slots)
+            # Rashed-Step 18.F-10-06-2026-start
+            buf = make_buffer(cfg.buffer_limit_bytes, on_enqueue=self._kick_slots, l2=cfg.l2)
+            # Rashed-Step 18.F-10-06-2026-end
             self.dl_buffers[ue.name] = buf
             if not saturated and self.ue_list:
                 # --nru-arrival-rate-pps stays a per-gNB total, split over its UEs.
@@ -742,7 +759,9 @@ class Gnb:
             # uplink keeps its own one-packet path).
             if (getattr(ue, "uplink_enabled", False)
                     and cfg.ul_access_mode is NruUplinkAccessMode.COT_SHARING):
-                ue.ul_buffer = ByteBuffer(cfg.buffer_limit_bytes, on_enqueue=self._kick_slots)
+                # Rashed-Step 18.F-10-06-2026-start
+                ue.ul_buffer = make_buffer(cfg.buffer_limit_bytes, on_enqueue=self._kick_slots, l2=cfg.l2)
+                # Rashed-Step 18.F-10-06-2026-end
                 if cfg.ul_traffic is not None:
                     self.env.process(arrival_process(self.env, ue.ul_buffer, cfg.ul_traffic,
                                                      lambda n=ue.name: self._make_ul_packet(n),
@@ -1038,7 +1057,7 @@ class Gnb:
     def _harq_for(self, buffer) -> HarqEntity:
         entry = self._harq_entities.get(id(buffer))
         if entry is None:
-            entry = (buffer, HarqEntity(self.config_nr.harq))
+            entry = (buffer, HarqEntity(self._harq_cfg))  # 18.F: _harq_cfg
             self._harq_entities[id(buffer)] = entry
         return entry[1]
 
@@ -1050,29 +1069,33 @@ class Gnb:
         return [e for k, (_b, e) in self._harq_entities.items() if k in bufs]
 
     def _due_retx(self, buffer):
-        if self.config_nr.harq is None:
+        if self._harq_cfg is None:  # 18.F: _harq_cfg
             return None
         return self._harq_for(buffer).peek_retx(self.env.now)
 
     def _harq_bytes(self, buffer) -> int:
-        if self.config_nr.harq is None:
+        if self._harq_cfg is None:  # 18.F: _harq_cfg
             return 0
         return sum(tb.tb_bytes for tb in self._harq_for(buffer)._waiting)
 
     def _link_has_data(self, buffer) -> bool:
         """Queued data with a free HARQ process, or a retransmission
         waiting (due now or later in this COT)."""
-        if self.config_nr.harq is None:
-            return buffer.backlog_bytes > 0
+        # Rashed-Step 18.F-10-06-2026-start
+        if self._harq_cfg is None:
+            return buffer.has_ready(self.env.now)
+        # Rashed-Step 18.F-10-06-2026-end
         ent = self._harq_for(buffer)
-        return ent.pending() > 0 or (buffer.backlog_bytes > 0 and ent.can_send_new())
+        # Rashed-Step 18.F-10-06-2026-start
+        return ent.pending() > 0 or (buffer.has_ready(self.env.now) and ent.can_send_new())
+        # Rashed-Step 18.F-10-06-2026-end
 
     def _send_tb(self, buf, rbs: int, duration_us: float, sinr_fn, ue, ul: bool, refill):
         """One TB on one link: a due HARQ retransmission if there is one
         (and it fits its RBs), else new data. Returns (ok, mcs, tb bytes,
         delivered bits, sinr) or None when nothing was sent (no SINR
         measured then). `refill` = packet factory for saturated traffic."""
-        harq = self.config_nr.harq
+        harq = self._harq_cfg  # 18.F: also a one-attempt entity when only L2 is on
         em = self.config_nr.error_model
         rtt = None if harq is None else harq.rtt_slots * self.slot_us
         if harq is not None:
@@ -1088,17 +1111,21 @@ class Gnb:
                 if ok:
                     bits = 8 * buf.ack(tb.segments, self.env.now)
                 elif not ent.failed(tb, self.env.now, rtt):
-                    buf.drop(tb.segments)
+                    buf.drop(tb.segments, self.env.now)
                 return ok, tb.mcs, tb.tb_bytes, bits, sinr
             if not ent.can_send_new():
                 return None
         mcs = self._slot_mcs(ue, ul=ul)
         tb_bytes = self._tb_bytes(mcs, duration_us, rbs)
         if refill is not None:
-            while buf.backlog_bytes < tb_bytes:
+            # Rashed-Step 18.F-10-06-2026-start
+            while buf.new_bytes < tb_bytes:
+            # Rashed-Step 18.F-10-06-2026-end
                 buf.enqueue(refill())
-        if buf.backlog_bytes <= 0:
+        # Rashed-Step 18.F-10-06-2026-start
+        if not buf.has_ready(self.env.now):
             return None
+        # Rashed-Step 18.F-10-06-2026-end
         sinr = sinr_fn()
         ok = decode_ok(em, sinr, NR_MCS_TABLE[mcs][0])
         if harq is None:
@@ -1109,7 +1136,11 @@ class Gnb:
                 return ok, mcs, tb_bytes, 8 * buf.deliver(segs, self.env.now), sinr
             buf.lose(segs)
             return ok, mcs, tb_bytes, 0, sinr
-        segs = buf.take(tb_bytes)
+        # Rashed-Step 18.F-10-06-2026-start
+        segs = buf.take(tb_bytes, self.env.now)
+        if not segs:
+            return None  # only L2 headers would have fit
+        # Rashed-Step 18.F-10-06-2026-end
         for pkt, _n, _last in segs:
             pkt.measured_sinr_db = sinr
         tb = HarqTb(segs, mcs, rbs, tb_bytes)
@@ -1117,7 +1148,7 @@ class Gnb:
         if ok:
             return ok, mcs, tb_bytes, 8 * buf.ack(segs, self.env.now), sinr
         if not ent.failed(tb, self.env.now, rtt):
-            buf.drop(segs)
+            buf.drop(segs, self.env.now)
         return ok, mcs, tb_bytes, 0, sinr
     # Rashed-Step 18.E-10-06-2026-end
 

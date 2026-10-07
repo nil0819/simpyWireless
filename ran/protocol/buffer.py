@@ -77,6 +77,18 @@ class ByteBuffer:
     def __len__(self) -> int:
         return len(self._queue)
 
+    # Rashed-Step 18.F-10-06-2026-start
+    # Same interface as ran/protocol/l2.py's L2Buffer, whose RLC AM bytes
+    # waiting for retransmission count in the backlog but aren't sendable
+    # until their STATUS report arrives.
+    def has_ready(self, now: float) -> bool:
+        return self._backlog > 0
+
+    @property
+    def new_bytes(self) -> int:
+        return self._backlog
+    # Rashed-Step 18.F-10-06-2026-end
+
     def head(self) -> Optional[Packet]:
         return self._queue[0] if self._queue else None
 
@@ -150,7 +162,7 @@ class ByteBuffer:
     # are acknowledged or dropped later, possibly out of order (several
     # HARQ processes in flight). A packet split across TBs is DELIVERED
     # once all its bytes are acked, DROPPED if any TB carrying it is.
-    def take(self, capacity_bytes: int) -> List[Segment]:
+    def take(self, capacity_bytes: int, now: float = 0.0) -> List[Segment]:
         segs = self.segments(capacity_bytes)
         for pkt, nbytes, last in segs:
             st = self._inflight.setdefault(id(pkt), [pkt, 0, False, False])  # pkt, open segs, all taken, failed
@@ -190,7 +202,7 @@ class ByteBuffer:
         self.stats["delivered_bytes"] += delivered
         return delivered
 
-    def drop(self, segs: List[Segment]) -> None:
+    def drop(self, segs: List[Segment], now: Optional[float] = None) -> None:
         """A TB from take() is given up: its packets are lost, including
         any bytes of them still queued."""
         for pkt, _nbytes, _last in segs:

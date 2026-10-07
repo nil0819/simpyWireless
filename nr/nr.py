@@ -30,6 +30,9 @@ from common.packet import TrafficConfig
 from ran.protocol.buffer import ByteBuffer, arrival_process, validate_buffered_traffic
 # Rashed-Step 18.E-10-06-2026-start
 from ran.protocol.harq import HarqConfig, HarqEntity, HarqTb
+# Rashed-Step 18.F-10-06-2026-start
+from ran.protocol.l2 import L2Config, make_buffer
+# Rashed-Step 18.F-10-06-2026-end
 # Rashed-Step 18.E-10-06-2026-end
 # Rashed-Step 18.B-10-06-2026-end
 # Rashed-Step 13.E.3-08-23-2026-end
@@ -290,6 +293,11 @@ class Config_NRL:
     # (default) = a failed TB's packets are dropped (18.B). Needs
     # dl_traffic or ul_traffic: full buffer has no data to recover.
     harq: Optional[HarqConfig] = None
+    # Rashed-Step 18.F-10-06-2026-start
+    # PDCP + RLC (ran/protocol/l2.py) on the buffered directions. None
+    # (default) = no L2 headers / ARQ / reordering.
+    l2: Optional[L2Config] = None
+    # Rashed-Step 18.F-10-06-2026-end
     # Rashed-Step 18.E-10-06-2026-end
 
 
@@ -414,7 +422,9 @@ class GnbLicensedNR:
             validate_buffered_traffic(config.dl_traffic)
             self.dl_buffers = {}
             for ue in self.ue_list:
-                buf = ByteBuffer(config.buffer_limit_bytes)
+                # Rashed-Step 18.F-10-06-2026-start
+                buf = make_buffer(config.buffer_limit_bytes, l2=config.l2)
+                # Rashed-Step 18.F-10-06-2026-end
                 self.dl_buffers[ue.name] = buf
                 env.process(arrival_process(env, buf, config.dl_traffic,
                                             partial(self._make_traffic_packet, ue.name, False),
@@ -422,6 +432,13 @@ class GnbLicensedNR:
         # Rashed-Step 18.E-10-06-2026-start
         if config.harq is not None and config.dl_traffic is None and config.ul_traffic is None:
             raise ValueError("Config_NRL.harq needs buffered traffic (dl_traffic and/or ul_traffic).")
+        # Rashed-Step 18.F-10-06-2026-start
+        if config.l2 is not None and config.dl_traffic is None and config.ul_traffic is None:
+            raise ValueError("Config_NRL.l2 needs buffered traffic (dl_traffic and/or ul_traffic).")
+        # L2 always settles TBs through take/ack/drop; without HARQ that's a
+        # one-attempt entity (whose stats aren't printed).
+        self._harq_cfg = config.harq if config.harq is not None else (HarqConfig(max_tx=1) if config.l2 else None)
+        # Rashed-Step 18.F-10-06-2026-end
         self._harq_entities: Dict[int, Tuple[ByteBuffer, HarqEntity]] = {}
         self._slot_retx: Dict[int, HarqTb] = {}
         # Rashed-Step 18.E-10-06-2026-end
@@ -429,7 +446,9 @@ class GnbLicensedNR:
             validate_buffered_traffic(config.ul_traffic)
             for ue in self.ue_list:
                 if getattr(ue, "uplink_enabled", False):
-                    ue.ul_buffer = ByteBuffer(config.buffer_limit_bytes)
+                    # Rashed-Step 18.F-10-06-2026-start
+                    ue.ul_buffer = make_buffer(config.buffer_limit_bytes, l2=config.l2)
+                    # Rashed-Step 18.F-10-06-2026-end
                     env.process(arrival_process(env, ue.ul_buffer, config.ul_traffic,
                                                 partial(self._make_traffic_packet, ue.name, True),
                                                 random.expovariate))
@@ -677,7 +696,7 @@ class GnbLicensedNR:
             tb_mcs = select_mcs_for_sinr(sinr_db) or 0
         capacity_bits = NR_MCS_TABLE[tb_mcs][1] * (rb_count * self.rb_bandwidth_hz) * (self.slot_us / 1e6)
         # Rashed-Step 18.E-10-06-2026-start
-        if self.config.harq is not None:
+        if self._harq_cfg is not None:  # 18.F: also with L2 on
             self._settle_new_tb_harq(buffer, sinr_db, mcs is not None, tb_mcs, rb_count,
                                      int(capacity_bits // 8), ul)
             return
@@ -698,7 +717,7 @@ class GnbLicensedNR:
         """The HARQ entity of the link this buffer feeds."""
         entry = self._harq_entities.get(id(buffer))
         if entry is None:
-            entry = (buffer, HarqEntity(self.config.harq))
+            entry = (buffer, HarqEntity(self._harq_cfg))  # 18.F: _harq_cfg
             self._harq_entities[id(buffer)] = entry
         return entry[1]
 
@@ -709,18 +728,24 @@ class GnbLicensedNR:
     def _buffer_has_work(self, buffer: ByteBuffer) -> bool:
         """Schedulable: a retransmission is due, or there is new data and
         a free HARQ process for it."""
-        if self.config.harq is None:
-            return buffer.backlog_bytes > 0
+        # Rashed-Step 18.F-10-06-2026-start
+        if self._harq_cfg is None:
+            return buffer.has_ready(self.env.now)
+        # Rashed-Step 18.F-10-06-2026-end
         ent = self._harq_for(buffer)
         if ent.peek_retx(self.env.now) is not None:
             return True
-        return buffer.backlog_bytes > 0 and ent.can_send_new()
+        # Rashed-Step 18.F-10-06-2026-start
+        return buffer.has_ready(self.env.now) and ent.can_send_new()
+        # Rashed-Step 18.F-10-06-2026-end
 
     def _claim_retx(self, buffer: ByteBuffer, packet):
         """At slot start: if a retransmission is due on this link, this
         slot carries it (ahead of new data)."""
-        if self.config.harq is None:
+        # Rashed-Step 18.F-10-06-2026-start
+        if self._harq_cfg is None:
             return packet
+        # Rashed-Step 18.F-10-06-2026-end
         tb = self._harq_for(buffer).next_retx(self.env.now)
         if tb is None:
             return packet
@@ -728,14 +753,20 @@ class GnbLicensedNR:
         return tb.segments[0][0]
 
     def _harq_rtt_us(self) -> float:
-        return self.config.harq.rtt_slots * self.slot_us
+        # Rashed-Step 18.F-10-06-2026-start
+        return self._harq_cfg.rtt_slots * self.slot_us
+        # Rashed-Step 18.F-10-06-2026-end
 
     def _settle_new_tb_harq(self, buffer: ByteBuffer, sinr_db: float, decoded: bool, tb_mcs: int,
                             rb_count: int, tb_bytes: int, ul: bool) -> None:
         """A new TB under HARQ: its bytes leave the buffer now; a failed
         one waits in a HARQ process instead of being dropped."""
         ent = self._harq_for(buffer)
-        segs = buffer.take(tb_bytes)
+        # Rashed-Step 18.F-10-06-2026-start
+        segs = buffer.take(tb_bytes, self.env.now)
+        if not segs:
+            return  # only L2 headers would have fit
+        # Rashed-Step 18.F-10-06-2026-end
         for pkt, _n, _l in segs:
             pkt.measured_sinr_db = sinr_db
         tb = HarqTb(segs, tb_mcs, rb_count, tb_bytes)
@@ -747,7 +778,7 @@ class GnbLicensedNR:
         else:
             (self.sent_failed_ul if ul else self.sent_failed)()
             if not ent.failed(tb, self.env.now, self._harq_rtt_us()):
-                buffer.drop(segs)
+                buffer.drop(segs, self.env.now)
         self.packet_log.extend(buffer.drain_finished())
 
     def _settle_retx(self, buffer: ByteBuffer, sinr_db: float, ul: bool) -> bool:
@@ -764,7 +795,7 @@ class GnbLicensedNR:
         else:
             (self.sent_failed_ul if ul else self.sent_failed)()
             if not ent.failed(tb, self.env.now, self._harq_rtt_us()):
-                buffer.drop(tb.segments)
+                buffer.drop(tb.segments, self.env.now)
         self.packet_log.extend(buffer.drain_finished())
         return ok
     # Rashed-Step 18.E-10-06-2026-end
