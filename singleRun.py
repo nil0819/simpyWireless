@@ -12,6 +12,9 @@ from ran.protocol.harq import harq_config_from_cli
 from ran.protocol.l2 import l2_config_from_cli
 # Rashed-Step 19.A-10-07-2026-start
 from ran.protocol.rach import rach_config_from_cli
+# Rashed-Step 19.B.2-10-07-2026-start
+from ran.protocol.rlm import rlm_config_from_cli
+# Rashed-Step 19.B.2-10-07-2026-end
 # Rashed-Step 19.A-10-07-2026-end
 # Rashed-Step 18.F-10-06-2026-end
 # Rashed-Step 18.E-10-06-2026-end
@@ -232,6 +235,14 @@ def parse_traffic_class_mix(raw_values, label: str):
 @click.option("--rach-backoff-ms", "rach_backoff_ms", type=float, default=None, help="Random backoff after a lost contention, uniform in [0, value] (default 0 = no backoff indicator). Requires --rach.")
 @click.option("--rar-window-ms", "rar_window_ms", type=float, default=None, help="Random access response window (default 10 ms). Requires --rach.")
 # Rashed-Step 19.A-10-07-2026-end
+# Rashed-Step 19.B.2-10-07-2026-start
+@click.option("--rlm", "rlm", is_flag=True, default=False, help="Radio link monitoring (Step 19.B.2) for RRC UEs: the UE measures its downlink SINR every 10 ms; below -8 dB (200 ms mean) starts T310, back above -6 dB (100 ms mean) stops it; T310 expiring is a radio link failure - the UE stops being scheduled and re-establishes RRC (random access if on, then 3 messages) once its cell is usable again, or drops to IDLE when T311 expires. Prints a Radio Link stdout block. Default (unset) = off, byte-identical to earlier runs.")
+@click.option("--t310-ms", "t310_ms", type=float, default=None, help="T310: time out of sync before a radio link failure (default 1000 ms). Requires --rlm.")
+@click.option("--t311-ms", "t311_ms", type=float, default=None, help="T311: time to find a usable cell after a radio link failure (default 1000 ms). Requires --rlm.")
+# Rashed-Step 19.B.2-10-07-2026-end
+# Rashed-Step 19.B.1-10-07-2026-start
+@click.option("--nru-rrc-type1-fallback", "nru_rrc_type1_fallback", type=int, default=None, help="cot_sharing + --nru-rrc-enabled (Step 19.B.1): after this many failed Type 2A checks in a row for one RRC message, the UE sends it after its own Type 1 (Cat-4) LBT instead of waiting for more gNB COTs. Default (unset) = never fall back, byte-identical to earlier runs.")
+# Rashed-Step 19.B.1-10-07-2026-end
 @click.option("--nru-buffer-limit-bytes", "nru_buffer_limit_bytes", type=int, default=None, help="slots only: drop-tail limit of each per-UE downlink buffer (default unbounded).")
 # Rashed-Step 18.C-10-06-2026-end
 
@@ -368,6 +379,14 @@ def single_run(
         prach_period_ms: float = None,
         rach_backoff_ms: float = None,
         rar_window_ms: float = None,
+        # Rashed-Step 19.B.1-10-07-2026-start
+        nru_rrc_type1_fallback: int = None,
+        # Rashed-Step 19.B.2-10-07-2026-start
+        rlm: bool = False,
+        t310_ms: float = None,
+        t311_ms: float = None,
+        # Rashed-Step 19.B.2-10-07-2026-end
+        # Rashed-Step 19.B.1-10-07-2026-end
         # Rashed-Step 19.A-10-07-2026-end
         # Rashed-Step 18.F-10-06-2026-end
         # Rashed-Step 18.E-10-06-2026-end
@@ -547,6 +566,21 @@ def single_run(
         raise click.BadParameter(str(e))
     if rach_config is not None and not nru_rrc_enabled:
         raise click.BadParameter("--rach requires --nru-rrc-enabled (random access starts the RRC attach).")
+    # Rashed-Step 19.B.2-10-07-2026-start
+    try:
+        rlm_config = rlm_config_from_cli(rlm, t310_ms, t311_ms)
+    except ValueError as e:
+        raise click.BadParameter(str(e))
+    if rlm_config is not None and not nru_rrc_enabled:
+        raise click.BadParameter("--rlm requires --nru-rrc-enabled.")
+    # Rashed-Step 19.B.2-10-07-2026-end
+    # Rashed-Step 19.B.1-10-07-2026-start
+    if nru_rrc_type1_fallback is not None:
+        if not nru_rrc_enabled or nru_ul_access_mode != "cot_sharing":
+            raise click.BadParameter("--nru-rrc-type1-fallback needs --nru-rrc-enabled with --nru-ul-access-mode cot_sharing.")
+        if nru_rrc_type1_fallback < 1:
+            raise click.BadParameter(f"--nru-rrc-type1-fallback must be >= 1 (got {nru_rrc_type1_fallback}).")
+    # Rashed-Step 19.B.1-10-07-2026-end
     # Rashed-Step 19.A-10-07-2026-end
     # Rashed-Step 18.F-10-06-2026-end
     # Rashed-Step 18.E-10-06-2026-end
@@ -641,6 +675,12 @@ def single_run(
                                  l2=l2_config,
                                  # Rashed-Step 19.A-10-07-2026-start
                                  rach=rach_config,
+                                 # Rashed-Step 19.B.1-10-07-2026-start
+                                 rrc_type1_fallback_after=nru_rrc_type1_fallback,
+                                 # Rashed-Step 19.B.2-10-07-2026-start
+                                 rlm=rlm_config,
+                                 # Rashed-Step 19.B.2-10-07-2026-end
+                                 # Rashed-Step 19.B.1-10-07-2026-end
                                  # Rashed-Step 19.A-10-07-2026-end
                                  # Rashed-Step 18.F-10-06-2026-end
                                  # Rashed-Step 18.E-10-06-2026-end

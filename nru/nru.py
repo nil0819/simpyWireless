@@ -51,6 +51,9 @@ from ran.protocol.harq import HarqConfig, HarqEntity, HarqTb
 from ran.protocol.l2 import L2Config, make_buffer
 # Rashed-Step 19.A-10-07-2026-start
 from ran.protocol.rach import RachConfig, RachCell
+# Rashed-Step 19.B.2-10-07-2026-start
+from ran.protocol.rlm import RlmConfig
+# Rashed-Step 19.B.2-10-07-2026-end
 # Rashed-Step 19.A-10-07-2026-end
 # Rashed-Step 18.F-10-06-2026-end
 # Rashed-Step 18.E-10-06-2026-end
@@ -285,6 +288,14 @@ class Config_NR:
     # gap + one 9us sensing slot = 25us, 3GPP TS 37.213) and then sends,
     # instead of running full Cat-4. See NrUE.type2a_lbt().
     ul_type2a_sense_us: float = 25.0
+    # Rashed-Step 19.B.1-10-07-2026-start
+    # COT sharing: after this many failed Type 2A checks in a row for one
+    # RRC message, the UE stops waiting for its gNB's COTs and sends it
+    # after its own Type 1 (Cat-4) LBT instead - a hidden Wi-Fi node
+    # can otherwise fail the check for every COT (Step 17.H: 33 tries,
+    # ~212 ms). None (default) = never fall back.
+    rrc_type1_fallback_after: Optional[int] = None
+    # Rashed-Step 19.B.1-10-07-2026-end
     # Rashed-Step 17.D-10-04-2026-end
 
     # Rashed-Step 18.C-10-06-2026-start
@@ -326,6 +337,11 @@ class Config_NR:
     # 4-step random access before RRC (ran/protocol/rach.py), with LBT
     # before Msg1 and the RAR riding a gNB COT. None (default) = off.
     rach: Optional[RachConfig] = None
+    # Rashed-Step 19.B.2-10-07-2026-start
+    # Radio link monitoring + RLF + re-establishment for RRC UEs
+    # (ran/protocol/rlm.py). None (default) = off.
+    rlm: Optional[RlmConfig] = None
+    # Rashed-Step 19.B.2-10-07-2026-end
     # Rashed-Step 19.A-10-07-2026-end
     # Rashed-Step 18.F-10-06-2026-end
     # Rashed-Step 18.E-10-06-2026-end
@@ -342,6 +358,10 @@ class Config_NR:
         # Rashed-Step 18.F-10-06-2026-start
         if self.l2 is not None and self.cot_model != "slots":
             raise ValueError("Config_NR.l2 needs cot_model=\"slots\" (the burst model has no transport blocks).")
+        # Rashed-Step 19.B.1-10-07-2026-start
+        if self.rrc_type1_fallback_after is not None and self.rrc_type1_fallback_after < 1:
+            raise ValueError(f"Config_NR.rrc_type1_fallback_after must be >= 1 (got {self.rrc_type1_fallback_after})")
+        # Rashed-Step 19.B.1-10-07-2026-end
         # Rashed-Step 18.F-10-06-2026-end
         # Rashed-Step 18.E-10-06-2026-end
         # Rashed-Step 18.C-10-06-2026-end
@@ -511,6 +531,9 @@ class Gnb:
         # Rashed-Step 18.C-10-06-2026-start
         self._rrc_ul_waiters = 0
         # Rashed-Step 19.A-10-07-2026-start
+        # Rashed-Step 19.B.2-10-07-2026-start
+        self.rlm_config = config_nr.rlm
+        # Rashed-Step 19.B.2-10-07-2026-end
         self.rach_cell = None
         if config_nr.rach is not None:
             self.rach_cell = RachCell(self, config_nr.rach, ue_max_power_dbm=config_nr.tx_power_dbm,
@@ -1284,6 +1307,19 @@ class Gnb:
     # Rashed-Step 18.D-10-06-2026-end
     # Rashed-Step 18.C-10-06-2026-end
 
+    # Rashed-Step 19.B.2-10-07-2026-start
+    def dl_sinr_estimate(self, ue) -> float:
+        """Downlink SINR a UE measures for radio link monitoring: a probe
+        of this gNB's downlink against whatever else is on the air now."""
+        now = self.env.now
+        probe = ActiveTx(tx_id=self.name, tx_pos=self.current_pos(), tx_start=now,
+                         rx_pos=ue.current_pos(), tx_power_dbm=self.config_nr.tx_power_dbm,
+                         f_hz=self.config_nr.f_ghz, pl_exp=self.config_nr.pl_exp, t_end=now + 1.0,
+                         tech="NRU", bandwidth_mhz=self.config_nr.bandwidth_mhz,
+                         noise_figure_db=self.config_nr.noise_figure_db)
+        return self.channel.sinr_db(probe)
+    
+    # Rashed-Step 19.B.2-10-07-2026-end
     def wait_back_off_gap_after(self):
         yield from self._channel_access.wait(self)
     # Rashed-Step 15.A-09-18-2026-end
@@ -1319,6 +1355,9 @@ class Gnb:
         # gNB that never transmits never opens a COT, so the attach then
         # never completes - by design, there is no grant to use.
         if self.config_nr.ul_access_mode is NruUplinkAccessMode.COT_SHARING:
+            # Rashed-Step 19.B.1-10-07-2026-start
+            failed_checks = 0
+            # Rashed-Step 19.B.1-10-07-2026-end
             while True:
                 # Rashed-Step 18.C-10-06-2026-start
                 # In "slots" the gNB only contends when it has work; a UE
@@ -1334,6 +1373,14 @@ class Gnb:
                 if (yield from ue.type2a_lbt()):
                     return
                 ue.rrc_type2a_skips = getattr(ue, "rrc_type2a_skips", 0) + 1
+                # Rashed-Step 19.B.1-10-07-2026-start
+                failed_checks += 1
+                n = self.config_nr.rrc_type1_fallback_after
+                if n is not None and failed_checks >= n:
+                    ue.rrc_type1_fallbacks = getattr(ue, "rrc_type1_fallbacks", 0) + 1
+                    yield from self._channel_access.wait(ue)
+                    return
+                # Rashed-Step 19.B.1-10-07-2026-end
         # Rashed-Step 17.F-10-04-2026-end
         yield from self._channel_access.wait(ue)
     # Rashed-Step 15.F-09-18-2026-end

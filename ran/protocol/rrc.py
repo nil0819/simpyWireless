@@ -137,6 +137,14 @@ class RrcLayer:
         connected_event = getattr(ue, "_rrc_connected_event", None)
         if connected_event is not None and not connected_event.triggered:
             connected_event.succeed()
+        # Rashed-Step 19.B.2-10-07-2026-start
+        # Radio link monitoring from now on, when the cell runs it
+        # (ran/protocol/rlm.py).
+        rlm_cfg = getattr(gnb, "rlm_config", None)
+        if rlm_cfg is not None:
+            from ran.protocol.rlm import radio_link_monitor
+            gnb.env.process(radio_link_monitor(gnb, ue, rlm_cfg, self))
+        # Rashed-Step 19.B.2-10-07-2026-end
         # Rashed-Step 15.G-09-18-2026-end
 # Rashed-Step 15.F-09-18-2026-end
 

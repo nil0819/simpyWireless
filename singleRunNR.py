@@ -20,6 +20,9 @@ from ran.protocol.harq import harq_config_from_cli
 from ran.protocol.l2 import l2_config_from_cli
 # Rashed-Step 19.A-10-07-2026-start
 from ran.protocol.rach import rach_config_from_cli
+# Rashed-Step 19.B.2-10-07-2026-start
+from ran.protocol.rlm import rlm_config_from_cli
+# Rashed-Step 19.B.2-10-07-2026-end
 # Rashed-Step 19.A-10-07-2026-end
 # Rashed-Step 18.F-10-06-2026-end
 # Rashed-Step 18.E-10-06-2026-end
@@ -92,6 +95,11 @@ from ran.protocol.rach import rach_config_from_cli
 @click.option("--rach-backoff-ms", "rach_backoff_ms", type=float, default=None, help="Random backoff after a lost contention, uniform in [0, value] (default 0 = no backoff indicator). Requires --rach.")
 @click.option("--rar-window-ms", "rar_window_ms", type=float, default=None, help="Random access response window (default 10 ms). Requires --rach.")
 # Rashed-Step 19.A-10-07-2026-end
+# Rashed-Step 19.B.2-10-07-2026-start
+@click.option("--rlm", "rlm", is_flag=True, default=False, help="Radio link monitoring (Step 19.B.2) for RRC UEs: the UE measures its downlink SINR every 10 ms; below -8 dB (200 ms mean) starts T310, back above -6 dB (100 ms mean) stops it; T310 expiring is a radio link failure - the UE stops being scheduled and re-establishes RRC (random access if on, then 3 messages) once its cell is usable again, or drops to IDLE when T311 expires. Prints a Radio Link stdout block. Default (unset) = off, byte-identical to earlier runs.")
+@click.option("--t310-ms", "t310_ms", type=float, default=None, help="T310: time out of sync before a radio link failure (default 1000 ms). Requires --rlm.")
+@click.option("--t311-ms", "t311_ms", type=float, default=None, help="T311: time to find a usable cell after a radio link failure (default 1000 ms). Requires --rlm.")
+# Rashed-Step 19.B.2-10-07-2026-end
 def single_run_nr(
         runs, seed, gnb_number, ues_per_gnb, simulation_time,
         area_w, area_h, gnb_pos, ue_radius,
@@ -119,6 +127,9 @@ def single_run_nr(
         rlc_mode="none", pdcp_sn_bits=None, rlc_am_max_retx=None, rlc_am_status_delay_ms=None,
         # Rashed-Step 19.A-10-07-2026-start
         rach=False, prach_period_ms=None, rach_backoff_ms=None, rar_window_ms=None,
+        # Rashed-Step 19.B.2-10-07-2026-start
+        rlm=False, t310_ms=None, t311_ms=None,
+        # Rashed-Step 19.B.2-10-07-2026-end
         # Rashed-Step 19.A-10-07-2026-end
         # Rashed-Step 18.F-10-06-2026-end
         # Rashed-Step 18.E-10-06-2026-end
@@ -180,6 +191,14 @@ def single_run_nr(
         raise click.BadParameter(str(e))
     if rach_config is not None and not rrc_enabled:
         raise click.BadParameter("--rach requires --rrc-enabled (random access starts the RRC attach).")
+    # Rashed-Step 19.B.2-10-07-2026-start
+    try:
+        rlm_config = rlm_config_from_cli(rlm, t310_ms, t311_ms)
+    except ValueError as e:
+        raise click.BadParameter(str(e))
+    if rlm_config is not None and not rrc_enabled:
+        raise click.BadParameter("--rlm requires --rrc-enabled.")
+    # Rashed-Step 19.B.2-10-07-2026-end
     # Rashed-Step 19.A-10-07-2026-end
     # Rashed-Step 18.F-10-06-2026-end
     # Rashed-Step 18.E-10-06-2026-end
@@ -228,6 +247,9 @@ def single_run_nr(
         l2=l2_config,
         # Rashed-Step 19.A-10-07-2026-start
         rach=rach_config,
+        # Rashed-Step 19.B.2-10-07-2026-start
+        rlm=rlm_config,
+        # Rashed-Step 19.B.2-10-07-2026-end
         # Rashed-Step 19.A-10-07-2026-end
         # Rashed-Step 18.F-10-06-2026-end
         # Rashed-Step 18.E-10-06-2026-end

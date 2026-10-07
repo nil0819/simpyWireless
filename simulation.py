@@ -56,6 +56,9 @@ from ran.protocol.harq import sum_harq_stats, print_harq_stats
 from ran.protocol.l2 import sum_l2_stats, print_l2_stats
 # Rashed-Step 19.A-10-07-2026-start
 from ran.protocol.rach import compute_rach_stats, print_rach_stats
+# Rashed-Step 19.B.2-10-07-2026-start
+from ran.protocol.rlm import compute_rlf_stats, print_rlf_stats
+# Rashed-Step 19.B.2-10-07-2026-end
 # Rashed-Step 19.A-10-07-2026-end
 # Rashed-Step 18.F-10-06-2026-end
 # Rashed-Step 18.E-10-06-2026-end
@@ -631,6 +634,15 @@ def run_simulation(
         if configNr.rach is not None:
             print(f'NRU RRC failed (random access): {nru_rrc_stats["failed"]}')
             print_rach_stats("NR-U Random Access", "NRU", compute_rach_stats(ues))
+        # Rashed-Step 19.B.2-10-07-2026-start
+        if configNr.rlm is not None:
+            print_rlf_stats("NR-U Radio Link", "NRU", compute_rlf_stats(ues))
+        # Rashed-Step 19.B.2-10-07-2026-end
+        # Rashed-Step 19.B.1-10-07-2026-start
+        if configNr.rrc_type1_fallback_after is not None:
+            print(f'NRU RRC Type 2A skips: {sum(getattr(ue, "rrc_type2a_skips", 0) for ue in ues)}')
+            print(f'NRU RRC Type 1 fallbacks: {sum(getattr(ue, "rrc_type1_fallbacks", 0) for ue in ues)}')
+        # Rashed-Step 19.B.1-10-07-2026-end
         # Rashed-Step 19.A-10-07-2026-end
     # Rashed-Step 15.G-09-18-2026-end
 

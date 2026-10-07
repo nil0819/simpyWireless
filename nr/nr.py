@@ -34,6 +34,9 @@ from ran.protocol.harq import HarqConfig, HarqEntity, HarqTb
 from ran.protocol.l2 import L2Config, make_buffer
 # Rashed-Step 19.A-10-07-2026-start
 from ran.protocol.rach import RachConfig, RachCell
+# Rashed-Step 19.B.2-10-07-2026-start
+from ran.protocol.rlm import RlmConfig
+# Rashed-Step 19.B.2-10-07-2026-end
 # Rashed-Step 19.A-10-07-2026-end
 # Rashed-Step 18.F-10-06-2026-end
 # Rashed-Step 18.E-10-06-2026-end
@@ -304,6 +307,11 @@ class Config_NRL:
     # 4-step random access before RRC (ran/protocol/rach.py), for UEs
     # with RRC. None (default) = RRC starts straight away.
     rach: Optional[RachConfig] = None
+    # Rashed-Step 19.B.2-10-07-2026-start
+    # Radio link monitoring + RLF + re-establishment for RRC UEs
+    # (ran/protocol/rlm.py). None (default) = off.
+    rlm: Optional[RlmConfig] = None
+    # Rashed-Step 19.B.2-10-07-2026-end
     # Rashed-Step 19.A-10-07-2026-end
     # Rashed-Step 18.F-10-06-2026-end
     # Rashed-Step 18.E-10-06-2026-end
@@ -360,6 +368,9 @@ class GnbLicensedNR:
         # the same interface LbtChannelAccess uses.
         self._channel_access = SlotScheduledAccess()
         # Rashed-Step 19.A-10-07-2026-start
+        # Rashed-Step 19.B.2-10-07-2026-start
+        self.rlm_config = config.rlm
+        # Rashed-Step 19.B.2-10-07-2026-end
         self.rach_cell = None
         if config.rach is not None:
             self.rach_cell = RachCell(self, config.rach, ue_max_power_dbm=config.ue_tx_power_dbm,
@@ -515,6 +526,12 @@ class GnbLicensedNR:
         return alloc, (pointer + 1) % n
         # Rashed-Step 15.E-09-18-2026-end
 
+    # Rashed-Step 19.B.2-10-07-2026-start
+    def dl_sinr_estimate(self, ue) -> float:
+        """Downlink SINR a UE measures for radio link monitoring."""
+        return self._trial_sinr_db(ue)
+    
+    # Rashed-Step 19.B.2-10-07-2026-end
     def _trial_sinr_db(self, ue) -> float:
         """Estimate this UE's SINR *as if* it had the full carrier to
         itself right now, without registering anything - used purely to

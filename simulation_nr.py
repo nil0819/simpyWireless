@@ -37,6 +37,9 @@ from ran.protocol.harq import sum_harq_stats, print_harq_stats
 from ran.protocol.l2 import sum_l2_stats, print_l2_stats
 # Rashed-Step 19.A-10-07-2026-start
 from ran.protocol.rach import compute_rach_stats, print_rach_stats
+# Rashed-Step 19.B.2-10-07-2026-start
+from ran.protocol.rlm import compute_rlf_stats, print_rlf_stats
+# Rashed-Step 19.B.2-10-07-2026-end
 # Rashed-Step 19.A-10-07-2026-end
 # Rashed-Step 18.F-10-06-2026-end
 # Rashed-Step 18.E-10-06-2026-end
@@ -275,6 +278,12 @@ def run_simulation_licensed_nr(
         print(f'NR RRC failed (random access): {nr_rrc_stats["failed"]}')
         nr_rach_stats = compute_rach_stats([ue for g in gnbs for ue in g.ue_list])
         print_rach_stats("Licensed 5G NR Random Access", "NR", nr_rach_stats)
+    # Rashed-Step 19.B.2-10-07-2026-start
+    nr_rlf_stats = None
+    if config.rlm is not None:
+        nr_rlf_stats = compute_rlf_stats([ue for g in gnbs for ue in g.ue_list])
+        print_rlf_stats("Licensed 5G NR Radio Link", "NR", nr_rlf_stats)
+    # Rashed-Step 19.B.2-10-07-2026-end
     # Rashed-Step 19.A-10-07-2026-end
     # Rashed-Step 15.G-09-18-2026-end
 
@@ -352,6 +361,10 @@ def run_simulation_licensed_nr(
         # Rashed-Step 19.A-10-07-2026-start
         # None unless config.rach.
         "rach_stats": nr_rach_stats,
+        # Rashed-Step 19.B.2-10-07-2026-start
+        # None unless config.rlm.
+        "rlf_stats": nr_rlf_stats,
+        # Rashed-Step 19.B.2-10-07-2026-end
         # Rashed-Step 19.A-10-07-2026-end
         # Rashed-Step 15.G-09-18-2026-end
         # Rashed-Step 16.F-10-02-2026-start
