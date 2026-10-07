@@ -6,6 +6,9 @@ from simulation import *
 from core.network import core_config_from_cli
 # Rashed-Step 18.A-10-06-2026-start
 from common.error_model import error_model_config_from_cli
+# Rashed-Step 18.E-10-06-2026-start
+from ran.protocol.harq import harq_config_from_cli
+# Rashed-Step 18.E-10-06-2026-end
 # Rashed-Step 18.A-10-06-2026-end
 # Rashed-Step 16.F-10-02-2026-end
 
@@ -206,6 +209,11 @@ def parse_traffic_class_mix(raw_values, label: str):
 @click.option("--nru-numerology", "nru_numerology", type=int, default=None, help="slots only: NR numerology mu (default 1 = 30 kHz SCS, 500 us slots).")
 @click.option("--nru-ul-traffic-model", "nru_ul_traffic_model", type=click.Choice(["saturated", "poisson", "cbr"]), default="saturated", help="slots + --nru-ue-uplink-enabled with cot_sharing (Step 18.D): uplink traffic per UE. saturated (default): every UE always has uplink data. poisson / cbr: packets arrive at --nru-ul-arrival-rate-pps per UE into its uplink buffer.")
 @click.option("--nru-ul-arrival-rate-pps", "nru_ul_arrival_rate_pps", type=float, default=None, help="Uplink packets per second per UE (default 100). Requires --nru-ul-traffic-model poisson or cbr.")
+# Rashed-Step 18.E-10-06-2026-start
+@click.option("--harq", "harq", is_flag=True, default=False, help="Enable HARQ (Step 18.E): a transport block that fails is retransmitted (ahead of new data, after --harq-rtt-slots) and decoded with chase combining; dropped after --harq-max-tx attempts. Prints a HARQ stdout block. Default (unset) = a failed block's packets are dropped, byte-identical to earlier runs. NR-U only, needs --nru-cot-model slots.")
+@click.option("--harq-max-tx", "harq_max_tx", type=int, default=None, help="Transmissions per transport block, first one included (default 4). Requires --harq.")
+@click.option("--harq-rtt-slots", "harq_rtt_slots", type=int, default=None, help="Slots from a failed attempt to its earliest retransmission (default 4). Requires --harq.")
+# Rashed-Step 18.E-10-06-2026-end
 @click.option("--nru-buffer-limit-bytes", "nru_buffer_limit_bytes", type=int, default=None, help="slots only: drop-tail limit of each per-UE downlink buffer (default unbounded).")
 # Rashed-Step 18.C-10-06-2026-end
 
@@ -328,6 +336,11 @@ def single_run(
         # Rashed-Step 18.D-10-06-2026-start
         nru_ul_traffic_model: str = "saturated",
         nru_ul_arrival_rate_pps: float = None,
+        # Rashed-Step 18.E-10-06-2026-start
+        harq: bool = False,
+        harq_max_tx: int = None,
+        harq_rtt_slots: int = None,
+        # Rashed-Step 18.E-10-06-2026-end
         # Rashed-Step 18.D-10-06-2026-end
         # Rashed-Step 18.C-10-06-2026-end
         # Rashed-Step 18.A-10-06-2026-end
@@ -478,6 +491,16 @@ def single_run(
         nru_ul_traffic = TrafficConfig(mode=nru_ul_traffic_model,
                                        arrival_rate_pps=100.0 if nru_ul_arrival_rate_pps is None else nru_ul_arrival_rate_pps)
     # Rashed-Step 18.D-10-06-2026-end
+    # Rashed-Step 18.E-10-06-2026-start
+    try:
+        harq_config = harq_config_from_cli(harq, harq_max_tx, harq_rtt_slots)
+    except ValueError as e:
+        raise click.BadParameter(str(e))
+    # Rashed-Step 18.E-10-06-2026-end
+    # Rashed-Step 18.E-10-06-2026-start
+    if harq_config is not None and nru_cot_model != "slots":
+        raise click.BadParameter("--harq needs --nru-cot-model slots (the burst model has no transport blocks).")
+    # Rashed-Step 18.E-10-06-2026-end
     if nru_buffer_limit_bytes is not None and nru_buffer_limit_bytes <= 0:
         raise click.BadParameter(f"--nru-buffer-limit-bytes must be > 0 (got {nru_buffer_limit_bytes}).")
     # Rashed-Step 18.C-10-06-2026-end
@@ -563,6 +586,9 @@ def single_run(
                                  buffer_limit_bytes=nru_buffer_limit_bytes,
                                  # Rashed-Step 18.D-10-06-2026-start
                                  ul_traffic=nru_ul_traffic,
+                                 # Rashed-Step 18.E-10-06-2026-start
+                                 harq=harq_config,
+                                 # Rashed-Step 18.E-10-06-2026-end
                                  # Rashed-Step 18.D-10-06-2026-end
                                  # Rashed-Step 18.C-10-06-2026-end
                                  # Rashed-Step 17.G-10-04-2026-end

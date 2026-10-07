@@ -14,6 +14,9 @@ from core.network import core_config_from_cli
 from common.error_model import error_model_config_from_cli
 # Rashed-Step 18.B-10-06-2026-start
 from ran.protocol.buffer import traffic_configs_from_cli
+# Rashed-Step 18.E-10-06-2026-start
+from ran.protocol.harq import harq_config_from_cli
+# Rashed-Step 18.E-10-06-2026-end
 # Rashed-Step 18.B-10-06-2026-end
 # Rashed-Step 18.A-10-06-2026-end
 # Rashed-Step 16.F-10-02-2026-end
@@ -66,6 +69,11 @@ from ran.protocol.buffer import traffic_configs_from_cli
 @click.option("--packet-size-bytes", "packet_size_bytes", type=int, default=None, help="Packet size for buffered traffic (default 1500). Requires --dl-traffic or --ul-traffic poisson/cbr.")
 @click.option("--buffer-limit-bytes", "buffer_limit_bytes", type=int, default=None, help="Drop-tail limit of each per-UE buffer (default unbounded). Requires --dl-traffic or --ul-traffic poisson/cbr.")
 # Rashed-Step 18.B-10-06-2026-end
+# Rashed-Step 18.E-10-06-2026-start
+@click.option("--harq", "harq", is_flag=True, default=False, help="Enable HARQ (Step 18.E): a transport block that fails is retransmitted (ahead of new data, after --harq-rtt-slots) and decoded with chase combining; dropped after --harq-max-tx attempts. Prints a HARQ stdout block. Default (unset) = a failed block's packets are dropped, byte-identical to earlier runs. Needs --dl-traffic or --ul-traffic poisson/cbr.")
+@click.option("--harq-max-tx", "harq_max_tx", type=int, default=None, help="Transmissions per transport block, first one included (default 4). Requires --harq.")
+@click.option("--harq-rtt-slots", "harq_rtt_slots", type=int, default=None, help="Slots from a failed attempt to its earliest retransmission (default 4). Requires --harq.")
+# Rashed-Step 18.E-10-06-2026-end
 def single_run_nr(
         runs, seed, gnb_number, ues_per_gnb, simulation_time,
         area_w, area_h, gnb_pos, ue_radius,
@@ -87,6 +95,9 @@ def single_run_nr(
         dl_traffic="full_buffer", dl_arrival_rate_pps=None, ul_traffic="full_buffer",
         ul_arrival_rate_pps=None, packet_size_bytes=None, buffer_limit_bytes=None,
         # Rashed-Step 18.B-10-06-2026-end
+        # Rashed-Step 18.E-10-06-2026-start
+        harq=False, harq_max_tx=None, harq_rtt_slots=None,
+        # Rashed-Step 18.E-10-06-2026-end
 ):
     gnb_positions = parse_pos_list_nr(gnb_pos, "--gnb-pos") if gnb_pos else None
 
@@ -119,6 +130,16 @@ def single_run_nr(
             packet_size_bytes, buffer_limit_bytes, ue_uplink_enabled)
     except ValueError as e:
         raise click.BadParameter(str(e))
+    # Rashed-Step 18.E-10-06-2026-start
+    try:
+        harq_config = harq_config_from_cli(harq, harq_max_tx, harq_rtt_slots)
+    except ValueError as e:
+        raise click.BadParameter(str(e))
+    # Rashed-Step 18.E-10-06-2026-end
+    # Rashed-Step 18.E-10-06-2026-start
+    if harq_config is not None and dl_traffic_config is None and ul_traffic_config is None:
+        raise click.BadParameter("--harq needs --dl-traffic or --ul-traffic poisson/cbr (full buffer has no data to recover).")
+    # Rashed-Step 18.E-10-06-2026-end
     # Rashed-Step 18.B-10-06-2026-end
 
     # Rashed-Step 13.E.3-08-23-2026-start
@@ -158,6 +179,9 @@ def single_run_nr(
         ul_traffic=ul_traffic_config,
         buffer_limit_bytes=buffer_limit_bytes,
         # Rashed-Step 18.B-10-06-2026-end
+        # Rashed-Step 18.E-10-06-2026-start
+        harq=harq_config,
+        # Rashed-Step 18.E-10-06-2026-end
     )
 
     for i in range(runs):

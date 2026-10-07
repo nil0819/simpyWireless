@@ -54,6 +54,9 @@ class ByteBuffer:
     # Every packet that reached a final state (DELIVERED/DROPPED), in
     # the order it got there; the owner appends these to its packet_log.
     finished: List[Packet] = field(default_factory=list, init=False, repr=False)
+    # Rashed-Step 18.E-10-06-2026-start
+    _inflight: dict = field(default_factory=dict, init=False, repr=False)
+    # Rashed-Step 18.E-10-06-2026-end
 
     def __post_init__(self):
         self.stats = {
@@ -141,6 +144,67 @@ class ByteBuffer:
             self.stats["dropped_tb_error"] += 1
             self.finished.append(pkt)
         return len(segs)
+
+    # Rashed-Step 18.E-10-06-2026-start
+    # HARQ path: a TB's bytes leave the queue when it is first sent and
+    # are acknowledged or dropped later, possibly out of order (several
+    # HARQ processes in flight). A packet split across TBs is DELIVERED
+    # once all its bytes are acked, DROPPED if any TB carrying it is.
+    def take(self, capacity_bytes: int) -> List[Segment]:
+        segs = self.segments(capacity_bytes)
+        for pkt, nbytes, last in segs:
+            st = self._inflight.setdefault(id(pkt), [pkt, 0, False, False])  # pkt, open segs, all taken, failed
+            st[1] += 1
+            self._backlog -= nbytes
+            if last:
+                self._queue.popleft()
+                self._head_sent = 0
+                st[2] = True
+            else:
+                self._head_sent += nbytes
+        return segs
+
+    def _settle(self, st, now: Optional[float]) -> None:
+        pkt, open_segs, all_taken, failed = st
+        if open_segs > 0 or not all_taken:
+            return
+        del self._inflight[id(pkt)]
+        if failed:
+            pkt.status = "DROPPED"
+            self.stats["dropped_tb_error"] += 1
+        else:
+            pkt.status = "DELIVERED"
+            pkt.delivered_at = now
+            self.stats["delivered_packets"] += 1
+        self.finished.append(pkt)
+
+    def ack(self, segs: List[Segment], now: float) -> int:
+        """A TB from take() decoded; returns its bytes."""
+        delivered = 0
+        for pkt, nbytes, _last in segs:
+            st = self._inflight[id(pkt)]
+            st[1] -= 1
+            if not st[3]:
+                delivered += nbytes
+            self._settle(st, now)
+        self.stats["delivered_bytes"] += delivered
+        return delivered
+
+    def drop(self, segs: List[Segment]) -> None:
+        """A TB from take() is given up: its packets are lost, including
+        any bytes of them still queued."""
+        for pkt, _nbytes, _last in segs:
+            st = self._inflight[id(pkt)]
+            st[1] -= 1
+            st[3] = True
+            if not st[2] and self._queue and self._queue[0] is pkt:
+                # The rest of a partly sent head packet is useless now.
+                self._backlog -= pkt.total_bytes() - self._head_sent
+                self._queue.popleft()
+                self._head_sent = 0
+                st[2] = True
+            self._settle(st, None)
+    # Rashed-Step 18.E-10-06-2026-end
 
     def drain_finished(self) -> List[Packet]:
         done, self.finished = self.finished, []

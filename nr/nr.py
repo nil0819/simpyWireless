@@ -28,6 +28,9 @@ from common.packet import Packet
 from functools import partial
 from common.packet import TrafficConfig
 from ran.protocol.buffer import ByteBuffer, arrival_process, validate_buffered_traffic
+# Rashed-Step 18.E-10-06-2026-start
+from ran.protocol.harq import HarqConfig, HarqEntity, HarqTb
+# Rashed-Step 18.E-10-06-2026-end
 # Rashed-Step 18.B-10-06-2026-end
 # Rashed-Step 13.E.3-08-23-2026-end
 
@@ -282,6 +285,12 @@ class Config_NRL:
     # Drop-tail limit per buffer; None = unbounded.
     buffer_limit_bytes: Optional[int] = None
     # Rashed-Step 18.B-10-06-2026-end
+    # Rashed-Step 18.E-10-06-2026-start
+    # HARQ (ran/protocol/harq.py) on the buffered directions. None
+    # (default) = a failed TB's packets are dropped (18.B). Needs
+    # dl_traffic or ul_traffic: full buffer has no data to recover.
+    harq: Optional[HarqConfig] = None
+    # Rashed-Step 18.E-10-06-2026-end
 
 
 class GnbLicensedNR:
@@ -410,6 +419,12 @@ class GnbLicensedNR:
                 env.process(arrival_process(env, buf, config.dl_traffic,
                                             partial(self._make_traffic_packet, ue.name, False),
                                             random.expovariate))
+        # Rashed-Step 18.E-10-06-2026-start
+        if config.harq is not None and config.dl_traffic is None and config.ul_traffic is None:
+            raise ValueError("Config_NRL.harq needs buffered traffic (dl_traffic and/or ul_traffic).")
+        self._harq_entities: Dict[int, Tuple[ByteBuffer, HarqEntity]] = {}
+        self._slot_retx: Dict[int, HarqTb] = {}
+        # Rashed-Step 18.E-10-06-2026-end
         if config.ul_traffic is not None:
             validate_buffered_traffic(config.ul_traffic)
             for ue in self.ue_list:
@@ -661,6 +676,12 @@ class GnbLicensedNR:
         else:
             tb_mcs = select_mcs_for_sinr(sinr_db) or 0
         capacity_bits = NR_MCS_TABLE[tb_mcs][1] * (rb_count * self.rb_bandwidth_hz) * (self.slot_us / 1e6)
+        # Rashed-Step 18.E-10-06-2026-start
+        if self.config.harq is not None:
+            self._settle_new_tb_harq(buffer, sinr_db, mcs is not None, tb_mcs, rb_count,
+                                     int(capacity_bits // 8), ul)
+            return
+        # Rashed-Step 18.E-10-06-2026-end
         segs = buffer.segments(int(capacity_bits // 8))
         for pkt, _nbytes, _last in segs:
             pkt.measured_sinr_db = sinr_db
@@ -671,6 +692,82 @@ class GnbLicensedNR:
             buffer.lose(segs)
             (self.sent_failed_ul if ul else self.sent_failed)()
         self.packet_log.extend(buffer.drain_finished())
+
+    # Rashed-Step 18.E-10-06-2026-start
+    def _harq_for(self, buffer: ByteBuffer) -> HarqEntity:
+        """The HARQ entity of the link this buffer feeds."""
+        entry = self._harq_entities.get(id(buffer))
+        if entry is None:
+            entry = (buffer, HarqEntity(self.config.harq))
+            self._harq_entities[id(buffer)] = entry
+        return entry[1]
+
+    def harq_entities(self, ul: bool) -> List[HarqEntity]:
+        bufs = {id(b) for b in self.all_buffers()["ul" if ul else "dl"]}
+        return [e for k, (_b, e) in self._harq_entities.items() if k in bufs]
+
+    def _buffer_has_work(self, buffer: ByteBuffer) -> bool:
+        """Schedulable: a retransmission is due, or there is new data and
+        a free HARQ process for it."""
+        if self.config.harq is None:
+            return buffer.backlog_bytes > 0
+        ent = self._harq_for(buffer)
+        if ent.peek_retx(self.env.now) is not None:
+            return True
+        return buffer.backlog_bytes > 0 and ent.can_send_new()
+
+    def _claim_retx(self, buffer: ByteBuffer, packet):
+        """At slot start: if a retransmission is due on this link, this
+        slot carries it (ahead of new data)."""
+        if self.config.harq is None:
+            return packet
+        tb = self._harq_for(buffer).next_retx(self.env.now)
+        if tb is None:
+            return packet
+        self._slot_retx[id(buffer)] = tb
+        return tb.segments[0][0]
+
+    def _harq_rtt_us(self) -> float:
+        return self.config.harq.rtt_slots * self.slot_us
+
+    def _settle_new_tb_harq(self, buffer: ByteBuffer, sinr_db: float, decoded: bool, tb_mcs: int,
+                            rb_count: int, tb_bytes: int, ul: bool) -> None:
+        """A new TB under HARQ: its bytes leave the buffer now; a failed
+        one waits in a HARQ process instead of being dropped."""
+        ent = self._harq_for(buffer)
+        segs = buffer.take(tb_bytes)
+        for pkt, _n, _l in segs:
+            pkt.measured_sinr_db = sinr_db
+        tb = HarqTb(segs, tb_mcs, rb_count, tb_bytes)
+        # The first attempt was already decoded by the slot's own logic.
+        ent.attempt(tb, sinr_db, NR_MCS_TABLE[tb_mcs][0], None, outcome=decoded)
+        if decoded:
+            bits = 8 * buffer.ack(segs, self.env.now)
+            (self.sent_completed_ul if ul else self.sent_completed)(bits)
+        else:
+            (self.sent_failed_ul if ul else self.sent_failed)()
+            if not ent.failed(tb, self.env.now, self._harq_rtt_us()):
+                buffer.drop(segs)
+        self.packet_log.extend(buffer.drain_finished())
+
+    def _settle_retx(self, buffer: ByteBuffer, sinr_db: float, ul: bool) -> bool:
+        """A retransmission claimed at slot start: decode with chase
+        combining at the TB's original MCS."""
+        tb = self._slot_retx.pop(id(buffer))
+        ent = self._harq_for(buffer)
+        for pkt, _n, _l in tb.segments:
+            pkt.measured_sinr_db = sinr_db
+        ok = ent.attempt(tb, sinr_db, NR_MCS_TABLE[tb.mcs][0], self.config.error_model)
+        if ok:
+            bits = 8 * buffer.ack(tb.segments, self.env.now)
+            (self.sent_completed_ul if ul else self.sent_completed)(bits)
+        else:
+            (self.sent_failed_ul if ul else self.sent_failed)()
+            if not ent.failed(tb, self.env.now, self._harq_rtt_us()):
+                buffer.drop(tb.segments)
+        self.packet_log.extend(buffer.drain_finished())
+        return ok
+    # Rashed-Step 18.E-10-06-2026-end
 
     def all_buffers(self) -> Dict[str, List[ByteBuffer]]:
         """This cell's buffers by direction (empty lists when off)."""
@@ -772,7 +869,9 @@ class GnbLicensedNR:
         ]
         # Rashed-Step 18.B-10-06-2026-start
         if self.dl_buffers is not None:
-            candidate_ues = [ue for ue in candidate_ues if self.dl_buffers[ue.name].backlog_bytes > 0]
+            # Rashed-Step 18.E-10-06-2026-start
+            candidate_ues = [ue for ue in candidate_ues if self._buffer_has_work(self.dl_buffers[ue.name])]
+            # Rashed-Step 18.E-10-06-2026-end
         # Rashed-Step 18.B-10-06-2026-end
         alloc = self._channel_access.allocate_dl_for(self, candidate_ues)
         # Rashed-Step 15.G-09-18-2026-end
@@ -805,6 +904,9 @@ class GnbLicensedNR:
             # (overrides the placeholder: _make_packet is only for full buffer)
             if self.dl_buffers is not None:
                 packet = self.dl_buffers[ue_name].head()
+                # Rashed-Step 18.E-10-06-2026-start
+                packet = self._claim_retx(self.dl_buffers[ue_name], packet)
+                # Rashed-Step 18.E-10-06-2026-end
             # Rashed-Step 18.B-10-06-2026-end
             # Rashed-Step 13.E.3-08-23-2026-end
             tx = ActiveTx(
@@ -841,6 +943,12 @@ class GnbLicensedNR:
                 # slot resolves (no-op when rate_adapt_enabled is False).
                 packet.measured_sinr_db = sinr
                 self.record_link_result(ue_name, sinr)
+                # Rashed-Step 18.E-10-06-2026-start
+                if self.dl_buffers is not None and id(self.dl_buffers[ue_name]) in self._slot_retx:
+                    ok = self._settle_retx(self.dl_buffers[ue_name], sinr, ul=False)
+                    self.channel.unregister_tx(tx, success=ok)
+                    continue
+                # Rashed-Step 18.E-10-06-2026-end
 
                 if chosen_mcs is not None:
                     # Ahead-of-time pick was made (rate_adapt_enabled,
@@ -934,7 +1042,9 @@ class GnbLicensedNR:
         ]
         # Rashed-Step 18.B-10-06-2026-start
         if self.config.ul_traffic is not None:
-            candidate_ues = [ue for ue in candidate_ues if ue.ul_buffer.backlog_bytes > 0]
+            # Rashed-Step 18.E-10-06-2026-start
+            candidate_ues = [ue for ue in candidate_ues if self._buffer_has_work(ue.ul_buffer)]
+            # Rashed-Step 18.E-10-06-2026-end
         # Rashed-Step 18.B-10-06-2026-end
         if not candidate_ues:
             yield self.env.timeout(self.slot_us)
@@ -958,6 +1068,9 @@ class GnbLicensedNR:
             # Rashed-Step 18.B-10-06-2026-start
             if self.config.ul_traffic is not None:
                 packet = ue.ul_buffer.head()
+                # Rashed-Step 18.E-10-06-2026-start
+                packet = self._claim_retx(ue.ul_buffer, packet)
+                # Rashed-Step 18.E-10-06-2026-end
             # Rashed-Step 18.B-10-06-2026-end
             tx = ActiveTx(
                 tx_id=ue_name,
@@ -985,6 +1098,12 @@ class GnbLicensedNR:
             for tx, rb_count, packet in txs:
                 sinr = self.channel.sinr_db(tx)
                 packet.measured_sinr_db = sinr
+                # Rashed-Step 18.E-10-06-2026-start
+                if self.config.ul_traffic is not None and id(ue_by_name[tx.tx_id].ul_buffer) in self._slot_retx:
+                    ok = self._settle_retx(ue_by_name[tx.tx_id].ul_buffer, sinr, ul=True)
+                    self.channel.unregister_tx(tx, success=ok)
+                    continue
+                # Rashed-Step 18.E-10-06-2026-end
                 mcs = select_mcs_for_sinr(sinr)
                 # Rashed-Step 18.A-10-06-2026-start
                 mcs = self._decode_mcs(sinr, mcs)

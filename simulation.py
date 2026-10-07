@@ -50,6 +50,9 @@ from dataclasses import replace as _dc_replace
 from common.error_model import ErrorModelConfig, make_error_model, print_error_model_stats
 # Rashed-Step 18.C-10-06-2026-start
 from ran.protocol.buffer import summarize_buffers, print_buffer_stats
+# Rashed-Step 18.E-10-06-2026-start
+from ran.protocol.harq import sum_harq_stats, print_harq_stats
+# Rashed-Step 18.E-10-06-2026-end
 # Rashed-Step 18.C-10-06-2026-end
 # Rashed-Step 18.A-10-06-2026-end
 # Rashed-Step 16.F-10-02-2026-end
@@ -700,6 +703,12 @@ def run_simulation(
             print(f'NRU {lbl} slot throughput (Mbps): {ss[d + "_bits"] / (simulation_time * 1e6)}')
         if ss["ul_grants"]:
             print(f'NRU UL grants: {ss["ul_grants"]} (Type 2A busy: {ss["ul_type2a_skips"]})')
+        # Rashed-Step 18.E-10-06-2026-start
+        if configNr.harq is not None:
+            print_harq_stats("NR-U DL HARQ", "NRU DL", sum_harq_stats([e for g in gnbs for e in g.harq_entities(False)]))
+            if ss["ul_grants"]:
+                print_harq_stats("NR-U UL HARQ", "NRU UL", sum_harq_stats([e for g in gnbs for e in g.harq_entities(True)]))
+        # Rashed-Step 18.E-10-06-2026-end
         # Rashed-Step 18.D-10-06-2026-end
         if nru_traffic_config is not None and nru_traffic_config.mode != "saturated":
             nru_bufs = [b for g in gnbs for b in g.dl_buffers.values()]

@@ -45,6 +45,9 @@ from common.common_phy import thermal_noise_dbm
 from nr.nr import (NR_MCS_TABLE, NUMEROLOGY_SCS_KHZ, resource_block_count, select_mcs_for_sinr,
                    slot_duration_us)
 from ran.protocol.buffer import ByteBuffer, arrival_process
+# Rashed-Step 18.E-10-06-2026-start
+from ran.protocol.harq import HarqConfig, HarqEntity, HarqTb
+# Rashed-Step 18.E-10-06-2026-end
 COT_MODELS = ("burst", "slots")
 # Rashed-Step 18.D-10-06-2026-start
 NRU_UL_INTERLACES = {0: 10, 1: 5}  # TS 38.211 4.4.4.6
@@ -305,6 +308,11 @@ class Config_NR:
     # arrival_rate_pps per UE.
     ul_traffic: Optional[TrafficConfig] = None
     # Rashed-Step 18.D-10-06-2026-end
+    # Rashed-Step 18.E-10-06-2026-start
+    # HARQ in "slots" (ran/protocol/harq.py), both directions. None
+    # (default) = a failed TB's packets are dropped.
+    harq: Optional[HarqConfig] = None
+    # Rashed-Step 18.E-10-06-2026-end
 
     def __post_init__(self):
         # Rashed-Step 18.C-10-06-2026-start
@@ -312,6 +320,10 @@ class Config_NR:
             raise ValueError(f"Config_NR.cot_model must be one of {COT_MODELS} (got {self.cot_model!r})")
         if self.numerology not in NUMEROLOGY_SCS_KHZ:
             raise ValueError(f"Config_NR.numerology must be one of {sorted(NUMEROLOGY_SCS_KHZ)} (got {self.numerology})")
+        # Rashed-Step 18.E-10-06-2026-start
+        if self.harq is not None and self.cot_model != "slots":
+            raise ValueError("Config_NR.harq needs cot_model=\"slots\" (the burst model has no transport blocks).")
+        # Rashed-Step 18.E-10-06-2026-end
         # Rashed-Step 18.C-10-06-2026-end
         if not (0.0 < self.ul_cot_fraction < 1.0):
             raise ValueError(
@@ -704,6 +716,9 @@ class Gnb:
         self.n_interlaces = NRU_UL_INTERLACES.get(cfg.numerology, 5)
         self._cqi_db = {}
         self._ul_cqi_db = {}
+        # Rashed-Step 18.E-10-06-2026-start
+        self._harq_entities = {}
+        # Rashed-Step 18.E-10-06-2026-end
         self._slots_kick = self.env.event()
         self.slot_stats = {"cots": 0, "cots_failed": 0, "control_only_cots": 0,
                            "dl_tbs_ok": 0, "dl_tbs_failed": 0, "dl_bits": 0, "dl_mcs_sum": 0,
@@ -780,14 +795,18 @@ class Gnb:
         """UEs with downlink data (every eligible UE for saturated traffic)."""
         ues = self._eligible_dl_ues()
         if self.traffic_config.mode != "saturated":
-            ues = [ue for ue in ues if self.dl_buffers[ue.name].backlog_bytes > 0]
+            # Rashed-Step 18.E-10-06-2026-start
+            ues = [ue for ue in ues if self._link_has_data(self.dl_buffers[ue.name])]
+            # Rashed-Step 18.E-10-06-2026-end
         return ues
 
     def _ul_slot_ues(self) -> list:
         """COT-sharing UEs with uplink data (every one for saturated)."""
         ues = [ue for ue in self._cot_ul_ues() if getattr(ue, "ul_buffer", None) is not None]
         if self.config_nr.ul_traffic is not None:
-            ues = [ue for ue in ues if ue.ul_buffer.backlog_bytes > 0]
+            # Rashed-Step 18.E-10-06-2026-start
+            ues = [ue for ue in ues if self._link_has_data(ue.ul_buffer)]
+            # Rashed-Step 18.E-10-06-2026-end
         return ues
 
     def _slots_have_work(self) -> bool:
@@ -856,6 +875,12 @@ class Gnb:
     def _dl_slot_alloc(self, ues: list, duration_us: float, saturated: bool) -> dict:
         needs = {}
         for ue in ues:
+            # Rashed-Step 18.E-10-06-2026-start
+            due = self._due_retx(self.dl_buffers[ue.name])
+            if due is not None:
+                needs[ue.name] = due.rbs
+                continue
+            # Rashed-Step 18.E-10-06-2026-end
             if saturated:
                 needs[ue.name] = self.total_rbs
             else:
@@ -892,7 +917,7 @@ class Gnb:
         elif not saturated:
             # Only as many slots as the queued data needs at current CQIs:
             # the sum of each UE's share of a full-carrier slot.
-            need = sum(self.dl_buffers[ue.name].backlog_bytes
+            need = sum((self.dl_buffers[ue.name].backlog_bytes + self._harq_bytes(self.dl_buffers[ue.name]))
                        / max(1, self._tb_bytes(self._slot_mcs(ue), self.slot_us)) for ue in dl_ues)
             slots = slots[:max(1, math.ceil(need))]
         dl_us = rs_time + sum(slots)
@@ -974,8 +999,9 @@ class Gnb:
 
     def _decode_dl_slot(self, active, dl_ues: list, t0: float, duration_us: float, saturated: bool):
         """Decode one downlink slot for every UE given RBs in it; returns
-        (transport blocks ok, failed)."""
-        ues = dl_ues if saturated else [ue for ue in dl_ues if self.dl_buffers[ue.name].backlog_bytes > 0]
+        (transport blocks ok, failed). With HARQ (18.E) a due retransmission
+        goes ahead of new data."""
+        ues = dl_ues if saturated else [ue for ue in dl_ues if self._link_has_data(self.dl_buffers[ue.name])]
         if not ues:
             return 0, 0
         alloc = self._dl_slot_alloc(ues, duration_us, saturated)
@@ -985,29 +1011,115 @@ class Gnb:
             if rbs <= 0:
                 continue
             buf = self.dl_buffers[ue.name]
-            mcs = self._slot_mcs(ue)
-            tb = self._tb_bytes(mcs, duration_us, rbs)
-            if saturated:
-                while buf.backlog_bytes < tb:
-                    buf.enqueue(self._make_dl_packet(ue.name))
-            sinr = self.channel.sinr_db(self._dl_view(active, ue), window=(t0, t0 + duration_us))
+            # Rashed-Step 18.E-10-06-2026-start
+            # Same order as 18.D (MCS, refill, then SINR), so runs without
+            # HARQ draw random numbers exactly as before.
+            res = self._send_tb(buf, rbs, duration_us,
+                                lambda u=ue: self.channel.sinr_db(self._dl_view(active, u), window=(t0, t0 + duration_us)),
+                                ue, False, (lambda n=ue.name: self._make_dl_packet(n)) if saturated else None)
+            if res is None:
+                continue
+            ok, mcs, tb, bits, sinr = res
             self._cqi_db[ue.name] = sinr  # the UE reports what it measured, pass or fail
-            ok = decode_ok(self.config_nr.error_model, sinr, NR_MCS_TABLE[mcs][0])
-            segs = buf.segments(tb)
-            for pkt, _n, _last in segs:
-                pkt.measured_sinr_db = sinr
+            # Rashed-Step 18.E-10-06-2026-end
             if ok:
                 n_ok += 1
                 self.slot_stats["dl_tbs_ok"] += 1
                 self.slot_stats["dl_mcs_sum"] += mcs
-                self.slot_stats["dl_bits"] += 8 * buf.deliver(segs, self.env.now)
+                self.slot_stats["dl_bits"] += bits
             else:
                 n_fail += 1
                 self.slot_stats["dl_tbs_failed"] += 1
-                buf.lose(segs)
             self.packet_log.extend(buf.drain_finished())
             log(self, f"DL slot {'OK' if ok else 'FAILED'} to {ue.name}: SINR={sinr:.2f} dB, MCS={mcs}, RBs={rbs}, TB={tb} B")
         return n_ok, n_fail
+
+    # Rashed-Step 18.E-10-06-2026-start
+    def _harq_for(self, buffer) -> HarqEntity:
+        entry = self._harq_entities.get(id(buffer))
+        if entry is None:
+            entry = (buffer, HarqEntity(self.config_nr.harq))
+            self._harq_entities[id(buffer)] = entry
+        return entry[1]
+
+    def harq_entities(self, ul: bool) -> list:
+        if ul:
+            bufs = {id(ue.ul_buffer) for ue in self.ue_list if getattr(ue, "ul_buffer", None) is not None}
+        else:
+            bufs = {id(b) for b in self.dl_buffers.values()}
+        return [e for k, (_b, e) in self._harq_entities.items() if k in bufs]
+
+    def _due_retx(self, buffer):
+        if self.config_nr.harq is None:
+            return None
+        return self._harq_for(buffer).peek_retx(self.env.now)
+
+    def _harq_bytes(self, buffer) -> int:
+        if self.config_nr.harq is None:
+            return 0
+        return sum(tb.tb_bytes for tb in self._harq_for(buffer)._waiting)
+
+    def _link_has_data(self, buffer) -> bool:
+        """Queued data with a free HARQ process, or a retransmission
+        waiting (due now or later in this COT)."""
+        if self.config_nr.harq is None:
+            return buffer.backlog_bytes > 0
+        ent = self._harq_for(buffer)
+        return ent.pending() > 0 or (buffer.backlog_bytes > 0 and ent.can_send_new())
+
+    def _send_tb(self, buf, rbs: int, duration_us: float, sinr_fn, ue, ul: bool, refill):
+        """One TB on one link: a due HARQ retransmission if there is one
+        (and it fits its RBs), else new data. Returns (ok, mcs, tb bytes,
+        delivered bits, sinr) or None when nothing was sent (no SINR
+        measured then). `refill` = packet factory for saturated traffic."""
+        harq = self.config_nr.harq
+        em = self.config_nr.error_model
+        rtt = None if harq is None else harq.rtt_slots * self.slot_us
+        if harq is not None:
+            ent = self._harq_for(buf)
+            due = ent.peek_retx(self.env.now)
+            if due is not None and rbs >= due.rbs:
+                tb = ent.next_retx(self.env.now)
+                sinr = sinr_fn()
+                for pkt, _n, _l in tb.segments:
+                    pkt.measured_sinr_db = sinr
+                ok = ent.attempt(tb, sinr, NR_MCS_TABLE[tb.mcs][0], em)
+                bits = 0
+                if ok:
+                    bits = 8 * buf.ack(tb.segments, self.env.now)
+                elif not ent.failed(tb, self.env.now, rtt):
+                    buf.drop(tb.segments)
+                return ok, tb.mcs, tb.tb_bytes, bits, sinr
+            if not ent.can_send_new():
+                return None
+        mcs = self._slot_mcs(ue, ul=ul)
+        tb_bytes = self._tb_bytes(mcs, duration_us, rbs)
+        if refill is not None:
+            while buf.backlog_bytes < tb_bytes:
+                buf.enqueue(refill())
+        if buf.backlog_bytes <= 0:
+            return None
+        sinr = sinr_fn()
+        ok = decode_ok(em, sinr, NR_MCS_TABLE[mcs][0])
+        if harq is None:
+            segs = buf.segments(tb_bytes)
+            for pkt, _n, _last in segs:
+                pkt.measured_sinr_db = sinr
+            if ok:
+                return ok, mcs, tb_bytes, 8 * buf.deliver(segs, self.env.now), sinr
+            buf.lose(segs)
+            return ok, mcs, tb_bytes, 0, sinr
+        segs = buf.take(tb_bytes)
+        for pkt, _n, _last in segs:
+            pkt.measured_sinr_db = sinr
+        tb = HarqTb(segs, mcs, rbs, tb_bytes)
+        ent.attempt(tb, sinr, NR_MCS_TABLE[mcs][0], None, outcome=ok)
+        if ok:
+            return ok, mcs, tb_bytes, 8 * buf.ack(segs, self.env.now), sinr
+        if not ent.failed(tb, self.env.now, rtt):
+            buf.drop(segs)
+        return ok, mcs, tb_bytes, 0, sinr
+    # Rashed-Step 18.E-10-06-2026-end
 
     def _interlace_rbs(self, interlaces: list) -> int:
         return sum(len(range(m, self.total_rbs, self.n_interlaces)) for m in interlaces)
@@ -1073,7 +1185,8 @@ class Gnb:
                 yield self.env.timeout(d)
                 for ue, tx, rbs, counts in txs.values():
                     ok = self._decode_ul_tb(ue, tx, rbs, t0, d)
-                    counts[0 if ok else 1] += 1
+                    if ok is not None:
+                        counts[0 if ok else 1] += 1
             yield self.env.timeout(0)
             for ue, tx, rbs, counts in txs.values():
                 self.channel.unregister_tx(tx, success=counts[0] > 0)
@@ -1086,28 +1199,28 @@ class Gnb:
         if remaining > 0:
             yield self.env.timeout(remaining)
 
-    def _decode_ul_tb(self, ue, tx, rbs: int, t0: float, duration_us: float) -> bool:
+    def _decode_ul_tb(self, ue, tx, rbs: int, t0: float, duration_us: float):
+        """Decode one uplink slot of one UE. True/False, or None when the
+        UE had nothing to send in it."""
         buf = ue.ul_buffer
-        mcs = self._slot_mcs(ue, ul=True)
-        tb = self._tb_bytes(mcs, duration_us, rbs)
-        if self.config_nr.ul_traffic is None:  # saturated uplink
-            while buf.backlog_bytes < tb:
-                buf.enqueue(self._make_ul_packet(ue.name))
-        sinr = self.channel.sinr_db(tx, window=(t0, t0 + duration_us))
+        # Rashed-Step 18.E-10-06-2026-start
+        refill = (lambda n=ue.name: self._make_ul_packet(n)) if self.config_nr.ul_traffic is None else None
+        res = self._send_tb(buf, rbs, duration_us,
+                            lambda: self.channel.sinr_db(tx, window=(t0, t0 + duration_us)),
+                            ue, True, refill)
+        if res is None:
+            return None
+        ok, mcs, _tb, bits, sinr = res
         self._ul_cqi_db[ue.name] = sinr
-        ok = decode_ok(self.config_nr.error_model, sinr, NR_MCS_TABLE[mcs][0])
-        segs = buf.segments(tb)
-        for pkt, _n, _last in segs:
-            pkt.measured_sinr_db = sinr
+        # Rashed-Step 18.E-10-06-2026-end
         if ok:
             ue.succeeded_transmissions += 1
             self.slot_stats["ul_tbs_ok"] += 1
             self.slot_stats["ul_mcs_sum"] += mcs
-            self.slot_stats["ul_bits"] += 8 * buf.deliver(segs, self.env.now)
+            self.slot_stats["ul_bits"] += bits
         else:
             ue.failed_transmissions += 1
             self.slot_stats["ul_tbs_failed"] += 1
-            buf.lose(segs)
         ue.packet_log.extend(buf.drain_finished())
         return ok
 

@@ -31,6 +31,9 @@ from dataclasses import replace as _dc_replace
 from common.error_model import ErrorModelConfig, make_error_model, print_error_model_stats
 # Rashed-Step 18.B-10-06-2026-start
 from ran.protocol.buffer import summarize_buffers, print_buffer_stats
+# Rashed-Step 18.E-10-06-2026-start
+from ran.protocol.harq import sum_harq_stats, print_harq_stats
+# Rashed-Step 18.E-10-06-2026-end
 # Rashed-Step 18.B-10-06-2026-end
 # Rashed-Step 18.A-10-06-2026-end
 # Rashed-Step 16.F-10-02-2026-end
@@ -288,6 +291,12 @@ def run_simulation_licensed_nr(
                 if (p.source == g.name) == (direction == "dl")]
         traffic_stats[direction] = summarize_buffers(bufs, pkts, simulation_time)
         print_buffer_stats(f"Licensed 5G NR {direction.upper()} Traffic", label, traffic_stats[direction])
+        # Rashed-Step 18.E-10-06-2026-start
+        if config.harq is not None:
+            hs = sum_harq_stats([e for g in gnbs for e in g.harq_entities(direction == "ul")])
+            traffic_stats[direction]["harq"] = hs
+            print_harq_stats(f"Licensed 5G NR {direction.upper()} HARQ", label, hs)
+        # Rashed-Step 18.E-10-06-2026-end
     # Rashed-Step 18.B-10-06-2026-end
 
     # Rashed-Step 18.A-10-06-2026-start
