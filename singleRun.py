@@ -201,6 +201,11 @@ def parse_traffic_class_mix(raw_values, label: str):
 @click.option("--error-model", "error_model", type=click.Choice(["threshold", "bler"]), default="threshold", help="Link error model for every technology in the run (Step 18.A). threshold (default): a frame/transport block decodes iff its SINR meets its MCS threshold, byte-identical to every earlier run. bler: a random draw against a block-error-rate curve that hits 10% at the MCS threshold (the 3GPP CQI definition) - needed for HARQ. Prints an 'Error Model' stdout block.")
 @click.option("--bler-slope-db", "bler_slope_db", type=float, default=None, help="bler only: steepness of the BLER curve in 1/dB (default 2.0: 90% -> 10% BLER over ~2.2 dB). Requires --error-model bler.")
 # Rashed-Step 18.A-10-06-2026-end
+# Rashed-Step 18.C-10-06-2026-start
+@click.option("--nru-cot-model", "nru_cot_model", type=click.Choice(["burst", "slots"]), default="burst", help="How an NR-U COT's downlink carries data (Step 18.C). burst (default): one transmission with one packet at --nru-mcs, byte-identical to every earlier run. slots: a run of NR slots (--nru-numerology), each a transport block sized from MCS x RBs x slot time with its own SINR; MCS from the UE's last reported SINR; data from per-UE buffers (--nru-traffic-model; --nru-arrival-rate-pps stays a per-gNB total). Prints an 'NR-U Slots' stdout block.")
+@click.option("--nru-numerology", "nru_numerology", type=int, default=None, help="slots only: NR numerology mu (default 1 = 30 kHz SCS, 500 us slots).")
+@click.option("--nru-buffer-limit-bytes", "nru_buffer_limit_bytes", type=int, default=None, help="slots only: drop-tail limit of each per-UE downlink buffer (default unbounded).")
+# Rashed-Step 18.C-10-06-2026-end
 
 def single_run(
         runs: int,
@@ -314,6 +319,11 @@ def single_run(
         # Rashed-Step 18.A-10-06-2026-start
         error_model: str = "threshold",
         bler_slope_db: float = None,
+        # Rashed-Step 18.C-10-06-2026-start
+        nru_cot_model: str = "burst",
+        nru_numerology: int = None,
+        nru_buffer_limit_bytes: int = None,
+        # Rashed-Step 18.C-10-06-2026-end
         # Rashed-Step 18.A-10-06-2026-end
         # Rashed-Step 17.G-10-04-2026-end
         # Rashed-Step pre_17.B-10-04-2026-end
@@ -445,6 +455,12 @@ def single_run(
     except ValueError as e:
         raise click.BadParameter(str(e))
     # Rashed-Step 18.A-10-06-2026-end
+    # Rashed-Step 18.C-10-06-2026-start
+    if nru_cot_model != "slots" and (nru_numerology is not None or nru_buffer_limit_bytes is not None):
+        raise click.BadParameter("--nru-numerology / --nru-buffer-limit-bytes require --nru-cot-model slots.")
+    if nru_buffer_limit_bytes is not None and nru_buffer_limit_bytes <= 0:
+        raise click.BadParameter(f"--nru-buffer-limit-bytes must be > 0 (got {nru_buffer_limit_bytes}).")
+    # Rashed-Step 18.C-10-06-2026-end
     if wifi_sta_uplink_enabled and rogue_wifi:
         raise click.BadParameter(
             "--wifi-sta-uplink-enabled is not supported with --rogue True "
@@ -521,6 +537,11 @@ def single_run(
                                  # Rashed-Step 17.G-10-04-2026-start
                                  ul_access_mode=NruUplinkAccessMode(nru_ul_access_mode),
                                  ul_cot_fraction=nru_ul_cot_fraction,
+                                 # Rashed-Step 18.C-10-06-2026-start
+                                 cot_model=nru_cot_model,
+                                 numerology=1 if nru_numerology is None else nru_numerology,
+                                 buffer_limit_bytes=nru_buffer_limit_bytes,
+                                 # Rashed-Step 18.C-10-06-2026-end
                                  # Rashed-Step 17.G-10-04-2026-end
                                  ),
                        # Rashed-Step 5.C-02-06-2026-end

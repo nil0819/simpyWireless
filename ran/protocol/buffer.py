@@ -41,6 +41,11 @@ BUFFERED_TRAFFIC_MODES = ("poisson", "cbr")
 @dataclass
 class ByteBuffer:
     limit_bytes: Optional[int] = None
+    # Rashed-Step 18.C-10-06-2026-start
+    # Called after every accepted packet (NR-U's gNB uses it to wake up
+    # and contend for the channel when data arrives).
+    on_enqueue: Optional[Callable[[], None]] = field(default=None, repr=False)
+    # Rashed-Step 18.C-10-06-2026-end
     _queue: Deque[Packet] = field(default_factory=deque, init=False, repr=False)
     # Bytes of the head packet already delivered in earlier TBs.
     _head_sent: int = field(default=0, init=False)
@@ -84,6 +89,10 @@ class ByteBuffer:
         self.stats["enqueued_packets"] += 1
         self.stats["enqueued_bytes"] += size
         self.stats["max_backlog_bytes"] = max(self.stats["max_backlog_bytes"], self._backlog)
+        # Rashed-Step 18.C-10-06-2026-start
+        if self.on_enqueue is not None:
+            self.on_enqueue()
+        # Rashed-Step 18.C-10-06-2026-end
         return True
 
     def segments(self, capacity_bytes: int) -> List[Segment]:

@@ -48,6 +48,9 @@ from core.procedures import compute_core_stats, print_core_stats
 # Rashed-Step 18.A-10-06-2026-start
 from dataclasses import replace as _dc_replace
 from common.error_model import ErrorModelConfig, make_error_model, print_error_model_stats
+# Rashed-Step 18.C-10-06-2026-start
+from ran.protocol.buffer import summarize_buffers, print_buffer_stats
+# Rashed-Step 18.C-10-06-2026-end
 # Rashed-Step 18.A-10-06-2026-end
 # Rashed-Step 16.F-10-02-2026-end
 
@@ -531,6 +534,11 @@ def run_simulation(
 
     # environment.run(until=simulation_time * 1000000) 10^6 milisekundy
     environment.run(until=simulation_time * 1000000)
+    # Rashed-Step 18.C-10-06-2026-start
+    for g in gnbs:
+        if hasattr(g, "flush_buffer_logs"):
+            g.flush_buffer_logs()
+    # Rashed-Step 18.C-10-06-2026-end
 
     # Rashed-Step 6.E-08-05-2026-start
     # BUGFIX: this "WiFi airtime data:.../NRU airtime ctrl:" debug print
@@ -669,6 +677,28 @@ def run_simulation(
             print(f"NRU uplink windows opened: {sum(len(g.ul_windows) for g in gnbs)}")
             print(f"NRU uplink grants skipped (Type 2A busy): {sum(ue.type2a_skips for ue in ues)}")
     # Rashed-Step 17.G-10-04-2026-end
+
+    # Rashed-Step 18.C-10-06-2026-start
+    # NR-U "slots" COT model results - only then, so burst runs' stdout
+    # is unchanged.
+    if configNr.cot_model == "slots" and gnbs:
+        ss = {k: sum(g.slot_stats[k] for g in gnbs) for k in gnbs[0].slot_stats}
+        n_slots = ss["slots_ok"] + ss["slots_failed"]
+        print("=== NR-U Slots ===")
+        print(f"NRU numerology mu={configNr.numerology} (SCS={gnbs[0].scs_khz} kHz, slot={gnbs[0].slot_us} us), "
+              f"RBs={gnbs[0].total_rbs} in {configNr.bandwidth_mhz} MHz")
+        print(f'NRU COTs: {ss["cots"]} (reference slot failed: {ss["cots_failed"]}, '
+              f'control only: {ss["control_only_cots"]})')
+        print(f'NRU DL slots ok/failed: {ss["slots_ok"]}/{ss["slots_failed"]}')
+        print(f'NRU DL slot error rate: {(ss["slots_failed"] / n_slots) if n_slots else 0.0}')
+        print(f'NRU DL mean MCS (decoded slots): {(ss["mcs_sum"] / ss["slots_ok"]) if ss["slots_ok"] else None}')
+        print(f'NRU DL slot throughput (Mbps): {ss["bits_delivered"] / (simulation_time * 1e6)}')
+        if nru_traffic_config is not None and nru_traffic_config.mode != "saturated":
+            nru_bufs = [b for g in gnbs for b in g.dl_buffers.values()]
+            nru_dl_pkts = [p for g in gnbs for p in g.packet_log]
+            print_buffer_stats("NR-U DL Traffic", "NRU DL",
+                               summarize_buffers(nru_bufs, nru_dl_pkts, simulation_time))
+    # Rashed-Step 18.C-10-06-2026-end
 
     # Rashed-Step 18.A-10-06-2026-start
     print_error_model_stats(error_model)

@@ -380,7 +380,11 @@ class Channel:
     # bandwidth_mhz/noise_figure_db via thermal_noise_dbm()" - callers can
     # still pass an explicit noise_dbm to override (e.g. for tests that
     # want a fixed noise value).
-    def sinr_db(self, target: ActiveTx, noise_dbm: Optional[float] = None) -> float:
+    def sinr_db(self, target: ActiveTx, noise_dbm: Optional[float] = None,
+                # Rashed-Step 18.C-10-06-2026-start
+                window: Optional[Tuple[float, float]] = None,
+                # Rashed-Step 18.C-10-06-2026-end
+                ) -> float:
         """
         SINR at target.rx_pos considering only transmissions that overlap in time
         with [target.tx_start, target.t_end].
@@ -418,12 +422,17 @@ class Channel:
         i_mw = 0.0
 
         # Rashed-Step pre_18.A-10-04-2026-start
-        duration = target.t_end - target.tx_start
+        # Rashed-Step 18.C-10-06-2026-start
+        # window=(t0, t1): SINR of just that part of the target (one NR-U
+        # slot inside a longer COT burst). None = the whole target.
+        w0, w1 = (target.tx_start, target.t_end) if window is None else window
+        # Rashed-Step 18.C-10-06-2026-end
+        duration = w1 - w0
 
         def time_weight(other) -> float:
             if duration <= 0 or target.tech == "WiFi":
                 return 1.0
-            covered = min(other.t_end, target.t_end) - max(other.tx_start, target.tx_start)
+            covered = min(other.t_end, w1) - max(other.tx_start, w0)
             if covered >= duration:
                 return 1.0
             return max(0.0, covered / duration)
@@ -442,7 +451,7 @@ class Channel:
                 continue
             # Rashed-Step pre_18.F-10-06-2026-end
 
-            if not (other.tx_start < target.t_end and other.t_end > target.tx_start):
+            if not (other.tx_start < w1 and other.t_end > w0):
                 continue
 
             # Rashed-Step pre_18.A-10-04-2026-start
