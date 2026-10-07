@@ -61,10 +61,29 @@ def registration(core: Any, gnb: Any, ue: Any):
     CONNECTED. Sets reg_requested_at / registered_at timestamps."""
     env = core.env
     ue.reg_requested_at = env.now
-    yield env.timeout(core.config.registration_delay_us)
+    # Rashed-Step 19.D.2-10-07-2026-start
+    # Rejects + retries and AMF capacity (19.D.2); with the defaults this
+    # is one plain wait, as before. Returns False when the UE gives up.
+    attempts = 0
+    while True:
+        attempts += 1
+        yield from _core_procedure(core, getattr(core, "amf_slots", None),
+                                   core.config.registration_delay_us, ue, "amf_wait_us")
+        if core.config.registration_reject_prob > 0 and core.rng.random() < core.config.registration_reject_prob:
+            ue.reg_rejects = getattr(ue, "reg_rejects", 0) + 1
+            if attempts >= core.config.max_attempts:
+                ue.reg_failed_at = env.now
+                return False
+            yield env.timeout(core.config.retry_us)
+            continue
+        break
+    # Rashed-Step 19.D.2-10-07-2026-end
     core.amf.register(ue.name, gnb.name)
     ue.reg_state = RegistrationState.REGISTERED
     ue.registered_at = env.now
+    # Rashed-Step 19.D.2-10-07-2026-start
+    return True
+    # Rashed-Step 19.D.2-10-07-2026-end
 
 
 # Rashed-Step 16.C-10-02-2026-end
@@ -81,7 +100,25 @@ def pdu_session_establishment(core: Any, ue: Any):
     requested_at / activated_at are the timestamps)."""
     env = core.env
     ue.pdu_session = core.smf.request_session(ue.name, now=env.now)
-    yield env.timeout(core.config.pdu_session_delay_us)
+    # Rashed-Step 19.D.2-10-07-2026-start
+    attempts = 0
+    while True:
+        attempts += 1
+        yield from _core_procedure(core, getattr(core, "smf_slots", None),
+                                   core.config.pdu_session_delay_us, ue, "smf_wait_us")
+        if core.config.pdu_reject_prob > 0 and core.rng.random() < core.config.pdu_reject_prob:
+            ue.pdu_rejects = getattr(ue, "pdu_rejects", 0) + 1
+            core.smf.release_session(ue.name)
+            if attempts >= core.config.max_attempts:
+                ue.pdu_failed_at = env.now
+                return
+            yield env.timeout(core.config.retry_us)
+            first = ue.pdu_session.requested_at
+            ue.pdu_session = core.smf.request_session(ue.name, now=env.now)
+            ue.pdu_session.requested_at = first  # latency counts from the first request
+            continue
+        break
+    # Rashed-Step 19.D.2-10-07-2026-end
     # Rashed-Step 19.B.4-10-07-2026-start
     # With RRC reconfiguration on (the serving gNB's rrc_reconfig_us), the
     # gNB first sets up the UE's data radio bearer - RRCReconfiguration,
@@ -105,11 +142,32 @@ def pdu_session_establishment(core: Any, ue: Any):
 
 
 # Rashed-Step 16.C-10-02-2026-start
+# Rashed-Step 19.D.2-10-07-2026-start
+def _core_procedure(core: Any, slots: Any, delay_us: float, ue: Any, wait_attr: str):
+    """One Core procedure's delay. With a capacity limit (slots), it first
+    waits for a free AMF/SMF slot and holds it for service_us, which is
+    part of delay_us; the queue wait adds to the latency."""
+    env = core.env
+    if slots is None:
+        yield env.timeout(delay_us)
+        return
+    queued = env.now
+    with slots.request() as req:
+        yield req
+        setattr(ue, wait_attr, getattr(ue, wait_attr, 0.0) + env.now - queued)
+        yield env.timeout(core.config.service_us)
+    yield env.timeout(delay_us - core.config.service_us)
+
+
+# Rashed-Step 19.D.2-10-07-2026-end
 def ue_attach(core: Any, gnb: Any, ue: Any):
     """Generator - the whole per-UE Core procedure chain: RRC CONNECTED
     -> Registration (16.C) -> PDU session establishment (16.D)."""
     yield from wait_rrc_connected(ue)
-    yield from registration(core, gnb, ue)
+    # Rashed-Step 19.D.2-10-07-2026-start
+    if not (yield from registration(core, gnb, ue)):
+        return  # gave up after max_attempts rejects
+    # Rashed-Step 19.D.2-10-07-2026-end
     # Rashed-Step 16.D-10-02-2026-start
     yield from pdu_session_establishment(core, ue)
     # Rashed-Step 16.D-10-02-2026-end
@@ -212,6 +270,29 @@ def compute_core_stats(ue_list: List[Any], packets: List[Any]) -> Dict[str, Any]
     }
 
 
+# Rashed-Step 19.D.2-10-07-2026-start
+def compute_core_failure_stats(ue_list: List[Any]) -> Dict[str, Any]:
+    """Rejects, give-ups and AMF/SMF queue waits (19.D.2)."""
+    opted = [ue for ue in ue_list if getattr(ue, "reg_state", None) is not None]
+    n = len(opted)
+    return {
+        "registration_rejects": sum(getattr(ue, "reg_rejects", 0) for ue in opted),
+        "registration_failed": sum(1 for ue in opted if getattr(ue, "reg_failed_at", None) is not None),
+        "pdu_rejects": sum(getattr(ue, "pdu_rejects", 0) for ue in opted),
+        "pdu_failed": sum(1 for ue in opted if getattr(ue, "pdu_failed_at", None) is not None),
+        "mean_amf_wait_us": (sum(getattr(ue, "amf_wait_us", 0.0) for ue in opted) / n) if n else None,
+        "mean_smf_wait_us": (sum(getattr(ue, "smf_wait_us", 0.0) for ue in opted) / n) if n else None,
+    }
+
+
+def print_core_failure_stats(prefix: str, s: Dict[str, Any]) -> None:
+    print(f'{prefix} registration rejects: {s["registration_rejects"]} (gave up: {s["registration_failed"]})')
+    print(f'{prefix} PDU session rejects: {s["pdu_rejects"]} (gave up: {s["pdu_failed"]})')
+    print(f'{prefix} mean AMF queue wait (us): {s["mean_amf_wait_us"]}')
+    print(f'{prefix} mean SMF queue wait (us): {s["mean_smf_wait_us"]}')
+
+
+# Rashed-Step 19.D.2-10-07-2026-end
 def print_core_stats(title: str, prefix: str, stats: Dict[str, Any], first_packet_label: str) -> None:
     """Stdout block for a run with the Core enabled - same "label: value"
     style as the RRC Connection Setup block."""

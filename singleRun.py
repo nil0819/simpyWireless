@@ -252,6 +252,14 @@ def parse_traffic_class_mix(raw_values, label: str):
 @click.option("--rrc-reconfig", "rrc_reconfig", is_flag=True, default=False, help="RRC reconfiguration (Step 19.B.4): after the Core accepts a PDU session (and after a re-establishment), the gNB sets up the data radio bearer with RRCReconfiguration - the UE processes it (--rrc-reconfig-ms, default 10 ms, TS 38.331 clause 12) and answers RRCReconfigurationComplete - before the user plane opens. Needs the 5G Core. Default (unset) = no reconfiguration step, byte-identical.")
 @click.option("--rrc-reconfig-ms", "rrc_reconfig_ms", type=float, default=None, help="UE processing time for RRCReconfiguration (default 10 ms). Requires --rrc-reconfig.")
 # Rashed-Step 19.B.4-10-07-2026-end
+# Rashed-Step 19.D.2-10-07-2026-start
+@click.option("--core-registration-reject-prob", "core_registration_reject_prob", type=float, default=None, help="Chance a Registration Request is rejected (Step 19.D.2); the UE retries after --core-retry-ms and gives up after 5 attempts. Requires the Core. Default 0.")
+@click.option("--core-pdu-reject-prob", "core_pdu_reject_prob", type=float, default=None, help="Chance a PDU Session Establishment Request is rejected; same retry rule. Requires the Core. Default 0.")
+@click.option("--core-retry-ms", "core_retry_ms", type=float, default=None, help="Wait before retrying after a reject (default 10000 ms, T3511). Requires the Core.")
+@click.option("--core-amf-capacity", "core_amf_capacity", type=int, default=None, help="Registrations the AMF handles at once (default unlimited); each holds a slot for --core-service-ms, the rest queue. Requires the Core.")
+@click.option("--core-smf-capacity", "core_smf_capacity", type=int, default=None, help="PDU session procedures the SMF handles at once (default unlimited). Requires the Core.")
+@click.option("--core-service-ms", "core_service_ms", type=float, default=None, help="AMF/SMF processing time per procedure, part of its delay (default 10 ms). Requires the Core.")
+# Rashed-Step 19.D.2-10-07-2026-end
 # Rashed-Step 19.C-10-07-2026-start
 @click.option("--qos-flows", "qos_flows", is_flag=True, default=False, help="NR-U slots only (Step 19.C): one data radio bearer per 5QI in each UE's buffers (voice=5QI 1, video=2, best_effort=8, background=9), transport blocks filled in 5QI priority order; packets get their class from --nru-traffic-class-mix (uplink too). Prints an NR-U QoS Flows block. Default (unset) = one buffer per UE, byte-identical.")
 # Rashed-Step 19.C-10-07-2026-end
@@ -409,6 +417,14 @@ def single_run(
         rrc_reconfig_ms: float = None,
         # Rashed-Step 19.C-10-07-2026-start
         qos_flows: bool = False,
+        # Rashed-Step 19.D.2-10-07-2026-start
+        core_registration_reject_prob: float = None,
+        core_pdu_reject_prob: float = None,
+        core_retry_ms: float = None,
+        core_amf_capacity: int = None,
+        core_smf_capacity: int = None,
+        core_service_ms: float = None,
+        # Rashed-Step 19.D.2-10-07-2026-end
         # Rashed-Step 19.C-10-07-2026-end
         # Rashed-Step 19.B.4-10-07-2026-end
         # Rashed-Step 19.B.3-10-07-2026-end
@@ -534,7 +550,12 @@ def single_run(
 
     # Rashed-Step 16.F-10-02-2026-start
     try:
-        core_config = core_config_from_cli(nru_core_enabled, core_registration_delay_us, core_pdu_session_delay_us)
+        core_config = core_config_from_cli(
+            nru_core_enabled, core_registration_delay_us, core_pdu_session_delay_us,
+            registration_reject_prob=core_registration_reject_prob, pdu_reject_prob=core_pdu_reject_prob,
+            retry_us=None if core_retry_ms is None else core_retry_ms * 1000.0,
+            amf_capacity=core_amf_capacity, smf_capacity=core_smf_capacity,
+            service_us=None if core_service_ms is None else core_service_ms * 1000.0)  # 19.D.2
     except ValueError as e:
         raise click.BadParameter(str(e))
     # Rashed-Step pre_17.B-10-04-2026-start

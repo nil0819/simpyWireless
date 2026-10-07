@@ -124,6 +124,14 @@ from ran.protocol.handover import handover_config_from_cli
 @click.option("--a3-offset-db", "a3_offset_db", type=float, default=None, help="Event A3 offset (default 3 dB). Requires --handover.")
 @click.option("--ttt-ms", "ttt_ms", type=float, default=None, help="Event A3 time-to-trigger (default 160 ms). Requires --handover.")
 # Rashed-Step 19.D.1-10-07-2026-end
+# Rashed-Step 19.D.2-10-07-2026-start
+@click.option("--core-registration-reject-prob", "core_registration_reject_prob", type=float, default=None, help="Chance a Registration Request is rejected (Step 19.D.2); the UE retries after --core-retry-ms and gives up after 5 attempts. Requires the Core. Default 0.")
+@click.option("--core-pdu-reject-prob", "core_pdu_reject_prob", type=float, default=None, help="Chance a PDU Session Establishment Request is rejected; same retry rule. Requires the Core. Default 0.")
+@click.option("--core-retry-ms", "core_retry_ms", type=float, default=None, help="Wait before retrying after a reject (default 10000 ms, T3511). Requires the Core.")
+@click.option("--core-amf-capacity", "core_amf_capacity", type=int, default=None, help="Registrations the AMF handles at once (default unlimited); each holds a slot for --core-service-ms, the rest queue. Requires the Core.")
+@click.option("--core-smf-capacity", "core_smf_capacity", type=int, default=None, help="PDU session procedures the SMF handles at once (default unlimited). Requires the Core.")
+@click.option("--core-service-ms", "core_service_ms", type=float, default=None, help="AMF/SMF processing time per procedure, part of its delay (default 10 ms). Requires the Core.")
+# Rashed-Step 19.D.2-10-07-2026-end
 def single_run_nr(
         runs, seed, gnb_number, ues_per_gnb, simulation_time,
         area_w, area_h, gnb_pos, ue_radius,
@@ -161,6 +169,10 @@ def single_run_nr(
         qos_flows=False, traffic_class_mix=(),
         # Rashed-Step 19.D.1-10-07-2026-start
         handover=False, a3_offset_db=None, ttt_ms=None,
+        # Rashed-Step 19.D.2-10-07-2026-start
+        core_registration_reject_prob=None, core_pdu_reject_prob=None, core_retry_ms=None,
+        core_amf_capacity=None, core_smf_capacity=None, core_service_ms=None,
+        # Rashed-Step 19.D.2-10-07-2026-end
         # Rashed-Step 19.D.1-10-07-2026-end
         # Rashed-Step 19.C-10-07-2026-end
         # Rashed-Step 19.B.4-10-07-2026-end
@@ -184,7 +196,12 @@ def single_run_nr(
 
     # Rashed-Step 16.F-10-02-2026-start
     try:
-        core_config = core_config_from_cli(core_enabled, core_registration_delay_us, core_pdu_session_delay_us)
+        core_config = core_config_from_cli(
+            core_enabled, core_registration_delay_us, core_pdu_session_delay_us,
+            registration_reject_prob=core_registration_reject_prob, pdu_reject_prob=core_pdu_reject_prob,
+            retry_us=None if core_retry_ms is None else core_retry_ms * 1000.0,
+            amf_capacity=core_amf_capacity, smf_capacity=core_smf_capacity,
+            service_us=None if core_service_ms is None else core_service_ms * 1000.0)  # 19.D.2
     except ValueError as e:
         raise click.BadParameter(str(e))
     # Rashed-Step 16.F-10-02-2026-end

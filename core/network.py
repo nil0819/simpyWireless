@@ -55,12 +55,54 @@ class CoreConfig:
     pdu_session_delay_us: float = 125_000.0
     # Single data network name every session is established on.
     dnn: str = "internet"
+    # Rashed-Step 19.D.2-10-07-2026-start
+    # Failure modes (Step 19.D.2, TS 24.501). Defaults = never fails,
+    # unlimited capacity: exactly the earlier behavior.
+    # Chance that one Registration / PDU Session Establishment request is
+    # rejected (e.g. congestion). A rejected UE retries after retry_us
+    # (T3511 = 10 s) and gives up after max_attempts (the attempt counter's
+    # limit, 5).
+    registration_reject_prob: float = 0.0
+    pdu_reject_prob: float = 0.0
+    retry_us: float = 10_000_000.0
+    max_attempts: int = 5
+    # Overload: how many procedures the AMF / SMF handle at once (None =
+    # unlimited). Each holds a slot for service_us at the start of its
+    # normal delay; the rest queue - a signaling storm when many UEs
+    # attach together.
+    amf_capacity: Optional[int] = None
+    smf_capacity: Optional[int] = None
+    service_us: float = 10_000.0
+    
+    def __post_init__(self):
+        for name in ("registration_reject_prob", "pdu_reject_prob"):
+            v = getattr(self, name)
+            if not 0.0 <= v < 1.0:
+                raise ValueError(f"{name} must be in [0, 1) (got {v}).")
+        if self.max_attempts < 1:
+            raise ValueError(f"max_attempts must be >= 1 (got {self.max_attempts}).")
+        for name in ("amf_capacity", "smf_capacity"):
+            v = getattr(self, name)
+            if v is not None and v < 1:
+                raise ValueError(f"{name} must be >= 1 (got {v}).")
+        if self.retry_us < 0 or self.service_us < 0:
+            raise ValueError("retry_us / service_us must be >= 0.")
+        if self.service_us > min(self.registration_delay_us, self.pdu_session_delay_us) and (
+                self.amf_capacity is not None or self.smf_capacity is not None):
+            raise ValueError("service_us must not exceed the registration / PDU session delay.")
+    
+    @property
+    def failure_modes_on(self) -> bool:
+        return (self.registration_reject_prob > 0 or self.pdu_reject_prob > 0
+                or self.amf_capacity is not None or self.smf_capacity is not None)
+    # Rashed-Step 19.D.2-10-07-2026-end
 
 
 # Rashed-Step 16.F-10-02-2026-start
 def core_config_from_cli(core_enabled: bool,
                          registration_delay_us: Optional[float] = None,
-                         pdu_session_delay_us: Optional[float] = None) -> Optional["CoreConfig"]:
+                         pdu_session_delay_us: Optional[float] = None,
+                         **failure_overrides) -> Optional["CoreConfig"]:  # 19.D.2: failure_overrides
     """Shared by singleRun.py and singleRunNR.py: a CoreConfig with any
     delay overrides applied, or None when the Core is off. Raises
     ValueError (each CLI turns it into click.BadParameter) for delay
@@ -70,6 +112,11 @@ def core_config_from_cli(core_enabled: bool,
         overrides["registration_delay_us"] = registration_delay_us
     if pdu_session_delay_us is not None:
         overrides["pdu_session_delay_us"] = pdu_session_delay_us
+    # Rashed-Step 19.D.2-10-07-2026-start
+    fo = {k: v for k, v in failure_overrides.items() if v is not None}
+    if fo and not core_enabled:
+        raise ValueError("--core-* failure-mode flags only apply with the 5G Core enabled.")
+    # Rashed-Step 19.D.2-10-07-2026-end
     if not core_enabled:
         if overrides:
             raise ValueError(
@@ -81,7 +128,7 @@ def core_config_from_cli(core_enabled: bool,
     for name, value in overrides.items():
         if value < 0:
             raise ValueError(f"{name} must be >= 0 (got {value}).")
-    return CoreConfig(**overrides)
+    return CoreConfig(**overrides, **fo)  # 19.D.2: + failure-mode overrides
 # Rashed-Step 16.F-10-02-2026-end
 
 
@@ -200,9 +247,20 @@ class CoreNetwork:
     """One AMF, one SMF, and (by default) one UPF, wired together. One
     instance per orchestrator run (Step 16.txt open decision 2)."""
 
-    def __init__(self, env: Any, config: Optional[CoreConfig] = None, n_upfs: int = 1):
+    def __init__(self, env: Any, config: Optional[CoreConfig] = None, n_upfs: int = 1,
+                 seed: Optional[int] = None):  # 19.D.2: seed
         self.env = env
         self.config = config if config is not None else CoreConfig()
+        # Rashed-Step 19.D.2-10-07-2026-start
+        # Failure modes: own random stream (draws only when a reject
+        # probability is set) and AMF / SMF capacity.
+        import random as _random
+        import simpy as _simpy
+        self.rng = _random.Random((0 if seed is None else seed) + 19_002)
+        c = self.config
+        self.amf_slots = _simpy.Resource(env, capacity=c.amf_capacity) if c.amf_capacity else None
+        self.smf_slots = _simpy.Resource(env, capacity=c.smf_capacity) if c.smf_capacity else None
+        # Rashed-Step 19.D.2-10-07-2026-end
         self.amf = Amf()
         self.upfs = [Upf(f"UPF {i}") for i in range(1, n_upfs + 1)]
         self.smf = Smf(self.amf, self.upfs, dnn=self.config.dnn)

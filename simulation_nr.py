@@ -217,7 +217,7 @@ def run_simulation_licensed_nr(
     # start_ue() and ran/protocol/user_plane.py).
     core = None
     if core_enabled:
-        core = CoreNetwork(environment, core_config)
+        core = CoreNetwork(environment, core_config, seed=seed)  # 19.D.2: seed for its reject draws
         for g in gnbs:
             for ue in g.ue_list:
                 core.start_ue(g, ue)
@@ -324,6 +324,11 @@ def run_simulation_licensed_nr(
             [p for g in gnbs for p in g.packet_log],
         )
         print_core_stats("Licensed 5G NR 5G Core", "NR", nr_core_stats, "packet")
+        # Rashed-Step 19.D.2-10-07-2026-start
+        if core.config.failure_modes_on:
+            from core.procedures import compute_core_failure_stats, print_core_failure_stats
+            print_core_failure_stats("NR", compute_core_failure_stats([ue for g in gnbs for ue in g.ue_list]))
+        # Rashed-Step 19.D.2-10-07-2026-end
         # Rashed-Step 19.B.4-10-07-2026-start
         if config.rrc_reconfig_us is not None:
             from ran.protocol.rrc import compute_reconfig_stats

@@ -544,7 +544,7 @@ def run_simulation(
     # user-plane gate once, before its first packet (16.E).
     nru_core = None
     if nru_core_enabled:
-        nru_core = CoreNetwork(environment, core_config)
+        nru_core = CoreNetwork(environment, core_config, seed=seed)  # 19.D.2: seed for its reject draws
         for g in gnbs:
             for ue in g.ue_list:
                 nru_core.start_ue(g, ue)
@@ -671,6 +671,11 @@ def run_simulation(
             + [p for ue in ues for p in getattr(ue, "packet_log", [])],
         )
         print_core_stats("NR-U 5G Core", "NRU", nru_core_stats, "packet")
+        # Rashed-Step 19.D.2-10-07-2026-start
+        if nru_core.config.failure_modes_on:
+            from core.procedures import compute_core_failure_stats, print_core_failure_stats
+            print_core_failure_stats("NRU", compute_core_failure_stats(ues))
+        # Rashed-Step 19.D.2-10-07-2026-end
         # Rashed-Step 19.B.4-10-07-2026-start
         if configNr.rrc_reconfig_us is not None:
             from ran.protocol.rrc import compute_reconfig_stats
