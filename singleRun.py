@@ -14,6 +14,9 @@ from ran.protocol.l2 import l2_config_from_cli
 from ran.protocol.rach import rach_config_from_cli
 # Rashed-Step 19.B.2-10-07-2026-start
 from ran.protocol.rlm import rlm_config_from_cli
+# Rashed-Step 19.B.3-10-07-2026-start
+from ran.protocol.inactive import inactive_config_from_cli
+# Rashed-Step 19.B.3-10-07-2026-end
 # Rashed-Step 19.B.2-10-07-2026-end
 # Rashed-Step 19.A-10-07-2026-end
 # Rashed-Step 18.F-10-06-2026-end
@@ -240,6 +243,11 @@ def parse_traffic_class_mix(raw_values, label: str):
 @click.option("--t310-ms", "t310_ms", type=float, default=None, help="T310: time out of sync before a radio link failure (default 1000 ms). Requires --rlm.")
 @click.option("--t311-ms", "t311_ms", type=float, default=None, help="T311: time to find a usable cell after a radio link failure (default 1000 ms). Requires --rlm.")
 # Rashed-Step 19.B.2-10-07-2026-end
+# Rashed-Step 19.B.3-10-07-2026-start
+@click.option("--rrc-inactive", "rrc_inactive", is_flag=True, default=False, help="RRC_INACTIVE (Step 19.B.3) for RRC UEs: a UE with nothing queued either way for --inactivity-timer-ms is released to INACTIVE (context and PDU session kept, not scheduled); new uplink data resumes it at once, new downlink data at its next paging occasion; resume = random access if on + 3 RRC messages, no Core signaling. Prints an RRC Inactive stdout block. Default (unset) = UEs stay CONNECTED, byte-identical. NR-U: needs --nru-cot-model slots.")
+@click.option("--inactivity-timer-ms", "inactivity_timer_ms", type=float, default=None, help="Idle time before release to INACTIVE (default 100 ms). Requires --rrc-inactive.")
+@click.option("--paging-cycle-ms", "paging_cycle_ms", type=float, default=None, help="RAN paging cycle for downlink-triggered resume (default 320 ms). Requires --rrc-inactive.")
+# Rashed-Step 19.B.3-10-07-2026-end
 # Rashed-Step 19.B.1-10-07-2026-start
 @click.option("--nru-rrc-type1-fallback", "nru_rrc_type1_fallback", type=int, default=None, help="cot_sharing + --nru-rrc-enabled (Step 19.B.1): after this many failed Type 2A checks in a row for one RRC message, the UE sends it after its own Type 1 (Cat-4) LBT instead of waiting for more gNB COTs. Default (unset) = never fall back, byte-identical to earlier runs.")
 # Rashed-Step 19.B.1-10-07-2026-end
@@ -385,6 +393,11 @@ def single_run(
         rlm: bool = False,
         t310_ms: float = None,
         t311_ms: float = None,
+        # Rashed-Step 19.B.3-10-07-2026-start
+        rrc_inactive: bool = False,
+        inactivity_timer_ms: float = None,
+        paging_cycle_ms: float = None,
+        # Rashed-Step 19.B.3-10-07-2026-end
         # Rashed-Step 19.B.2-10-07-2026-end
         # Rashed-Step 19.B.1-10-07-2026-end
         # Rashed-Step 19.A-10-07-2026-end
@@ -573,6 +586,14 @@ def single_run(
         raise click.BadParameter(str(e))
     if rlm_config is not None and not nru_rrc_enabled:
         raise click.BadParameter("--rlm requires --nru-rrc-enabled.")
+    # Rashed-Step 19.B.3-10-07-2026-start
+    try:
+        inactive_config = inactive_config_from_cli(rrc_inactive, inactivity_timer_ms, paging_cycle_ms)
+    except ValueError as e:
+        raise click.BadParameter(str(e))
+    if inactive_config is not None and not (nru_rrc_enabled and nru_cot_model == "slots"):
+        raise click.BadParameter("--rrc-inactive needs --nru-rrc-enabled and --nru-cot-model slots.")
+    # Rashed-Step 19.B.3-10-07-2026-end
     # Rashed-Step 19.B.2-10-07-2026-end
     # Rashed-Step 19.B.1-10-07-2026-start
     if nru_rrc_type1_fallback is not None:
@@ -679,6 +700,9 @@ def single_run(
                                  rrc_type1_fallback_after=nru_rrc_type1_fallback,
                                  # Rashed-Step 19.B.2-10-07-2026-start
                                  rlm=rlm_config,
+                                 # Rashed-Step 19.B.3-10-07-2026-start
+                                 inactive=inactive_config,
+                                 # Rashed-Step 19.B.3-10-07-2026-end
                                  # Rashed-Step 19.B.2-10-07-2026-end
                                  # Rashed-Step 19.B.1-10-07-2026-end
                                  # Rashed-Step 19.A-10-07-2026-end

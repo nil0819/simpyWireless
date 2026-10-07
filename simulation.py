@@ -58,6 +58,9 @@ from ran.protocol.l2 import sum_l2_stats, print_l2_stats
 from ran.protocol.rach import compute_rach_stats, print_rach_stats
 # Rashed-Step 19.B.2-10-07-2026-start
 from ran.protocol.rlm import compute_rlf_stats, print_rlf_stats
+# Rashed-Step 19.B.3-10-07-2026-start
+from ran.protocol.inactive import compute_inactive_stats, print_inactive_stats
+# Rashed-Step 19.B.3-10-07-2026-end
 # Rashed-Step 19.B.2-10-07-2026-end
 # Rashed-Step 19.A-10-07-2026-end
 # Rashed-Step 18.F-10-06-2026-end
@@ -637,6 +640,10 @@ def run_simulation(
         # Rashed-Step 19.B.2-10-07-2026-start
         if configNr.rlm is not None:
             print_rlf_stats("NR-U Radio Link", "NRU", compute_rlf_stats(ues))
+        # Rashed-Step 19.B.3-10-07-2026-start
+        if configNr.inactive is not None:
+            print_inactive_stats("NR-U RRC Inactive", "NRU", compute_inactive_stats(ues))
+        # Rashed-Step 19.B.3-10-07-2026-end
         # Rashed-Step 19.B.2-10-07-2026-end
         # Rashed-Step 19.B.1-10-07-2026-start
         if configNr.rrc_type1_fallback_after is not None:

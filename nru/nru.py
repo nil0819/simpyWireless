@@ -53,6 +53,9 @@ from ran.protocol.l2 import L2Config, make_buffer
 from ran.protocol.rach import RachConfig, RachCell
 # Rashed-Step 19.B.2-10-07-2026-start
 from ran.protocol.rlm import RlmConfig
+# Rashed-Step 19.B.3-10-07-2026-start
+from ran.protocol.inactive import InactiveConfig
+# Rashed-Step 19.B.3-10-07-2026-end
 # Rashed-Step 19.B.2-10-07-2026-end
 # Rashed-Step 19.A-10-07-2026-end
 # Rashed-Step 18.F-10-06-2026-end
@@ -341,6 +344,11 @@ class Config_NR:
     # Radio link monitoring + RLF + re-establishment for RRC UEs
     # (ran/protocol/rlm.py). None (default) = off.
     rlm: Optional[RlmConfig] = None
+    # Rashed-Step 19.B.3-10-07-2026-start
+    # RRC_INACTIVE with resume (ran/protocol/inactive.py) for RRC UEs.
+    # Needs cot_model "slots" (per-UE buffers). None (default) = off.
+    inactive: Optional[InactiveConfig] = None
+    # Rashed-Step 19.B.3-10-07-2026-end
     # Rashed-Step 19.B.2-10-07-2026-end
     # Rashed-Step 19.A-10-07-2026-end
     # Rashed-Step 18.F-10-06-2026-end
@@ -359,6 +367,10 @@ class Config_NR:
         if self.l2 is not None and self.cot_model != "slots":
             raise ValueError("Config_NR.l2 needs cot_model=\"slots\" (the burst model has no transport blocks).")
         # Rashed-Step 19.B.1-10-07-2026-start
+        # Rashed-Step 19.B.3-10-07-2026-start
+        if self.inactive is not None and self.cot_model != "slots":
+            raise ValueError("Config_NR.inactive needs cot_model=\"slots\" (per-UE buffers).")
+        # Rashed-Step 19.B.3-10-07-2026-end
         if self.rrc_type1_fallback_after is not None and self.rrc_type1_fallback_after < 1:
             raise ValueError(f"Config_NR.rrc_type1_fallback_after must be >= 1 (got {self.rrc_type1_fallback_after})")
         # Rashed-Step 19.B.1-10-07-2026-end
@@ -533,6 +545,9 @@ class Gnb:
         # Rashed-Step 19.A-10-07-2026-start
         # Rashed-Step 19.B.2-10-07-2026-start
         self.rlm_config = config_nr.rlm
+        # Rashed-Step 19.B.3-10-07-2026-start
+        self.inactive_config = config_nr.inactive
+        # Rashed-Step 19.B.3-10-07-2026-end
         # Rashed-Step 19.B.2-10-07-2026-end
         self.rach_cell = None
         if config_nr.rach is not None:
@@ -1308,6 +1323,25 @@ class Gnb:
     # Rashed-Step 18.C-10-06-2026-end
 
     # Rashed-Step 19.B.2-10-07-2026-start
+    # Rashed-Step 19.B.3-10-07-2026-start
+    def ue_buffers(self, ue):
+        """(downlink buffer, uplink buffer) of one UE; None where absent."""
+        dl = getattr(self, "dl_buffers", None)
+        return (dl.get(ue.name) if dl else None), getattr(ue, "ul_buffer", None)
+    
+    def ue_has_pending(self, ue) -> bool:
+        """Anything queued or waiting for a HARQ retransmission, either way."""
+        for buf in self.ue_buffers(ue):
+            if buf is None:
+                continue
+            if buf.backlog_bytes > 0:
+                return True
+            entry = getattr(self, "_harq_entities", {}).get(id(buf))
+            if entry is not None and entry[1].pending() > 0:
+                return True
+        return False
+    
+    # Rashed-Step 19.B.3-10-07-2026-end
     def dl_sinr_estimate(self, ue) -> float:
         """Downlink SINR a UE measures for radio link monitoring: a probe
         of this gNB's downlink against whatever else is on the air now."""

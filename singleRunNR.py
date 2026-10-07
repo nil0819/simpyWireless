@@ -22,6 +22,9 @@ from ran.protocol.l2 import l2_config_from_cli
 from ran.protocol.rach import rach_config_from_cli
 # Rashed-Step 19.B.2-10-07-2026-start
 from ran.protocol.rlm import rlm_config_from_cli
+# Rashed-Step 19.B.3-10-07-2026-start
+from ran.protocol.inactive import inactive_config_from_cli
+# Rashed-Step 19.B.3-10-07-2026-end
 # Rashed-Step 19.B.2-10-07-2026-end
 # Rashed-Step 19.A-10-07-2026-end
 # Rashed-Step 18.F-10-06-2026-end
@@ -100,6 +103,11 @@ from ran.protocol.rlm import rlm_config_from_cli
 @click.option("--t310-ms", "t310_ms", type=float, default=None, help="T310: time out of sync before a radio link failure (default 1000 ms). Requires --rlm.")
 @click.option("--t311-ms", "t311_ms", type=float, default=None, help="T311: time to find a usable cell after a radio link failure (default 1000 ms). Requires --rlm.")
 # Rashed-Step 19.B.2-10-07-2026-end
+# Rashed-Step 19.B.3-10-07-2026-start
+@click.option("--rrc-inactive", "rrc_inactive", is_flag=True, default=False, help="RRC_INACTIVE (Step 19.B.3) for RRC UEs: a UE with nothing queued either way for --inactivity-timer-ms is released to INACTIVE (context and PDU session kept, not scheduled); new uplink data resumes it at once, new downlink data at its next paging occasion; resume = random access if on + 3 RRC messages, no Core signaling. Prints an RRC Inactive stdout block. Default (unset) = UEs stay CONNECTED, byte-identical.")
+@click.option("--inactivity-timer-ms", "inactivity_timer_ms", type=float, default=None, help="Idle time before release to INACTIVE (default 100 ms). Requires --rrc-inactive.")
+@click.option("--paging-cycle-ms", "paging_cycle_ms", type=float, default=None, help="RAN paging cycle for downlink-triggered resume (default 320 ms). Requires --rrc-inactive.")
+# Rashed-Step 19.B.3-10-07-2026-end
 def single_run_nr(
         runs, seed, gnb_number, ues_per_gnb, simulation_time,
         area_w, area_h, gnb_pos, ue_radius,
@@ -129,6 +137,9 @@ def single_run_nr(
         rach=False, prach_period_ms=None, rach_backoff_ms=None, rar_window_ms=None,
         # Rashed-Step 19.B.2-10-07-2026-start
         rlm=False, t310_ms=None, t311_ms=None,
+        # Rashed-Step 19.B.3-10-07-2026-start
+        rrc_inactive=False, inactivity_timer_ms=None, paging_cycle_ms=None,
+        # Rashed-Step 19.B.3-10-07-2026-end
         # Rashed-Step 19.B.2-10-07-2026-end
         # Rashed-Step 19.A-10-07-2026-end
         # Rashed-Step 18.F-10-06-2026-end
@@ -198,6 +209,14 @@ def single_run_nr(
         raise click.BadParameter(str(e))
     if rlm_config is not None and not rrc_enabled:
         raise click.BadParameter("--rlm requires --rrc-enabled.")
+    # Rashed-Step 19.B.3-10-07-2026-start
+    try:
+        inactive_config = inactive_config_from_cli(rrc_inactive, inactivity_timer_ms, paging_cycle_ms)
+    except ValueError as e:
+        raise click.BadParameter(str(e))
+    if inactive_config is not None and not (rrc_enabled and (dl_traffic_config is not None or ul_traffic_config is not None)):
+        raise click.BadParameter("--rrc-inactive needs --rrc-enabled and --dl-traffic or --ul-traffic poisson/cbr.")
+    # Rashed-Step 19.B.3-10-07-2026-end
     # Rashed-Step 19.B.2-10-07-2026-end
     # Rashed-Step 19.A-10-07-2026-end
     # Rashed-Step 18.F-10-06-2026-end
@@ -249,6 +268,9 @@ def single_run_nr(
         rach=rach_config,
         # Rashed-Step 19.B.2-10-07-2026-start
         rlm=rlm_config,
+        # Rashed-Step 19.B.3-10-07-2026-start
+        inactive=inactive_config,
+        # Rashed-Step 19.B.3-10-07-2026-end
         # Rashed-Step 19.B.2-10-07-2026-end
         # Rashed-Step 19.A-10-07-2026-end
         # Rashed-Step 18.F-10-06-2026-end

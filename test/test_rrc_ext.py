@@ -155,3 +155,103 @@ def test_cli_blocks_and_validation():
     assert r.exit_code == 0, (r.output, r.exception)
     assert "=== NR-U Radio Link ===" in r.output
 # Rashed-Step 19.B.2-10-07-2026-end
+
+
+# Rashed-Step 19.B.3-10-07-2026-start
+# ---------------------------------------------------------------------
+# 19.B.3 RRC_INACTIVE + resume
+# ---------------------------------------------------------------------
+from common.packet import Packet
+from ran.protocol.buffer import ByteBuffer
+from ran.protocol.inactive import InactiveConfig, compute_inactive_stats, inactive_config_from_cli, inactivity_manager
+
+
+class _BufGnb(_FakeGnb):
+    """Fake cell with a downlink and an uplink buffer for one UE; a packet
+    is 'served' (removed) by drain()."""
+
+    def __init__(self, env, script=((1e12, 10.0),)):
+        super().__init__(env, list(script))
+        self.dl, self.ul = ByteBuffer(), ByteBuffer()
+
+    def ue_buffers(self, ue):
+        return self.dl, self.ul
+
+    def ue_has_pending(self, ue):
+        return self.dl.backlog_bytes > 0 or self.ul.backlog_bytes > 0
+
+
+def _pkt(i):
+    return Packet(packet_id=str(i), source="a", destination="b", payload_bytes=100, header_bytes=0)
+
+
+def _inactive_setup(cfg=None):
+    env = simpy.Environment()
+    g, ue = _BufGnb(env), _Ue()
+    ue.rrc_state = RrcState.CONNECTED
+    env.process(inactivity_manager(g, ue, cfg or InactiveConfig(), RrcLayer()))
+    return env, g, ue
+
+
+def test_idle_ue_is_released_after_the_timer():
+    env, g, ue = _inactive_setup()
+    env.run(until=95_000)
+    assert ue.rrc_state is RrcState.CONNECTED
+    env.run(until=105_000)
+    assert ue.rrc_state is RrcState.INACTIVE and ue.rrc_releases == 1
+
+
+def test_uplink_data_resumes_at_once():
+    env, g, ue = _inactive_setup()
+    env.run(until=150_000)
+    g.ul.enqueue(_pkt(0))               # UE has something to send
+    env.run(until=160_000)
+    assert ue.rrc_state is RrcState.CONNECTED and ue.rrc_resumes == 1
+    # Resume request 1 ms + RRCResume 2 ms + complete 1 ms.
+    assert ue.rrc_resume_latencies_us == [4000.0]
+
+
+def test_downlink_data_waits_for_the_paging_occasion():
+    env, g, ue = _inactive_setup()
+    env.run(until=150_000)
+    g.dl.enqueue(_pkt(0))               # page at the next 320 ms occasion
+    env.run(until=400_000)
+    assert ue.rrc_state is RrcState.CONNECTED
+    assert ue.rrc_resume_latencies_us == [320_000.0 - 150_000.0 + 4000.0]
+
+
+def test_pending_data_keeps_the_ue_connected():
+    env, g, ue = _inactive_setup()
+    g.dl.enqueue(_pkt(0))               # never served by the fake cell
+    env.run(until=1_000_000)
+    assert ue.rrc_state is RrcState.CONNECTED and ue.rrc_releases == 0
+
+
+def test_rlm_pauses_while_inactive():
+    env = simpy.Environment()
+    g, ue = _BufGnb(env, [(1e12, -30.0)]), _Ue()   # terrible link throughout
+    ue.rrc_state = RrcState.CONNECTED
+    env.process(inactivity_manager(g, ue, InactiveConfig(inactivity_timer_us=10_000.0), RrcLayer()))
+    env.process(radio_link_monitor(g, ue, RlmConfig(t310_us=50_000.0), RrcLayer()))
+    env.run(until=3_000_000)
+    # Released after ~10 ms, long before T310 could expire; no RLF while INACTIVE.
+    assert ue.rrc_state is RrcState.INACTIVE and ue.rlf_count == 0
+
+
+def test_inactive_config_cli_and_licensed_run():
+    assert inactive_config_from_cli(False, None, None) is None
+    assert inactive_config_from_cli(True, 50.0, 160.0) == InactiveConfig(50_000.0, 160_000.0)
+    _expect_value_error(lambda: inactive_config_from_cli(False, 50.0, None), "require --rrc-inactive")
+    nr = ["--gnb-number", "1", "--ues-per-gnb", "2", "--seed", "2", "-t", "2",
+          "--tdd-enabled", "--ue-uplink-enabled", "--rrc-enabled", "--rrc-inactive"]
+    r = _cli(single_run_nr, nr + ["--dl-traffic", "poisson", "--dl-arrival-rate-pps", "5"])
+    assert r.exit_code == 0, (r.output, r.exception)
+    rel = int(re.search(r"NR RRC releases to INACTIVE: (\d+)", r.output).group(1))
+    res = int(re.search(r"NR RRC resumes: (\d+)", r.output).group(1))
+    assert rel > 0 and res > 0 and rel - res <= 2
+    r = _cli(single_run_nr, nr)
+    assert r.exit_code != 0 and "--rrc-inactive needs" in r.output
+    r = _cli(single_run, ["--ap-number", "0", "--gnb-number", "1", "-t", "0.05", "-r", "1",
+                          "--nru-ue-uplink-enabled", "--nru-rrc-enabled", "--rrc-inactive"])
+    assert r.exit_code != 0 and "--nru-cot-model slots" in r.output
+# Rashed-Step 19.B.3-10-07-2026-end

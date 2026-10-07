@@ -36,6 +36,9 @@ from ran.protocol.l2 import L2Config, make_buffer
 from ran.protocol.rach import RachConfig, RachCell
 # Rashed-Step 19.B.2-10-07-2026-start
 from ran.protocol.rlm import RlmConfig
+# Rashed-Step 19.B.3-10-07-2026-start
+from ran.protocol.inactive import InactiveConfig
+# Rashed-Step 19.B.3-10-07-2026-end
 # Rashed-Step 19.B.2-10-07-2026-end
 # Rashed-Step 19.A-10-07-2026-end
 # Rashed-Step 18.F-10-06-2026-end
@@ -311,6 +314,11 @@ class Config_NRL:
     # Radio link monitoring + RLF + re-establishment for RRC UEs
     # (ran/protocol/rlm.py). None (default) = off.
     rlm: Optional[RlmConfig] = None
+    # Rashed-Step 19.B.3-10-07-2026-start
+    # RRC_INACTIVE with resume (ran/protocol/inactive.py) for RRC UEs.
+    # Needs buffered traffic. None (default) = UEs stay CONNECTED.
+    inactive: Optional[InactiveConfig] = None
+    # Rashed-Step 19.B.3-10-07-2026-end
     # Rashed-Step 19.B.2-10-07-2026-end
     # Rashed-Step 19.A-10-07-2026-end
     # Rashed-Step 18.F-10-06-2026-end
@@ -370,6 +378,11 @@ class GnbLicensedNR:
         # Rashed-Step 19.A-10-07-2026-start
         # Rashed-Step 19.B.2-10-07-2026-start
         self.rlm_config = config.rlm
+        # Rashed-Step 19.B.3-10-07-2026-start
+        if config.inactive is not None and config.dl_traffic is None and config.ul_traffic is None:
+            raise ValueError("Config_NRL.inactive needs buffered traffic (dl_traffic and/or ul_traffic).")
+        self.inactive_config = config.inactive
+        # Rashed-Step 19.B.3-10-07-2026-end
         # Rashed-Step 19.B.2-10-07-2026-end
         self.rach_cell = None
         if config.rach is not None:
@@ -527,6 +540,25 @@ class GnbLicensedNR:
         # Rashed-Step 15.E-09-18-2026-end
 
     # Rashed-Step 19.B.2-10-07-2026-start
+    # Rashed-Step 19.B.3-10-07-2026-start
+    def ue_buffers(self, ue):
+        """(downlink buffer, uplink buffer) of one UE; None where absent."""
+        dl = getattr(self, "dl_buffers", None)
+        return (dl.get(ue.name) if dl else None), getattr(ue, "ul_buffer", None)
+    
+    def ue_has_pending(self, ue) -> bool:
+        """Anything queued or waiting for a HARQ retransmission, either way."""
+        for buf in self.ue_buffers(ue):
+            if buf is None:
+                continue
+            if buf.backlog_bytes > 0:
+                return True
+            entry = getattr(self, "_harq_entities", {}).get(id(buf))
+            if entry is not None and entry[1].pending() > 0:
+                return True
+        return False
+    
+    # Rashed-Step 19.B.3-10-07-2026-end
     def dl_sinr_estimate(self, ue) -> float:
         """Downlink SINR a UE measures for radio link monitoring."""
         return self._trial_sinr_db(ue)

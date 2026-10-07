@@ -78,6 +78,17 @@ def radio_link_monitor(gnb: Any, ue: Any, cfg: RlmConfig, rrc_layer: Any):
     while True:
         yield env.timeout(cfg.period_us)
         now = env.now
+        # Rashed-Step 19.B.3-10-07-2026-start
+        # Radio link monitoring is a CONNECTED-state procedure: nothing
+        # while the UE is INACTIVE (19.B.3) or resuming.
+        if ue.rrc_state is not RrcState.CONNECTED:
+            if ue.rrc_state is RrcState.IDLE:
+                return
+            samples.clear()
+            oos = ins = 0
+            t310_started = None
+            continue
+        # Rashed-Step 19.B.3-10-07-2026-end
         sinr_db = gnb.dl_sinr_estimate(ue)
         samples.append((now, 10.0 ** (sinr_db / 10.0)))
         while samples and samples[0][0] <= now - keep_us:

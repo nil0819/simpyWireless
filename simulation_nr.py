@@ -39,6 +39,9 @@ from ran.protocol.l2 import sum_l2_stats, print_l2_stats
 from ran.protocol.rach import compute_rach_stats, print_rach_stats
 # Rashed-Step 19.B.2-10-07-2026-start
 from ran.protocol.rlm import compute_rlf_stats, print_rlf_stats
+# Rashed-Step 19.B.3-10-07-2026-start
+from ran.protocol.inactive import compute_inactive_stats, print_inactive_stats
+# Rashed-Step 19.B.3-10-07-2026-end
 # Rashed-Step 19.B.2-10-07-2026-end
 # Rashed-Step 19.A-10-07-2026-end
 # Rashed-Step 18.F-10-06-2026-end
@@ -283,6 +286,12 @@ def run_simulation_licensed_nr(
     if config.rlm is not None:
         nr_rlf_stats = compute_rlf_stats([ue for g in gnbs for ue in g.ue_list])
         print_rlf_stats("Licensed 5G NR Radio Link", "NR", nr_rlf_stats)
+    # Rashed-Step 19.B.3-10-07-2026-start
+    nr_inactive_stats = None
+    if config.inactive is not None:
+        nr_inactive_stats = compute_inactive_stats([ue for g in gnbs for ue in g.ue_list])
+        print_inactive_stats("Licensed 5G NR RRC Inactive", "NR", nr_inactive_stats)
+    # Rashed-Step 19.B.3-10-07-2026-end
     # Rashed-Step 19.B.2-10-07-2026-end
     # Rashed-Step 19.A-10-07-2026-end
     # Rashed-Step 15.G-09-18-2026-end
@@ -364,6 +373,9 @@ def run_simulation_licensed_nr(
         # Rashed-Step 19.B.2-10-07-2026-start
         # None unless config.rlm.
         "rlf_stats": nr_rlf_stats,
+        # Rashed-Step 19.B.3-10-07-2026-start
+        "inactive_stats": nr_inactive_stats,
+        # Rashed-Step 19.B.3-10-07-2026-end
         # Rashed-Step 19.B.2-10-07-2026-end
         # Rashed-Step 19.A-10-07-2026-end
         # Rashed-Step 15.G-09-18-2026-end

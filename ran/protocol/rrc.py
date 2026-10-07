@@ -52,6 +52,10 @@ class RrcState(Enum):
     IDLE = "idle"
     CONNECTING = "connecting"
     CONNECTED = "connected"
+    # Rashed-Step 19.B.3-10-07-2026-start
+    # Released with suspend (19.B.3): context kept, not scheduled.
+    INACTIVE = "inactive"
+    # Rashed-Step 19.B.3-10-07-2026-end
 
 
 class RrcLayer:
@@ -144,6 +148,12 @@ class RrcLayer:
         if rlm_cfg is not None:
             from ran.protocol.rlm import radio_link_monitor
             gnb.env.process(radio_link_monitor(gnb, ue, rlm_cfg, self))
+        # Rashed-Step 19.B.3-10-07-2026-start
+        inactive_cfg = getattr(gnb, "inactive_config", None)
+        if inactive_cfg is not None:
+            from ran.protocol.inactive import inactivity_manager
+            gnb.env.process(inactivity_manager(gnb, ue, inactive_cfg, self))
+        # Rashed-Step 19.B.3-10-07-2026-end
         # Rashed-Step 19.B.2-10-07-2026-end
         # Rashed-Step 15.G-09-18-2026-end
 # Rashed-Step 15.F-09-18-2026-end
