@@ -20,6 +20,9 @@ from common.error_model import decode_ok
 from wifi import mac as wifi_mac
 # Rashed-Step 20.B-10-08-2026-start
 from wifi import ampdu as wifi_ampdu
+# Rashed-Step 20.C-10-08-2026-start
+from wifi import phy as wifi_phy
+# Rashed-Step 20.C-10-08-2026-end
 import simpy
 # Rashed-Step 20.B-10-08-2026-end
 # Rashed-Step 20.A-10-08-2026-end
@@ -146,7 +149,7 @@ class WiFiSTA:
             raise ValueError(f"WiFiSTA: unknown traffic_config.mode {self.traffic_config.mode!r}")
         # Rashed-Step 20.B-10-08-2026-end
         self.col = random.choice(colors)
-        self.times = Times(self.config.data_size, self.config.mcs)
+        self.times = wifi_phy.make_times(self.config, self.config.data_size, self.config.mcs)  # 20.C
         self.cw_min = self.config.cw_min
         self.cw_max = self.config.cw_max
         self.failed_transmissions_in_row = 0
@@ -255,7 +258,7 @@ class WiFiSTA:
     def required_sinr_db(self) -> float:
         if self.config.wifi_sinr_thr_db_override is not None:
             return self.config.wifi_sinr_thr_db_override
-        return mcs_sinr_threshold_db(WIFI_MCS_SINR_THRESHOLDS_DB, self.config.mcs)
+        return mcs_sinr_threshold_db(wifi_phy.sinr_table(self.config), self.config.mcs)  # 20.C
 
     def generate_new_frame(self, packet: Packet) -> Frame:
         frame_length = self.times.get_ppdu_frame_time(packet.payload_bytes)

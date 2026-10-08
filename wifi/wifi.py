@@ -26,6 +26,9 @@ from common.error_model import decode_ok
 from wifi import mac as wifi_mac
 # Rashed-Step 20.B-10-08-2026-start
 from wifi import ampdu as wifi_ampdu
+# Rashed-Step 20.C-10-08-2026-start
+from wifi import phy as wifi_phy
+# Rashed-Step 20.C-10-08-2026-end
 # Rashed-Step 20.B-10-08-2026-end
 # Rashed-Step 20.A-10-08-2026-end
 # Rashed-Step 18.A-10-06-2026-end
@@ -87,6 +90,20 @@ class Config:
     # every earlier run.
     mac_exchange: bool = False
     rts_threshold_bytes: Optional[int] = None
+    # Rashed-Step 20.C-10-08-2026-start
+    # 802.11n/ac/ax PHY (Step 20.C, wifi/phy.py): "legacy" (default) = the
+    # 802.11a table in Times.py, every earlier run; "ht" / "vht" / "he" with
+    # channel_width_mhz (also sets bandwidth_mhz: noise, sensing,
+    # interference) and guard_interval_ns. One spatial stream.
+    phy: str = "legacy"
+    channel_width_mhz: int = 20
+    guard_interval_ns: int = 800
+
+    def __post_init__(self):
+        if self.phy != "legacy":
+            wifi_phy.validate(self.phy, self.channel_width_mhz, self.mcs, self.guard_interval_ns)
+            self.bandwidth_mhz = float(self.channel_width_mhz)
+    # Rashed-Step 20.C-10-08-2026-end
     # Rashed-Step 20.A-10-08-2026-end
     # Rashed-Step pre_20.A-10-08-2026-end
     # Rashed-Step 3.A-01-12-2026-end
@@ -285,7 +302,7 @@ class WiFi:
             # Rashed-Step 8.B-08-06-2026-end
     ):
         self.config = config
-        self.times = Times(config.data_size, config.mcs)  # using Times script to get time calculations
+        self.times = wifi_phy.make_times(config, config.data_size, config.mcs)  # 20.C: = Times(...) for legacy
         # Rashed-Step 11.A-08-21-2026-start
         # Per-STA rate-adaptation state (see Config.rate_adapt_enabled).
         # Keyed by STA name, lazily populated on first use - empty dict
@@ -1353,7 +1370,7 @@ class WiFi:
         # _refresh_ac_frame()), so no separate EDCA-specific fix needed.
         if self.config.rate_adapt_enabled:
             current_mcs = self.current_mcs_for_link(self.rate_adapt_link_key())
-            frame_length = Times(payload_bytes, current_mcs).get_ppdu_frame_time(payload_bytes)
+            frame_length = wifi_phy.make_times(self.config, payload_bytes, current_mcs).get_ppdu_frame_time(payload_bytes)  # 20.C
         else:
             frame_length = self.times.get_ppdu_frame_time(payload_bytes)
         # Rashed-Step 11.A-08-21-2026-end
@@ -1413,7 +1430,7 @@ class WiFi:
         # Rashed-Step 11.A-08-21-2026-start
         mcs = self.current_mcs_for_link(self.rate_adapt_link_key())
         # Rashed-Step 11.A-08-21-2026-end
-        return mcs_sinr_threshold_db(WIFI_MCS_SINR_THRESHOLDS_DB, mcs)
+        return mcs_sinr_threshold_db(wifi_phy.sinr_table(self.config), mcs)  # 20.C: per-PHY table
     # Rashed-Step 5.D-02-06-2026-end
 
     # Rashed-Step 11.A-08-21-2026-start
@@ -1470,13 +1487,13 @@ class WiFi:
             # Rashed-Step 13.E.1-fix-08-23-2026-start
             if len(history) >= predictor.lag_k and len(set(history[-predictor.lag_k:])) > 1:
                 predicted = predictor.predict_next(history, technology_is_wifi=1)
-                return self._select_mcs_for_sinr(predicted)
+                return self._select_mcs_for_sinr(predicted, wifi_phy.sinr_table(self.config))  # 20.C
             # Rashed-Step 13.E.1-fix-08-23-2026-end
         # Rashed-Step 13.E.1-08-23-2026-end
         return state["mcs"] if state is not None else self.config.mcs
 
     @staticmethod
-    def _select_mcs_for_sinr(sinr_db: float) -> int:
+    def _select_mcs_for_sinr(sinr_db: float, table=None) -> int:  # 20.C: table (None = legacy)
         """
         Rashed-Step 13.E.1: CQI-style direct selection, same shape as
         nru.py's Gnb._select_mcs_for_sinr() - the HIGHEST mcs in
@@ -1484,9 +1501,10 @@ class WiFi:
         sinr_db. Falls back to the table's lowest mcs if even that
         isn't met.
         """
-        candidates = [mcs for mcs, thr in WIFI_MCS_SINR_THRESHOLDS_DB.items() if thr <= sinr_db]
+        table = WIFI_MCS_SINR_THRESHOLDS_DB if table is None else table
+        candidates = [mcs for mcs, thr in table.items() if thr <= sinr_db]
         if not candidates:
-            return min(WIFI_MCS_SINR_THRESHOLDS_DB.keys())
+            return min(table.keys())
         return max(candidates)
 
     def rate_adapt_record_result(self, link_key: Optional[str], success: bool, measured_sinr_db: Optional[float] = None) -> None:
@@ -1506,8 +1524,8 @@ class WiFi:
         """
         if not self.config.rate_adapt_enabled or link_key is None:
             return
-        min_mcs = min(WIFI_MCS_SINR_THRESHOLDS_DB.keys())
-        max_mcs = max(WIFI_MCS_SINR_THRESHOLDS_DB.keys())
+        min_mcs = min(wifi_phy.sinr_table(self.config).keys())  # 20.C: per-PHY range
+        max_mcs = max(wifi_phy.sinr_table(self.config).keys())
         state = self.link_rate_state.setdefault(
             link_key, {"mcs": self.config.mcs, "succ_streak": 0, "fail_streak": 0}
         )

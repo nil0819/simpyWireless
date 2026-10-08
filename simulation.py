@@ -884,6 +884,13 @@ def run_simulation(
         print(f'Wifi A-MPDU MPDU success ratio: {(a["mpdus_ok"] / a["mpdus"]) if a["mpdus"] else None}')
     # Rashed-Step pre_20.B-10-08-2026-end
     # Rashed-Step 20.A-10-08-2026-start
+    # Rashed-Step 20.C-10-08-2026-start
+    if getattr(config, "phy", "legacy") != "legacy" and wifi_aps:
+        from wifi.phy import rate_mbps
+        print("=== Wi-Fi PHY ===")
+        print(f"Wifi PHY: {config.phy.upper()} {config.channel_width_mhz} MHz, MCS {config.mcs}, GI {config.guard_interval_ns} ns, "
+              f"1 stream -> {rate_mbps(config.phy, config.channel_width_mhz, config.mcs, config.guard_interval_ns):.1f} Mbps")
+    # Rashed-Step 20.C-10-08-2026-end
     if getattr(config, "mac_exchange", False) and wifi_aps:
         nodes = list(wifi_aps) + [s for s in wifi_stas if hasattr(s, "mac_stats")]
         m = {k: sum(n.mac_stats[k] for n in nodes) for k in nodes[0].mac_stats}

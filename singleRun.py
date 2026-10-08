@@ -313,6 +313,11 @@ def parse_traffic_class_mix(raw_values, label: str):
 @click.option("--wifi-sta-traffic-model", "wifi_sta_traffic_model", type=click.Choice(["saturated", "poisson", "cbr"]), default="saturated", help="Wi-Fi STA uplink traffic (Step 20.B; with --wifi-sta-uplink-enabled): saturated (default, as before) or poisson/cbr arrivals into a per-STA queue at --wifi-sta-arrival-rate-pps.")
 @click.option("--wifi-sta-arrival-rate-pps", "wifi_sta_arrival_rate_pps", type=float, default=100.0, help="Per-STA uplink arrival rate (packets/s) for --wifi-sta-traffic-model poisson/cbr (Step 20.B).")
 # Rashed-Step 20.B-10-08-2026-end
+# Rashed-Step 20.C-10-08-2026-start
+@click.option("--wifi-phy", "wifi_phy", type=click.Choice(["legacy", "ht", "vht", "he"]), default="legacy", help="Wi-Fi PHY (Step 20.C): legacy 802.11a (default, as before), ht (802.11n, MCS 0-7, 20/40 MHz), vht (802.11ac, MCS 0-9, 20-160 MHz), he (802.11ax, MCS 0-11, 20-160 MHz). One spatial stream; -m sets the MCS. Prints a Wi-Fi PHY block.")
+@click.option("--wifi-channel-width", "wifi_channel_width", type=click.Choice(["20", "40", "80", "160"]), default="20", help="Wi-Fi channel width in MHz for --wifi-phy ht/vht/he (Step 20.C); sets the noise bandwidth too.")
+@click.option("--wifi-gi", "wifi_gi", type=click.Choice(["400", "800", "1600", "3200"]), default="800", help="Guard interval in ns for --wifi-phy ht/vht (400/800) or he (800/1600/3200) (Step 20.C).")
+# Rashed-Step 20.C-10-08-2026-end
 @click.option("--wifi-preamble-detect", "wifi_preamble_detect", is_flag=True, default=False, help="802.11 preamble detection (Step pre_20.A): Wi-Fi defers to Wi-Fi frames from -82 dBm and to other signals (NR-U, licensed NR) from its -62 dBm energy-detection threshold - the asymmetry behind LAA coexistence. Default (unset) = one -62 dBm rule for everything, byte-identical.")
 @click.option("--fairness-report", "fairness_report", is_flag=True, default=False, help="Print a Coexistence Fairness block (Step pre_20.A): per technology the share of airtime it occupied (failed transmissions included), transmissions and their failure ratio, throughput and latency, and Jain's index over the airtime shares. Default (unset) = not printed.")
 # Rashed-Step pre_20.A-10-08-2026-end
@@ -488,6 +493,7 @@ def single_run(
         nru_wifi_reservation: Optional[str] = None,  # pre_20.D.3
         nru_ref_nack_threshold: float = 0.8, nru_adaptive_cot: bool = False,  # pre_20.D.4
         wifi_mac_exchange: bool = False, wifi_rts_threshold: Optional[int] = None,  # 20.A
+        wifi_phy: str = "legacy", wifi_channel_width: str = "20", wifi_gi: str = "800",  # 20.C
         wifi_sta_traffic_model: str = "saturated", wifi_sta_arrival_rate_pps: float = 100.0,  # 20.B
         # Rashed-Step pre_20.A-10-08-2026-end
         # Rashed-Step 19.F-10-07-2026-end
@@ -654,6 +660,16 @@ def single_run(
         raise click.BadParameter("--nru-wifi-reservation needs --wifi-preamble-detect (Wi-Fi only decodes the preamble / CTS with it).")
     # Rashed-Step pre_20.D.4-10-08-2026-start
     # Rashed-Step 20.A-10-08-2026-start
+    # Rashed-Step 20.C-10-08-2026-start
+    if wifi_phy != "legacy":
+        from wifi.phy import validate as _validate_phy
+        try:
+            _validate_phy(wifi_phy, int(wifi_channel_width), mcs_value, int(wifi_gi))
+        except ValueError as e:
+            raise click.BadParameter(str(e))
+    elif wifi_channel_width != "20" or wifi_gi != "800":
+        raise click.BadParameter("--wifi-channel-width / --wifi-gi need --wifi-phy ht, vht or he.")
+    # Rashed-Step 20.C-10-08-2026-end
     if wifi_rts_threshold is not None and not wifi_mac_exchange:
         raise click.BadParameter("--wifi-rts-threshold needs --wifi-mac-exchange.")
     # Rashed-Step 20.A-10-08-2026-end
@@ -839,6 +855,7 @@ def single_run(
                               preamble_detect_dbm=-82.0 if wifi_preamble_detect else None,  # pre_20.A
                               ampdu_max_mpdus=wifi_ampdu, ampdu_max_ppdu_us=wifi_max_ppdu_us,  # pre_20.B
                               mac_exchange=wifi_mac_exchange, rts_threshold_bytes=wifi_rts_threshold,  # 20.A
+                              phy=wifi_phy, channel_width_mhz=int(wifi_channel_width), guard_interval_ns=int(wifi_gi),  # 20.C
                               # Rashed-Step 5.D-02-06-2026-start
                               wifi_sinr_thr_db_override=wifi_sinr_thr_db_override,
                               # Rashed-Step 5.D-02-06-2026-end

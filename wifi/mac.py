@@ -52,7 +52,8 @@ EIFS_US = SIFS_US + ctrl_frame_us(ACK_BYTES, 6) + Times.t_difs   # 16 + 44 + 34 
 
 
 def ctrl_rate(node) -> int:
-    return MCS[node.config.mcs][1]
+    from wifi.phy import ctrl_rate_mbps        # 20.C: HT/VHT/HE control responses stay non-HT
+    return ctrl_rate_mbps(node.config)
 
 
 def new_stats():

@@ -15,6 +15,7 @@ from channel.channel import ActiveTx
 from common.error_model import decode_ok
 from Times import Times
 from wifi import mac as wifi_mac
+from wifi import phy as wifi_phy  # 20.C
 
 AMPDU_DELIMITER_BITS = 32
 # 802.11 default EDCA TXOP limits for the OFDM PHY (us); 0 = one PPDU per
@@ -30,7 +31,8 @@ def times_for(node):
     """(PHY header us, us per MPDU of payload_bytes) at the node's current MCS."""
     t = node.times
     if getattr(node.config, "rate_adapt_enabled", False) and hasattr(node, "current_mcs_for_link"):
-        t = Times(node.config.data_size, node.current_mcs_for_link(node.rate_adapt_link_key()))
+        t = wifi_phy.make_times(node.config, node.config.data_size,
+                                node.current_mcs_for_link(node.rate_adapt_link_key()))  # 20.C
     header_us = t.ofdm_preamble + t.ofdm_signal
     per_mpdu = lambda payload: (Times.mac_overhead + payload * 8 + AMPDU_DELIMITER_BITS) / t.data_rate
     return header_us, per_mpdu
