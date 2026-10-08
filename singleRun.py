@@ -266,6 +266,25 @@ def parse_traffic_class_mix(raw_values, label: str):
 # Rashed-Step 19.B.1-10-07-2026-start
 @click.option("--nru-rrc-type1-fallback", "nru_rrc_type1_fallback", type=int, default=None, help="cot_sharing + --nru-rrc-enabled (Step 19.B.1): after this many failed Type 2A checks in a row for one RRC message, the UE sends it after its own Type 1 (Cat-4) LBT instead of waiting for more gNB COTs. Default (unset) = never fall back, byte-identical to earlier runs.")
 # Rashed-Step 19.B.1-10-07-2026-end
+# Rashed-Step 19.E.2-10-07-2026-start
+@click.option("--nr-gnb-number", "nr_gnb_number", type=int, default=0, help="Licensed 5G NR cells in the same run (Step 19.E): same environment and channel as Wi-Fi/NR-U, in their own band (--nr-f-ghz, default 3.5 GHz), same 5G Core (--nru-core-enabled covers every UE). Shared flags apply to them where valid: --error-model; --harq / --rlc-mode with --nr-dl-traffic/--nr-ul-traffic; --rach / --rlm / --rrc-reconfig with --nr-rrc-enabled; --nr-handover. Prints the licensed-NR blocks too. Default 0 = none, byte-identical.")
+@click.option("--nr-ues-per-gnb", "nr_ues_per_gnb", type=int, default=4, help="UEs per licensed gNB (default 4).")
+@click.option("--nr-ue-radius", "nr_ue_radius", type=float, default=50.0, help="Licensed UEs are placed within this radius (m) of their gNB (default 50).")
+@click.option("--nr-colocated", "nr_colocated", is_flag=True, default=False, help="Put licensed gNB i on NR-U gNB i's site (needs --nr-gnb-number <= --gnb-number).")
+@click.option("--nr-f-ghz", "nr_f_ghz", type=float, default=3.5, help="Licensed NR carrier (GHz, default 3.5 = its own band; 5.18 puts it on the Wi-Fi/NR-U channel, with no LBT).")
+@click.option("--nr-bandwidth-mhz", "nr_bandwidth_mhz", type=float, default=100.0, help="Licensed NR bandwidth (default 100 MHz).")
+@click.option("--nr-numerology", "nr_numerology", type=int, default=1, help="Licensed NR numerology mu (default 1).")
+@click.option("--nr-tx-power-dbm", "nr_tx_power_dbm", type=float, default=30.0, help="Licensed gNB tx power (default 30 dBm).")
+@click.option("--nr-scheduler", "nr_scheduler", type=click.Choice(["round_robin", "proportional_fair"]), default="round_robin", help="Licensed NR scheduler.")
+@click.option("--nr-tdd", "nr_tdd", is_flag=True, default=False, help="Licensed NR TDD (DDDU) - needed for licensed uplink.")
+@click.option("--nr-ue-uplink-enabled", "nr_ue_uplink_enabled", is_flag=True, default=False, help="Licensed NR uplink (needs --nr-tdd).")
+@click.option("--nr-rrc-enabled", "nr_rrc_enabled", is_flag=True, default=False, help="RRC for licensed UEs (needs --nr-ue-uplink-enabled).")
+@click.option("--nr-dl-traffic", "nr_dl_traffic", type=click.Choice(["full_buffer", "poisson", "cbr"]), default="full_buffer", help="Licensed downlink traffic per UE (default full buffer).")
+@click.option("--nr-dl-arrival-rate-pps", "nr_dl_arrival_rate_pps", type=float, default=None, help="Licensed downlink packets/s per UE (default 100).")
+@click.option("--nr-ul-traffic", "nr_ul_traffic", type=click.Choice(["full_buffer", "poisson", "cbr"]), default="full_buffer", help="Licensed uplink traffic per UE (needs --nr-ue-uplink-enabled).")
+@click.option("--nr-ul-arrival-rate-pps", "nr_ul_arrival_rate_pps", type=float, default=None, help="Licensed uplink packets/s per UE (default 100).")
+@click.option("--nr-handover", "nr_handover", is_flag=True, default=False, help="A3 handover between the licensed cells (needs --nr-rrc-enabled).")
+# Rashed-Step 19.E.2-10-07-2026-end
 @click.option("--nru-buffer-limit-bytes", "nru_buffer_limit_bytes", type=int, default=None, help="slots only: drop-tail limit of each per-UE downlink buffer (default unbounded).")
 # Rashed-Step 18.C-10-06-2026-end
 
@@ -417,6 +436,15 @@ def single_run(
         rrc_reconfig_ms: float = None,
         # Rashed-Step 19.C-10-07-2026-start
         qos_flows: bool = False,
+        # Rashed-Step 19.E.2-10-07-2026-start
+        nr_gnb_number: int = 0, nr_ues_per_gnb: int = 4, nr_ue_radius: float = 50.0,
+        nr_colocated: bool = False, nr_f_ghz: float = 3.5, nr_bandwidth_mhz: float = 100.0,
+        nr_numerology: int = 1, nr_tx_power_dbm: float = 30.0, nr_scheduler: str = "round_robin",
+        nr_tdd: bool = False, nr_ue_uplink_enabled: bool = False, nr_rrc_enabled: bool = False,
+        nr_dl_traffic: str = "full_buffer", nr_dl_arrival_rate_pps: float = None,
+        nr_ul_traffic: str = "full_buffer", nr_ul_arrival_rate_pps: float = None,
+        nr_handover: bool = False,
+        # Rashed-Step 19.E.2-10-07-2026-end
         # Rashed-Step 19.D.2-10-07-2026-start
         core_registration_reject_prob: float = None,
         core_pdu_reject_prob: float = None,
@@ -588,6 +616,34 @@ def single_run(
         nru_ul_traffic = TrafficConfig(mode=nru_ul_traffic_model,
                                        arrival_rate_pps=100.0 if nru_ul_arrival_rate_pps is None else nru_ul_arrival_rate_pps)
     # Rashed-Step 18.D-10-06-2026-end
+    # Rashed-Step 19.E.2-10-07-2026-start
+    # Licensed cells (19.E): checked first, because the shared flags
+    # below may be valid for them even when NR-U doesn't qualify.
+    from ran.protocol.buffer import traffic_configs_from_cli
+    nr_on = nr_gnb_number > 0
+    nr_flags = (nr_colocated or nr_tdd or nr_ue_uplink_enabled or nr_rrc_enabled or nr_handover
+                or nr_dl_traffic != "full_buffer" or nr_ul_traffic != "full_buffer")
+    if nr_gnb_number < 0:
+        raise click.BadParameter("--nr-gnb-number must be >= 0.")
+    if nr_flags and not nr_on:
+        raise click.BadParameter("--nr-* options need --nr-gnb-number >= 1.")
+    if nr_colocated and nr_gnb_number > gnb_number:
+        raise click.BadParameter("--nr-colocated needs --nr-gnb-number <= --gnb-number.")
+    if nr_ue_uplink_enabled and not nr_tdd:
+        raise click.BadParameter("--nr-ue-uplink-enabled needs --nr-tdd.")
+    if nr_rrc_enabled and not nr_ue_uplink_enabled:
+        raise click.BadParameter("--nr-rrc-enabled needs --nr-ue-uplink-enabled.")
+    if nr_handover and not nr_rrc_enabled:
+        raise click.BadParameter("--nr-handover needs --nr-rrc-enabled.")
+    try:
+        nr_dl_cfg, nr_ul_cfg = traffic_configs_from_cli(nr_dl_traffic, nr_dl_arrival_rate_pps, nr_ul_traffic,
+                                                        nr_ul_arrival_rate_pps, None, None, nr_ue_uplink_enabled)
+    except ValueError as e:
+        raise click.BadParameter(str(e).replace("--dl-", "--nr-dl-").replace("--ul-", "--nr-ul-"))
+    nr_buffered = nr_on and (nr_dl_cfg is not None or nr_ul_cfg is not None)
+    nr_rrc = nr_on and nr_rrc_enabled
+    nru_slots = nru_cot_model == "slots"
+    # Rashed-Step 19.E.2-10-07-2026-end
     # Rashed-Step 18.E-10-06-2026-start
     try:
         harq_config = harq_config_from_cli(harq, harq_max_tx, harq_rtt_slots)
@@ -595,8 +651,9 @@ def single_run(
         raise click.BadParameter(str(e))
     # Rashed-Step 18.E-10-06-2026-end
     # Rashed-Step 18.E-10-06-2026-start
-    if harq_config is not None and nru_cot_model != "slots":
-        raise click.BadParameter("--harq needs --nru-cot-model slots (the burst model has no transport blocks).")
+    if harq_config is not None and not nru_slots and not nr_buffered:  # 19.E: or licensed buffered
+        raise click.BadParameter("--harq needs --nru-cot-model slots (the burst model has no transport blocks) "
+                                 "or licensed cells with --nr-dl-traffic / --nr-ul-traffic.")
     # Rashed-Step 18.F-10-06-2026-start
     try:
         l2_config = l2_config_from_cli(rlc_mode, None if pdcp_sn_bits is None else int(pdcp_sn_bits),
@@ -605,28 +662,28 @@ def single_run(
         raise click.BadParameter(str(e))
     # Rashed-Step 18.F-10-06-2026-end
     # Rashed-Step 18.F-10-06-2026-start
-    if l2_config is not None and nru_cot_model != "slots":
+    if l2_config is not None and not nru_slots and not nr_buffered:  # 19.E: or licensed buffered
         raise click.BadParameter("--rlc-mode needs --nru-cot-model slots (the burst model has no transport blocks).")
     # Rashed-Step 19.A-10-07-2026-start
     try:
         rach_config = rach_config_from_cli(rach, prach_period_ms, rach_backoff_ms, rar_window_ms)
     except ValueError as e:
         raise click.BadParameter(str(e))
-    if rach_config is not None and not nru_rrc_enabled:
+    if rach_config is not None and not nru_rrc_enabled and not nr_rrc:  # 19.E: or licensed RRC
         raise click.BadParameter("--rach requires --nru-rrc-enabled (random access starts the RRC attach).")
     # Rashed-Step 19.B.2-10-07-2026-start
     try:
         rlm_config = rlm_config_from_cli(rlm, t310_ms, t311_ms)
     except ValueError as e:
         raise click.BadParameter(str(e))
-    if rlm_config is not None and not nru_rrc_enabled:
+    if rlm_config is not None and not nru_rrc_enabled and not nr_rrc:  # 19.E: or licensed RRC
         raise click.BadParameter("--rlm requires --nru-rrc-enabled.")
     # Rashed-Step 19.B.3-10-07-2026-start
     try:
         inactive_config = inactive_config_from_cli(rrc_inactive, inactivity_timer_ms, paging_cycle_ms)
     except ValueError as e:
         raise click.BadParameter(str(e))
-    if inactive_config is not None and not (nru_rrc_enabled and nru_cot_model == "slots"):
+    if inactive_config is not None and not (nru_rrc_enabled and nru_slots) and not (nr_rrc and nr_buffered):  # 19.E
         raise click.BadParameter("--rrc-inactive needs --nru-rrc-enabled and --nru-cot-model slots.")
     # Rashed-Step 19.B.4-10-07-2026-start
     if rrc_reconfig_ms is not None and not rrc_reconfig:
@@ -683,6 +740,23 @@ def single_run(
     )
     # Rashed-Step 8.B-08-06-2026-end
 
+    # Rashed-Step 19.E.2-10-07-2026-start
+    nr_config = None
+    if nr_on:
+        from ran.protocol.handover import HandoverConfig
+        nr_config = Config_NRL(
+            numerology=nr_numerology, bandwidth_mhz=nr_bandwidth_mhz, scheduler=nr_scheduler,
+            tx_power_dbm=nr_tx_power_dbm, f_ghz=nr_f_ghz * 1e9, tdd_enabled=nr_tdd,
+            dl_traffic=nr_dl_cfg, ul_traffic=nr_ul_cfg,
+            harq=harq_config if nr_buffered else None,
+            l2=l2_config if nr_buffered else None,
+            rach=rach_config if nr_rrc else None,
+            rlm=rlm_config if nr_rrc else None,
+            inactive=inactive_config if (nr_rrc and nr_buffered) else None,
+            rrc_reconfig_us=rrc_reconfig_us if nr_rrc else None,
+            handover=HandoverConfig() if nr_handover else None,
+        )
+    # Rashed-Step 19.E.2-10-07-2026-end
     for i in range(0, runs):
         curr_seed = seed + i
         print("before simulation")
@@ -739,9 +813,9 @@ def single_run(
                                  # Rashed-Step 18.D-10-06-2026-start
                                  ul_traffic=nru_ul_traffic,
                                  # Rashed-Step 18.E-10-06-2026-start
-                                 harq=harq_config,
+                                 harq=harq_config if nru_slots else None,  # 19.E: may be for licensed only
                                  # Rashed-Step 18.F-10-06-2026-start
-                                 l2=l2_config,
+                                 l2=l2_config if nru_slots else None,  # 19.E
                                  # Rashed-Step 19.A-10-07-2026-start
                                  rach=rach_config,
                                  # Rashed-Step 19.B.1-10-07-2026-start
@@ -749,7 +823,7 @@ def single_run(
                                  # Rashed-Step 19.B.2-10-07-2026-start
                                  rlm=rlm_config,
                                  # Rashed-Step 19.B.3-10-07-2026-start
-                                 inactive=inactive_config,
+                                 inactive=inactive_config if nru_slots else None,  # 19.E
                                  # Rashed-Step 19.B.4-10-07-2026-start
                                  rrc_reconfig_us=rrc_reconfig_us,
                                  # Rashed-Step 19.C-10-07-2026-start
@@ -808,6 +882,11 @@ def single_run(
                        # Rashed-Step 18.A-10-06-2026-start
                        error_model_config=error_model_config,
                        # Rashed-Step 18.A-10-06-2026-end
+                       # Rashed-Step 19.E.2-10-07-2026-start
+                       nr_gnb_number=nr_gnb_number, nr_config=nr_config, nr_licensed_ues_per_gnb=nr_ues_per_gnb,
+                       nr_ue_radius=nr_ue_radius, nr_colocated=nr_colocated,
+                       nr_ue_uplink_enabled=nr_ue_uplink_enabled, nr_rrc_enabled=nr_rrc_enabled,
+                       # Rashed-Step 19.E.2-10-07-2026-end
                        # Rashed-Step 16.F-10-02-2026-end
                        )
 

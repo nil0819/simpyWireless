@@ -1,5 +1,9 @@
 from common.common import *
 from nru.ue import NrUE
+# Rashed-Step 19.E.2-10-07-2026-start
+from nr.nr import Config_NRL
+from simulation_nr import build_licensed_nr_cells, print_licensed_nr_topology, report_licensed_nr
+# Rashed-Step 19.E.2-10-07-2026-end
 from wifi.wifi import *
 from nru.nru import *
 from channel.channel import *
@@ -208,6 +212,20 @@ def run_simulation(
         # SINR-threshold rule, byte-identical to every earlier run.
         error_model_config: Optional[ErrorModelConfig] = None,
         # Rashed-Step 18.A-10-06-2026-end
+        # Rashed-Step 19.E.2-10-07-2026-start
+        # Licensed-NR cells in the same run (Step 19.E): same environment and
+        # channel (their own band by default, 3.5 GHz - no interference with
+        # 5 GHz), same 5G Core as the NR-U UEs. 0 (default) = none,
+        # byte-identical to earlier runs. nr_colocated: licensed gNB i sits on
+        # NR-U gNB i's site (the anchor for 19.F's NR-U secondary cell).
+        nr_gnb_number: int = 0,
+        nr_config: Optional[Config_NRL] = None,
+        nr_licensed_ues_per_gnb: int = 4,
+        nr_ue_radius: float = 50.0,
+        nr_colocated: bool = False,
+        nr_ue_uplink_enabled: bool = False,
+        nr_rrc_enabled: bool = False,
+        # Rashed-Step 19.E.2-10-07-2026-end
 ):
     random.seed(seed)
     environment = simpy.Environment()
@@ -542,12 +560,31 @@ def run_simulation(
     # Rashed-Step 16.F-10-02-2026-start
     # Must happen before environment.run(): NR-U's uplink checks the
     # user-plane gate once, before its first packet (16.E).
+    # Rashed-Step 19.E.2-10-07-2026-start
+    nr_gnbs = []
+    if nr_gnb_number > 0:
+        nr_cfg = nr_config if nr_config is not None else Config_NRL(f_ghz=3.5e9)
+        if error_model is not None:
+            nr_cfg = _dc_replace(nr_cfg, error_model=error_model)
+        nr_positions = [g.pos for g in gnbs[:nr_gnb_number]] if nr_colocated else None
+        nr_gnbs = build_licensed_nr_cells(environment, channel, nr_gnb_number, nr_cfg, area_w, area_h,
+                                          nr_positions, nr_ue_radius, nr_licensed_ues_per_gnb, 0.0,
+                                          ue_mobility_speed_mps, mobility_pause_s,
+                                          nr_ue_uplink_enabled, nr_rrc_enabled)
+        print_licensed_nr_topology(nr_gnbs, nr_cfg)
+    # Rashed-Step 19.E.2-10-07-2026-end
     nru_core = None
     if nru_core_enabled:
         nru_core = CoreNetwork(environment, core_config, seed=seed)  # 19.D.2: seed for its reject draws
         for g in gnbs:
             for ue in g.ue_list:
                 nru_core.start_ue(g, ue)
+        # Rashed-Step 19.E.2-10-07-2026-start
+        # 19.E.3: one Core for every UE in the run - licensed ones too.
+        for g in nr_gnbs:
+            for ue in g.ue_list:
+                nru_core.start_ue(g, ue)
+        # Rashed-Step 19.E.2-10-07-2026-end
     # Rashed-Step 16.F-10-02-2026-end
 
     # environment.run(until=simulation_time * 1000000) 10^6 milisekundy
@@ -556,6 +593,10 @@ def run_simulation(
     for g in gnbs:
         if hasattr(g, "flush_buffer_logs"):
             g.flush_buffer_logs()
+    # Rashed-Step 19.E.2-10-07-2026-start
+    for g in nr_gnbs:
+        g.flush_buffer_logs()
+    # Rashed-Step 19.E.2-10-07-2026-end
     # Rashed-Step 18.C-10-06-2026-end
 
     # Rashed-Step 6.E-08-05-2026-start
@@ -783,6 +824,12 @@ def run_simulation(
                                summarize_buffers(nru_bufs, nru_dl_pkts, simulation_time))
     # Rashed-Step 18.C-10-06-2026-end
 
+    # Rashed-Step 19.E.2-10-07-2026-start
+    if nr_gnbs:
+        report_licensed_nr(nr_gnbs, nr_gnbs[0].config, simulation_time, environment,
+                           nr_ue_uplink_enabled, nru_core)
+    
+    # Rashed-Step 19.E.2-10-07-2026-end
     # Rashed-Step 18.A-10-06-2026-start
     print_error_model_stats(error_model)
     # Rashed-Step 18.A-10-06-2026-end

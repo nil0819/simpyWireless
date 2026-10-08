@@ -83,74 +83,16 @@ def parse_pos_list_nr(raw_values, label: str):
     return positions
 
 
-def run_simulation_licensed_nr(
-        number_of_gnb: int,
-        seed: int,
-        simulation_time: float,
-        config: Config_NRL,
-        area_w: float = 100.0,
-        area_h: float = 100.0,
-        gnb_positions: Optional[List[Pos]] = None,
-        ue_radius: float = 200.0,
-        nr_ues_per_gnb: int = 4,
-        gnb_mobility_speed_mps: float = 0.0,
-        ue_mobility_speed_mps: float = 0.0,
-        mobility_pause_s: float = 0.0,
-        # Rashed-Step 13.E.3-08-23-2026-start
-        export_packets_csv_path: Optional[str] = None,
-        # Rashed-Step 13.E.3-08-23-2026-end
-        # Rashed-Step 15.G-09-18-2026-start
-        # Opt-in licensed-NR uplink (Step 15.E) + generic RRC attach
-        # (Step 15.F) for every UE this function constructs - False
-        # (default, both) means every NrUeLicensed(...) built below
-        # gets neither kwarg set, byte-identical to every pre-15.E run.
-        # nr_rrc_enabled=True requires nr_ue_uplink_enabled=True too
-        # (NrUeLicensed.__post_init__'s own fail-fast validation), not
-        # duplicated here - the ValueError surfaces naturally.
-        nr_ue_uplink_enabled: bool = False,
-        nr_rrc_enabled: bool = False,
-        # Rashed-Step 15.G-09-18-2026-end
-        # Rashed-Step 16.F-10-02-2026-start
-        # Opt-in minimal 5G Core (Step 16): every UE is handed to one
-        # CoreNetwork at setup -> registration -> PDU session, and the
-        # gNB only carries its data once the session is ACTIVE (16.E).
-        # Works with or without RRC. core_config=None means CoreConfig()
-        # defaults. False (default) = no Core object at all,
-        # byte-identical to every pre-16.F run.
-        core_enabled: bool = False,
-        core_config: Optional[CoreConfig] = None,
-        # Rashed-Step 16.F-10-02-2026-end
-        # Rashed-Step 18.A-10-06-2026-start
-        # Link error model for every gNB/UE in this run. None (default)
-        # = the hard per-MCS threshold rule, byte-identical to earlier runs.
-        error_model_config: Optional[ErrorModelConfig] = None,
-        # Rashed-Step 18.A-10-06-2026-end
-):
-    random.seed(seed)
-    # Rashed-Step 18.A-10-06-2026-start
-    error_model = make_error_model(error_model_config, seed)
-    if error_model is not None:
-        config = _dc_replace(config, error_model=error_model)
-    # Rashed-Step 18.A-10-06-2026-end
-    environment = simpy.Environment()
-
-    # Channel() needs tx_queue/tx_lock for backward compatibility with
-    # the WiFi/NR-U path's constructor signature, even though licensed
-    # NR never touches either (no LBT, see nr/nr.py) - just needs
-    # *something* simpy.Environment-bound to seed self.env in
-    # __post_init__.
-    channel = Channel(
-        simpy.PriorityResource(environment, capacity=1),
-        simpy.Resource(environment, capacity=1),
-        0,  # n_of_stations - no WiFi in this standalone scenario
-        number_of_gnb,
-        {},  # backoffs - unused (no contention/backoff in licensed NR)
-        {},  # airtime_data - unused (WiFi)
-        {},  # airtime_control - unused (WiFi)
-        {},  # airtime_data_NR - unused (NR-U)
-        {},  # airtime_control_NR - unused (NR-U)
-    )
-
+# Rashed-Step 19.E.1-10-07-2026-start
+# Licensed-NR building blocks shared by this standalone orchestrator and the
+# unified coexistence run (simulation.py, 19.E.2): moved here verbatim from
+# run_simulation_licensed_nr, so the random draws and output are unchanged.
+def build_licensed_nr_cells(environment, channel, number_of_gnb: int, config: Config_NRL,
+                            area_w: float, area_h: float, gnb_positions: Optional[List[Pos]],
+                            ue_radius: float, nr_ues_per_gnb: int, gnb_mobility_speed_mps: float,
+                            ue_mobility_speed_mps: float, mobility_pause_s: float,
+                            nr_ue_uplink_enabled: bool, nr_rrc_enabled: bool) -> list:
+    """Licensed-NR gNBs with their UEs on `channel`; neighbors wired."""
     gnbs = []
     for i in range(1, number_of_gnb + 1):
         gnb_name = f"GnbNR {i}"
@@ -201,6 +143,10 @@ def run_simulation_licensed_nr(
     for g in gnbs:
         g.neighbors = [o for o in gnbs if o is not g]
     # Rashed-Step 19.D.1-10-07-2026-end
+    return gnbs
+
+
+def print_licensed_nr_topology(gnbs: list, config: Config_NRL) -> None:
     print("=== Licensed 5G NR Topology ===")
     scs_khz = NUMEROLOGY_SCS_KHZ[config.numerology]
     slot_us = slot_duration_us(config.numerology)
@@ -212,23 +158,10 @@ def run_simulation_licensed_nr(
         for ue in g.ue_list:
             print("  ", ue.name, ue.pos, "d=", dist(g.pos, ue.pos))
 
-    # Rashed-Step 16.F-10-02-2026-start
-    # Must happen before environment.run() (see core/network.py's
-    # start_ue() and ran/protocol/user_plane.py).
-    core = None
-    if core_enabled:
-        core = CoreNetwork(environment, core_config, seed=seed)  # 19.D.2: seed for its reject draws
-        for g in gnbs:
-            for ue in g.ue_list:
-                core.start_ue(g, ue)
-    # Rashed-Step 16.F-10-02-2026-end
 
-    environment.run(until=simulation_time * 1_000_000)
-    # Rashed-Step 18.B-10-06-2026-start
-    for g in gnbs:
-        g.flush_buffer_logs()
-    # Rashed-Step 18.B-10-06-2026-end
-
+def report_licensed_nr(gnbs: list, config: Config_NRL, simulation_time: float, environment,
+                       nr_ue_uplink_enabled: bool, core) -> dict:
+    """Every licensed-NR results block (stdout) and the numbers behind them."""
     print("=== Licensed 5G NR Results ===")
     total_succ = 0
     total_fail = 0
@@ -375,6 +308,115 @@ def run_simulation_licensed_nr(
         # Rashed-Step 18.F-10-06-2026-end
         # Rashed-Step 18.E-10-06-2026-end
     # Rashed-Step 18.B-10-06-2026-end
+    return {"total_succ": total_succ, "total_fail": total_fail,
+            "overall_success_rate": overall_success_rate, "overall_thr_mbps": overall_thr_mbps,
+            "ul_thr_mbps": ul_thr_mbps, "rrc": nr_rrc_stats, "rach": nr_rach_stats,
+            "rlf": nr_rlf_stats, "inactive": nr_inactive_stats, "handover": nr_ho_stats,
+            "core": nr_core_stats, "traffic": traffic_stats}
+# Rashed-Step 19.E.1-10-07-2026-end
+
+
+def run_simulation_licensed_nr(
+        number_of_gnb: int,
+        seed: int,
+        simulation_time: float,
+        config: Config_NRL,
+        area_w: float = 100.0,
+        area_h: float = 100.0,
+        gnb_positions: Optional[List[Pos]] = None,
+        ue_radius: float = 200.0,
+        nr_ues_per_gnb: int = 4,
+        gnb_mobility_speed_mps: float = 0.0,
+        ue_mobility_speed_mps: float = 0.0,
+        mobility_pause_s: float = 0.0,
+        # Rashed-Step 13.E.3-08-23-2026-start
+        export_packets_csv_path: Optional[str] = None,
+        # Rashed-Step 13.E.3-08-23-2026-end
+        # Rashed-Step 15.G-09-18-2026-start
+        # Opt-in licensed-NR uplink (Step 15.E) + generic RRC attach
+        # (Step 15.F) for every UE this function constructs - False
+        # (default, both) means every NrUeLicensed(...) built below
+        # gets neither kwarg set, byte-identical to every pre-15.E run.
+        # nr_rrc_enabled=True requires nr_ue_uplink_enabled=True too
+        # (NrUeLicensed.__post_init__'s own fail-fast validation), not
+        # duplicated here - the ValueError surfaces naturally.
+        nr_ue_uplink_enabled: bool = False,
+        nr_rrc_enabled: bool = False,
+        # Rashed-Step 15.G-09-18-2026-end
+        # Rashed-Step 16.F-10-02-2026-start
+        # Opt-in minimal 5G Core (Step 16): every UE is handed to one
+        # CoreNetwork at setup -> registration -> PDU session, and the
+        # gNB only carries its data once the session is ACTIVE (16.E).
+        # Works with or without RRC. core_config=None means CoreConfig()
+        # defaults. False (default) = no Core object at all,
+        # byte-identical to every pre-16.F run.
+        core_enabled: bool = False,
+        core_config: Optional[CoreConfig] = None,
+        # Rashed-Step 16.F-10-02-2026-end
+        # Rashed-Step 18.A-10-06-2026-start
+        # Link error model for every gNB/UE in this run. None (default)
+        # = the hard per-MCS threshold rule, byte-identical to earlier runs.
+        error_model_config: Optional[ErrorModelConfig] = None,
+        # Rashed-Step 18.A-10-06-2026-end
+):
+    random.seed(seed)
+    # Rashed-Step 18.A-10-06-2026-start
+    error_model = make_error_model(error_model_config, seed)
+    if error_model is not None:
+        config = _dc_replace(config, error_model=error_model)
+    # Rashed-Step 18.A-10-06-2026-end
+    environment = simpy.Environment()
+
+    # Channel() needs tx_queue/tx_lock for backward compatibility with
+    # the WiFi/NR-U path's constructor signature, even though licensed
+    # NR never touches either (no LBT, see nr/nr.py) - just needs
+    # *something* simpy.Environment-bound to seed self.env in
+    # __post_init__.
+    channel = Channel(
+        simpy.PriorityResource(environment, capacity=1),
+        simpy.Resource(environment, capacity=1),
+        0,  # n_of_stations - no WiFi in this standalone scenario
+        number_of_gnb,
+        {},  # backoffs - unused (no contention/backoff in licensed NR)
+        {},  # airtime_data - unused (WiFi)
+        {},  # airtime_control - unused (WiFi)
+        {},  # airtime_data_NR - unused (NR-U)
+        {},  # airtime_control_NR - unused (NR-U)
+    )
+
+    # Rashed-Step 19.E.1-10-07-2026-start
+    gnbs = build_licensed_nr_cells(environment, channel, number_of_gnb, config, area_w, area_h,
+                                   gnb_positions, ue_radius, nr_ues_per_gnb, gnb_mobility_speed_mps,
+                                   ue_mobility_speed_mps, mobility_pause_s, nr_ue_uplink_enabled,
+                                   nr_rrc_enabled)
+    print_licensed_nr_topology(gnbs, config)
+    # Rashed-Step 19.E.1-10-07-2026-end
+
+    # Rashed-Step 16.F-10-02-2026-start
+    # Must happen before environment.run() (see core/network.py's
+    # start_ue() and ran/protocol/user_plane.py).
+    core = None
+    if core_enabled:
+        core = CoreNetwork(environment, core_config, seed=seed)  # 19.D.2: seed for its reject draws
+        for g in gnbs:
+            for ue in g.ue_list:
+                core.start_ue(g, ue)
+    # Rashed-Step 16.F-10-02-2026-end
+
+    environment.run(until=simulation_time * 1_000_000)
+    # Rashed-Step 18.B-10-06-2026-start
+    for g in gnbs:
+        g.flush_buffer_logs()
+    # Rashed-Step 18.B-10-06-2026-end
+
+    # Rashed-Step 19.E.1-10-07-2026-start
+    rep = report_licensed_nr(gnbs, config, simulation_time, environment, nr_ue_uplink_enabled, core)
+    total_succ, total_fail = rep["total_succ"], rep["total_fail"]
+    overall_success_rate, overall_thr_mbps = rep["overall_success_rate"], rep["overall_thr_mbps"]
+    ul_thr_mbps, nr_rrc_stats, nr_rach_stats = rep["ul_thr_mbps"], rep["rrc"], rep["rach"]
+    nr_rlf_stats, nr_inactive_stats, nr_ho_stats = rep["rlf"], rep["inactive"], rep["handover"]
+    nr_core_stats, traffic_stats = rep["core"], rep["traffic"]
+    # Rashed-Step 19.E.1-10-07-2026-end
 
     # Rashed-Step 18.A-10-06-2026-start
     print_error_model_stats(error_model)
