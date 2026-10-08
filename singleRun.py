@@ -283,6 +283,9 @@ def parse_traffic_class_mix(raw_values, label: str):
 @click.option("--nr-dl-arrival-rate-pps", "nr_dl_arrival_rate_pps", type=float, default=None, help="Licensed downlink packets/s per UE (default 100).")
 @click.option("--nr-ul-traffic", "nr_ul_traffic", type=click.Choice(["full_buffer", "poisson", "cbr"]), default="full_buffer", help="Licensed uplink traffic per UE (needs --nr-ue-uplink-enabled).")
 @click.option("--nr-ul-arrival-rate-pps", "nr_ul_arrival_rate_pps", type=float, default=None, help="Licensed uplink packets/s per UE (default 100).")
+# Rashed-Step 19.F-10-07-2026-start
+@click.option("--nru-scell", "nru_scell", is_flag=True, default=False, help="NR-U as a secondary cell (Step 19.F, LAA-anchored carrier aggregation): every licensed UE also gets an NR-U SCell on the co-located NR-U gNB - one downlink queue served by both carriers, RRC/Core/uplink on the licensed PCell, SCell active only while the UE is connected to that anchor. Needs --nr-colocated, --nr-dl-traffic poisson/cbr, --nru-cot-model slots and no --nru-ue-uplink-enabled (LAA's uplink is licensed). Prints an 'NR-U SCell (LAA)' block.")
+# Rashed-Step 19.F-10-07-2026-end
 @click.option("--nr-handover", "nr_handover", is_flag=True, default=False, help="A3 handover between the licensed cells (needs --nr-rrc-enabled).")
 # Rashed-Step 19.E.2-10-07-2026-end
 @click.option("--nru-buffer-limit-bytes", "nru_buffer_limit_bytes", type=int, default=None, help="slots only: drop-tail limit of each per-UE downlink buffer (default unbounded).")
@@ -444,6 +447,9 @@ def single_run(
         nr_dl_traffic: str = "full_buffer", nr_dl_arrival_rate_pps: float = None,
         nr_ul_traffic: str = "full_buffer", nr_ul_arrival_rate_pps: float = None,
         nr_handover: bool = False,
+        # Rashed-Step 19.F-10-07-2026-start
+        nru_scell: bool = False,
+        # Rashed-Step 19.F-10-07-2026-end
         # Rashed-Step 19.E.2-10-07-2026-end
         # Rashed-Step 19.D.2-10-07-2026-start
         core_registration_reject_prob: float = None,
@@ -643,6 +649,17 @@ def single_run(
     nr_buffered = nr_on and (nr_dl_cfg is not None or nr_ul_cfg is not None)
     nr_rrc = nr_on and nr_rrc_enabled
     nru_slots = nru_cot_model == "slots"
+    # Rashed-Step 19.F-10-07-2026-start
+    if nru_scell:
+        if not (nr_on and nr_colocated):
+            raise click.BadParameter("--nru-scell needs co-located licensed cells (--nr-gnb-number, --nr-colocated).")
+        if nr_dl_cfg is None:
+            raise click.BadParameter("--nru-scell needs --nr-dl-traffic poisson or cbr (the shared downlink queue).")
+        if not nru_slots:
+            raise click.BadParameter("--nru-scell needs --nru-cot-model slots.")
+        if nru_ue_uplink_enabled:
+            raise click.BadParameter("--nru-scell: LAA's uplink is on the licensed PCell - drop --nru-ue-uplink-enabled.")
+    # Rashed-Step 19.F-10-07-2026-end
     # Rashed-Step 19.E.2-10-07-2026-end
     # Rashed-Step 18.E-10-06-2026-start
     try:
@@ -828,6 +845,10 @@ def single_run(
                                  rrc_reconfig_us=rrc_reconfig_us,
                                  # Rashed-Step 19.C-10-07-2026-start
                                  qos_flows=qos_flows,
+                                 # Rashed-Step 19.F-10-07-2026-start
+                                 deployment_mode=NruDeploymentMode.LAA_ANCHORED if nru_scell
+                                 else NruDeploymentMode.STANDALONE_MULTIFIRE,
+                                 # Rashed-Step 19.F-10-07-2026-end
                                  # Rashed-Step 19.C-10-07-2026-end
                                  # Rashed-Step 19.B.4-10-07-2026-end
                                  # Rashed-Step 19.B.3-10-07-2026-end
@@ -886,6 +907,7 @@ def single_run(
                        nr_gnb_number=nr_gnb_number, nr_config=nr_config, nr_licensed_ues_per_gnb=nr_ues_per_gnb,
                        nr_ue_radius=nr_ue_radius, nr_colocated=nr_colocated,
                        nr_ue_uplink_enabled=nr_ue_uplink_enabled, nr_rrc_enabled=nr_rrc_enabled,
+                       nru_scell=nru_scell,  # 19.F
                        # Rashed-Step 19.E.2-10-07-2026-end
                        # Rashed-Step 16.F-10-02-2026-end
                        )

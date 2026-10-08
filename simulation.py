@@ -226,6 +226,11 @@ def run_simulation(
         nr_ue_uplink_enabled: bool = False,
         nr_rrc_enabled: bool = False,
         # Rashed-Step 19.E.2-10-07-2026-end
+        # Rashed-Step 19.F-10-07-2026-start
+        # NR-U as a secondary cell for the licensed UEs (ran/protocol/scell.py):
+        # needs co-located licensed cells with buffered downlink and NR-U slots.
+        nru_scell: bool = False,
+        # Rashed-Step 19.F-10-07-2026-end
 ):
     random.seed(seed)
     environment = simpy.Environment()
@@ -572,6 +577,12 @@ def run_simulation(
                                           ue_mobility_speed_mps, mobility_pause_s,
                                           nr_ue_uplink_enabled, nr_rrc_enabled)
         print_licensed_nr_topology(nr_gnbs, nr_cfg)
+        # Rashed-Step 19.F-10-07-2026-start
+        scell_legs = []
+        if nru_scell:
+            from ran.protocol.scell import attach_scells
+            scell_legs = attach_scells(nr_gnbs, gnbs[:len(nr_gnbs)])
+        # Rashed-Step 19.F-10-07-2026-end
     # Rashed-Step 19.E.2-10-07-2026-end
     nru_core = None
     if nru_core_enabled:
@@ -828,6 +839,11 @@ def run_simulation(
     if nr_gnbs:
         report_licensed_nr(nr_gnbs, nr_gnbs[0].config, simulation_time, environment,
                            nr_ue_uplink_enabled, nru_core)
+        # Rashed-Step 19.F-10-07-2026-start
+        if scell_legs:
+            from ran.protocol.scell import print_scell_stats
+            print_scell_stats(nr_gnbs, gnbs[:len(nr_gnbs)], scell_legs, simulation_time)
+        # Rashed-Step 19.F-10-07-2026-end
     
     # Rashed-Step 19.E.2-10-07-2026-end
     # Rashed-Step 18.A-10-06-2026-start

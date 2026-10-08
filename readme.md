@@ -59,6 +59,13 @@ ran/protocol/buffer.py          - per-UE byte buffers and traffic arrivals
 ran/protocol/harq.py            - HARQ processes with chase combining
 ran/protocol/l2.py              - PDCP (SN, headers, in-order delivery) +
                                    RLC UM/AM (segmentation headers, ARQ)
+ran/protocol/rach.py            - 4-step random access (Step 19.A)
+ran/protocol/rlm.py             - radio link monitoring, RLF, re-establishment
+ran/protocol/inactive.py        - RRC_INACTIVE with resume
+ran/protocol/drb.py             - one DRB per QoS flow, priority-ordered TBs
+ran/protocol/handover.py        - measurements, event A3, Xn handover
+ran/protocol/scell.py           - NR-U secondary cell (LAA carrier aggregation)
+common/qos.py                   - 5QI table, class -> 5QI -> Wi-Fi AC mapping
 core/network.py                 - minimal 5G Core: Amf, Smf, Upf,
                                    CoreNetwork, CoreConfig
 core/procedures.py              - registration + PDU session procedures and
@@ -253,6 +260,32 @@ python singleRunGeneric.py --ap-number 1 --gnb-number 1 --generic-number 2 -t 0.
 python singleRunNR.py --gnb-number 1 --ues-per-gnb 3 -t 0.1 --rate-adapt --rate-adapt-ml-model ml/data/sinr_model.joblib --export-packets-csv nr_packets.csv
 ```
 
+### 5G control plane, mobility and the unified run (Step 19)
+
+All opt-in; every default run is unchanged.
+
+| Feature | Flags | What it does |
+|---|---|---|
+| Random access | `--rach` (+ `--prach-period-ms`, `--rach-backoff-ms`, `--rar-window-ms`) | 4-step RACH before RRC: PRACH occasions every 10 ms, 64 preambles, power ramping, RAR, contention resolution; a UE that runs out of preambles goes back to IDLE (NR-U: Msg1 after a channel check, RAR rides a gNB COT) |
+| RRC Type 1 fallback | `--nru-rrc-type1-fallback N` | NR-U, COT sharing: after N failed Type 2A checks an RRC message goes out after the UE's own Cat-4 LBT (hidden-node attach: 212 -> 51 ms) |
+| Radio link failure | `--rlm` (+ `--t310-ms`, `--t311-ms`) | Qout/Qin monitoring, T310, radio link failure, RRC re-establishment at the best cell, or IDLE |
+| RRC_INACTIVE | `--rrc-inactive` (+ `--inactivity-timer-ms`, `--paging-cycle-ms`) | idle UEs suspended; uplink data resumes at once, downlink data at the next paging occasion; no Core signaling |
+| RRC reconfiguration | `--rrc-reconfig` (+ `--rrc-reconfig-ms`) | data radio bearer set up (10 ms UE processing) before the user plane opens, and after a re-establishment |
+| QoS flows / 5QI | `--qos-flows`, `--traffic-class-mix` | one DRB per 5QI (voice 1, video 2, best effort 8, background 9 - the same classes as Wi-Fi's access categories), transport blocks filled in priority order |
+| Handover | `--handover` (licensed NR; `--nr-handover` in the unified run, + `--a3-offset-db`, `--ttt-ms`) | L3-filtered RSRP, event A3 with time-to-trigger, Xn preparation, HO command, execution, random access at the target; interruption and ping-pongs reported |
+| Core failure modes | `--core-registration-reject-prob`, `--core-pdu-reject-prob`, `--core-retry-ms`, `--core-amf-capacity`, `--core-smf-capacity`, `--core-service-ms` | rejects with retries and give-up (TS 24.501), AMF/SMF capacity limits (signaling storms queue) |
+| Unified run | `singleRun.py --nr-gnb-number N` (+ `--nr-colocated`, `--nr-f-ghz`, `--nr-*`) | licensed-NR cells in the same run as Wi-Fi and NR-U - same channel (own band, 3.5 GHz, by default), one 5G Core for every UE |
+| NR-U secondary cell | `--nru-scell` | LAA-anchored carrier aggregation: each licensed UE gets an NR-U SCell on the co-located NR-U gNB; one downlink queue served by both carriers, control plane and uplink on the licensed PCell |
+
+Examples:
+
+```bash
+python singleRunNR.py --gnb-number 2 --ues-per-gnb 4 --gnb-pos 300,500 --gnb-pos 900,500 --area-w 1200 --area-h 1000 --ue-radius 150 --ue-mobility-speed-mps 20 --seed 3 -t 30 --tdd-enabled --ue-uplink-enabled --rrc-enabled --dl-traffic poisson --dl-arrival-rate-pps 200 --rach --rlm --handover
+python singleRun.py --ap-number 1 --gnb-number 1 --seed 1 -t 1 -r 1 --nru-cot-model slots --nru-traffic-model poisson --nru-arrival-rate-pps 20 --nr-gnb-number 1 --nr-colocated --nr-bandwidth-mhz 20 --nr-dl-traffic poisson --nr-dl-arrival-rate-pps 4000 --nru-scell --harq
+```
+
+The second one is the LAA case: an overloaded 20 MHz licensed cell (193 Mbps offered) delivers 108 Mbps on its own and about 133 Mbps with the NR-U SCell (19% carried in unlicensed spectrum) - while the Wi-Fi neighbor drops from about 30 to 3 Mbps, because the SCell's deep queue keeps NR-U on the channel most of the time even with LBT. Not modeled yet: NR-U handover, cross-UE QoS scheduling, GBR enforcement, 2-step / contention-free RACH, SCell uplink.
+
 ## Testing
 
 Assert-based regression suite (no print-and-eyeball scripts for anything added since Step 5.H) - covers PHY primitives, the packet system, `GenericWirelessDevice`, `PacketAttacker`, the analytical models, uplink for all three technologies, RRC, and the 5G Core (including CLI-level tests):
@@ -260,7 +293,7 @@ Assert-based regression suite (no print-and-eyeball scripts for anything added s
 pip install pytest
 pytest test/
 ```
-463 tests passing as of Step 18. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
+519 tests passing as of Step 19. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
 
 ## Current Work Status
 
@@ -292,6 +325,7 @@ pytest test/
 ----> Step 16 (16.A-16.H) — minimal 5G Core: RRC timing fix (licensed NR 4 ms, NR-U never faster), `core/` package (AMF/SMF/UPF), registration and PDU session procedures, RAN-side UPF gate, `--core-enabled` / `--nru-core-enabled` flags, attach-latency breakdown figure, whole-step regression
 ----> Step pre_17 — NR-U downlink packets now record their real receiver (and retries keep it), `--wifi-sta-uplink-enabled` flag, this readme / GETTING_STARTED refresh
 ----> Step 17 (17.A-17.H) — NR-U uplink inside the gNB's channel occupancy time (COT sharing, now the default): the gNB grants its UEs the uplink part of its COT, UEs send after a 25 us Type 2A check, RRC messages ride the same COT. Fixes the gNB/own-UE self-collision of the autonomous Cat-4 uplink (single cell: 0 -> 1.68 Mbps uplink). New flags `--nru-ul-access-mode` / `--nru-ul-cot-fraction`, an "NR-U Uplink" stdout block, and comparison figures (`python -m analysis.nru_ul_access_comparison`)
+----> Step 19 (19.A-19.F) — 5G control plane, mobility and the unified run, all opt-in: random access (`--rach`); RRC Type 1 fallback, radio link failure + re-establishment (`--rlm`), RRC_INACTIVE (`--rrc-inactive`), reconfiguration (`--rrc-reconfig`); QoS flows / 5QI (`--qos-flows`); handover (`--handover`); Core failure modes (`--core-*`); Wi-Fi + NR-U + licensed NR in one run with one Core (`--nr-gnb-number`); NR-U as an LAA secondary cell (`--nru-scell`). Step pre_19.F: NR-U HARQ retransmissions no longer starve when several UEs share a COT
 ----> Step 18 (18.A-18.F) — 5G user plane, all opt-in: BLER error model (`--error-model bler`), per-UE byte buffers and traffic for licensed NR, NR-U COTs made of slots with transport blocks and several UEs per COT (`--nru-cot-model slots`, uplink on interlaces), HARQ with chase combining (`--harq`), PDCP + RLC UM/AM (`--rlc-mode`). Step pre_18.F: licensed NR uplink UEs of one cell on separate RBs no longer interfere with each other, and uplink results are now printed
 ----> Step pre_18 (A-E) — channel-model fixes found while validating Step 17: (A-B) SINR counts every transmission that overlapped the target at any point - Wi-Fi frames (one decode unit) at full power, NR-U/NR bursts weighted by the fraction covered - instead of only what was still on the air when the target ended (results used to depend on timing and processing order); (D) Wi-Fi DCF counts backoff on a shared 9 us slot grid with event-driven sensing and a fresh DIFS after every busy period; (E) NR-U LBT is 3GPP TS 37.213 Type 1 - a full 43 us defer period after every busy period. (C) Paper figures regenerated: the DTMC validation now matches the model within 0.8-2.7 points for Wi-Fi and 0.4-1.4 for NR-U
 

@@ -24,7 +24,7 @@ pip install pytest
 pytest test/
 ```
 
-You should see `463 passed` (as of Step 18). If that's clean, you're ready to run simulations.
+You should see `519 passed` (as of Step 19). If that's clean, you're ready to run simulations.
 
 ## 2. Scenario 1 - Wi-Fi + NR-U coexistence
 
@@ -157,6 +157,28 @@ python singleRun.py --ap-number 1 --gnb-number 1 -t 1 -r 1 --nru-cot-model slots
 
 The "NR-U Slots" block shows downlink and uplink transport blocks,
 their error rate (Wi-Fi frames hitting single slots) and the MCS used.
+
+## 8. Mobility, the control plane and everything in one run (Step 19)
+
+UEs moving between two licensed cells, with random access, radio link
+monitoring and handover:
+
+```bash
+python singleRunNR.py --gnb-number 2 --ues-per-gnb 4 --gnb-pos 300,500 --gnb-pos 900,500 --area-w 1200 --area-h 1000 --ue-radius 150 --ue-mobility-speed-mps 20 --seed 3 -t 30 --tdd-enabled --ue-uplink-enabled --rrc-enabled --dl-traffic poisson --dl-arrival-rate-pps 200 --rach --rlm --handover
+```
+
+The "Handover" block shows 3 handovers with about 26 ms of interruption
+each, and no radio link failures; drop `--handover` and the UEs fail
+and re-establish instead. Wi-Fi, NR-U and a licensed cell in one run,
+with NR-U as the licensed cell's secondary carrier (LAA):
+
+```bash
+python singleRun.py --ap-number 1 --gnb-number 1 --seed 1 -t 1 -r 1 --nru-cot-model slots --nru-traffic-model poisson --nru-arrival-rate-pps 20 --nr-gnb-number 1 --nr-colocated --nr-bandwidth-mhz 20 --nr-dl-traffic poisson --nr-dl-arrival-rate-pps 4000 --nru-scell --harq
+```
+
+The "NR-U SCell (LAA)" block splits the licensed UEs' downlink between
+the licensed PCell and the NR-U SCell - and the Wi-Fi line shows what
+that extra unlicensed traffic costs the neighbor.
 
 ## Where to go next
 

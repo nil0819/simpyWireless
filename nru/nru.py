@@ -891,11 +891,18 @@ class Gnb:
     def _dl_slot_ues(self) -> list:
         """UEs with downlink data (every eligible UE for saturated traffic)."""
         ues = self._eligible_dl_ues()
-        if self.traffic_config.mode != "saturated":
-            # Rashed-Step 18.E-10-06-2026-start
-            ues = [ue for ue in ues if self._link_has_data(self.dl_buffers[ue.name])]
-            # Rashed-Step 18.E-10-06-2026-end
+        # Rashed-Step 19.F-10-07-2026-start
+        # Saturated traffic is this gNB's own; SCell legs (19.F) only carry
+        # what is queued in their licensed UE's buffer.
+        ues = [ue for ue in ues if self._own_saturated(ue)
+               or self._link_has_data(self.dl_buffers[ue.name])]
+        # Rashed-Step 19.F-10-07-2026-end
         return ues
+
+    # Rashed-Step 19.F-10-07-2026-start
+    def _own_saturated(self, ue) -> bool:
+        return self.traffic_config.mode == "saturated" and getattr(ue, "scell_of", None) is None
+    # Rashed-Step 19.F-10-07-2026-end
 
     def _ul_slot_ues(self) -> list:
         """COT-sharing UEs with uplink data (every one for saturated)."""
@@ -978,7 +985,7 @@ class Gnb:
                 needs[ue.name] = due.rbs
                 continue
             # Rashed-Step 18.E-10-06-2026-end
-            if saturated:
+            if saturated and getattr(ue, "scell_of", None) is None:  # 19.F: legs are buffered
                 needs[ue.name] = self.total_rbs
             else:
                 needs[ue.name] = self._rbs_needed(self.dl_buffers[ue.name].backlog_bytes,
@@ -1117,7 +1124,10 @@ class Gnb:
         """Decode one downlink slot for every UE given RBs in it; returns
         (transport blocks ok, failed). With HARQ (18.E) a due retransmission
         goes ahead of new data."""
-        ues = dl_ues if saturated else [ue for ue in dl_ues if self._link_has_data(self.dl_buffers[ue.name])]
+        # Rashed-Step 19.F-10-07-2026-start
+        ues = [ue for ue in dl_ues if (saturated and getattr(ue, "scell_of", None) is None)
+               or self._link_has_data(self.dl_buffers[ue.name])]
+        # Rashed-Step 19.F-10-07-2026-end
         if not ues:
             return 0, 0
         alloc = self._dl_slot_alloc(ues, duration_us, saturated)
@@ -1132,7 +1142,8 @@ class Gnb:
             # HARQ draw random numbers exactly as before.
             res = self._send_tb(buf, rbs, duration_us,
                                 lambda u=ue: self.channel.sinr_db(self._dl_view(active, u), window=(t0, t0 + duration_us)),
-                                ue, False, (lambda n=ue.name: self._make_dl_packet(n)) if saturated else None)
+                                ue, False, (lambda n=ue.name: self._make_dl_packet(n))
+                                if saturated and getattr(ue, "scell_of", None) is None else None)  # 19.F
             if res is None:
                 continue
             ok, mcs, tb, bits, sinr = res
@@ -1141,6 +1152,10 @@ class Gnb:
             if ok:
                 n_ok += 1
                 self.slot_stats["dl_tbs_ok"] += 1
+                # Rashed-Step 19.F-10-07-2026-start
+                if getattr(ue, "scell_of", None) is not None:
+                    self.slot_stats["scell_dl_bits"] = self.slot_stats.get("scell_dl_bits", 0) + bits
+                # Rashed-Step 19.F-10-07-2026-end
                 self.slot_stats["dl_mcs_sum"] += mcs
                 self.slot_stats["dl_bits"] += bits
             else:
