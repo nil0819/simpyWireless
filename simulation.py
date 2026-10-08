@@ -796,6 +796,10 @@ def run_simulation(
         # Rashed-Step 18.D-10-06-2026-start
         # Per direction: transport blocks (one per UE per slot) since 18.D.
         print("=== NR-U Slots ===")
+        # Rashed-Step pre_20.D.3-10-08-2026-start
+        if configNr.wifi_reservation == "cts_to_self":
+            print(f"NRU CTS-to-self frames={ss['cts_to_self']} (NAV over each COT)")
+        # Rashed-Step pre_20.D.3-10-08-2026-end
         print(f"NRU numerology mu={configNr.numerology} (SCS={gnbs[0].scs_khz} kHz, slot={gnbs[0].slot_us} us), "
               f"RBs={gnbs[0].total_rbs} in {configNr.bandwidth_mhz} MHz, UL interlaces={gnbs[0].n_interlaces}")
         print(f'NRU COTs: {ss["cots"]} (reference slot failed: {ss["cots_failed"]}, '

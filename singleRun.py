@@ -292,6 +292,9 @@ def parse_traffic_class_mix(raw_values, label: str):
 @click.option("--nru-ed-threshold-dbm", "nru_ed_threshold_dbm", type=float, default=None, help="NR-U energy-detection threshold for LBT (Step pre_20.D.2). Default (unset) = -72 dBm, byte-identical.")
 @click.option("--nru-ed-mode", "nru_ed_mode", type=click.Choice(["ts37213"]), default=None, help="NR-U energy-detection threshold from 3GPP TS 37.213 clause 4.1.5 (Step pre_20.D.2): computed from --nru-tx-power-dbm and --nru-bandwidth-mhz (T_A 10 dB, P_H 23 dBm) - -72 dBm at 23 dBm / 20 MHz, up to -62 dBm at 13 dBm. Overrides --nru-ed-threshold-dbm.")
 # Rashed-Step pre_20.D.2-10-08-2026-end
+# Rashed-Step pre_20.D.3-10-08-2026-start
+@click.option("--nru-wifi-reservation", "nru_wifi_reservation", type=click.Choice(["preamble", "cts_to_self"]), default=None, help="Make NR-U COTs visible to Wi-Fi (Step pre_20.D.3; needs --wifi-preamble-detect). preamble: NR-U transmissions carry an 802.11-decodable preamble, Wi-Fi defers from -82 dBm (no airtime cost, upper bound). cts_to_self: before each COT the gNB sends an 802.11 CTS-to-self (44 us + SIFS) whose NAV covers the COT; needs --nru-cot-model slots. Default (unset) = neither, byte-identical.")
+# Rashed-Step pre_20.D.3-10-08-2026-end
 @click.option("--nru-priority-class", "nru_priority_class", type=click.IntRange(1, 4), default=None, help="NR-U channel access priority class (Step pre_20.D.1, 3GPP TS 37.213): sets the defer slots m_p, CW_min/CW_max and MCOT from Table 4.1.1-1 (gNB downlink: p1 1/3/7/2ms, p2 1/7/15/3ms, p3 3/15/63/8ms, p4 7/15/1023/8ms) and Table 4.2.1-1 for UEs' own Type 1 LBT; overrides --nru_cw_min/--nru_cw_max/--mcot. Default (unset) = those flags as given, byte-identical.")
 # Rashed-Step pre_20.D.1-10-08-2026-end
 # Rashed-Step pre_20.B-10-08-2026-start
@@ -470,6 +473,7 @@ def single_run(
         wifi_ampdu: int = 1, wifi_max_ppdu_us: float = 5484.0,  # pre_20.B
         nru_priority_class: Optional[int] = None,  # pre_20.D.1
         nru_ed_threshold_dbm: Optional[float] = None, nru_ed_mode: Optional[str] = None,  # pre_20.D.2
+        nru_wifi_reservation: Optional[str] = None,  # pre_20.D.3
         # Rashed-Step pre_20.A-10-08-2026-end
         # Rashed-Step 19.F-10-07-2026-end
         # Rashed-Step 19.E.2-10-07-2026-end
@@ -630,6 +634,12 @@ def single_run(
     # Rashed-Step 18.C-10-06-2026-start
     if nru_cot_model != "slots" and (nru_numerology is not None or nru_buffer_limit_bytes is not None):
         raise click.BadParameter("--nru-numerology / --nru-buffer-limit-bytes require --nru-cot-model slots.")
+    # Rashed-Step pre_20.D.3-10-08-2026-start
+    if nru_wifi_reservation is not None and not wifi_preamble_detect:
+        raise click.BadParameter("--nru-wifi-reservation needs --wifi-preamble-detect (Wi-Fi only decodes the preamble / CTS with it).")
+    if nru_wifi_reservation == "cts_to_self" and nru_cot_model != "slots":
+        raise click.BadParameter("--nru-wifi-reservation cts_to_self needs --nru-cot-model slots.")
+    # Rashed-Step pre_20.D.3-10-08-2026-end
     # Rashed-Step 18.D-10-06-2026-start
     if nru_ul_traffic_model != "saturated" and nru_cot_model != "slots":
         raise click.BadParameter("--nru-ul-traffic-model poisson/cbr requires --nru-cot-model slots.")
@@ -851,6 +861,7 @@ def single_run(
                                  cot_model=nru_cot_model,
                                  priority_class=nru_priority_class,  # pre_20.D.1
                                  ed_threshold_mode=nru_ed_mode,  # pre_20.D.2
+                                 wifi_reservation=nru_wifi_reservation,  # pre_20.D.3
                                  **({} if nru_ed_threshold_dbm is None else {"ed_threshold_dbm": nru_ed_threshold_dbm}),
                                  numerology=1 if nru_numerology is None else nru_numerology,
                                  buffer_limit_bytes=nru_buffer_limit_bytes,

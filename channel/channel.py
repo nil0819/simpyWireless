@@ -203,6 +203,13 @@ class Channel:
     # the 3 standalone test/*.py files - don't need to be touched just to
     # keep constructing Channel the way they already do.
     tx_queue_nru: Optional[simpy.PriorityResource] = None
+    # Rashed-Step pre_20.D.3-10-08-2026-start
+    # Wi-Fi NAV reservations (pre_20.D.3): frames other nodes decoded as
+    # 802.11 (an NR-U gNB's CTS-to-self) whose Duration field reserves the
+    # medium until t_end. Only read by is_busy_wifi (preamble detection
+    # on). Empty unless an NR-U gNB uses wifi_reservation="cts_to_self".
+    nav_reservations: List[ActiveTx] = field(default_factory=list)
+    # Rashed-Step pre_20.D.3-10-08-2026-end
     # Rashed-Step 5.E.1-02-06-2026-end
 
      # Rashed-Step 3.B-01-12-2026-start
@@ -391,8 +398,57 @@ class Channel:
         if self.is_busy(sense_pos, ed_threshold_dbm, exclude_tx_id, sense_f_hz, sense_bw_mhz):
             return True
         wifi_like = lambda t: t.tech == "WiFi" or getattr(t, "wifi_preamble", False)
-        return self.sensed_energy_dbm(sense_pos, exclude_tx_id, sense_f_hz, sense_bw_mhz,
-                                      tx_filter=wifi_like) >= preamble_detect_dbm
+        if self.sensed_energy_dbm(sense_pos, exclude_tx_id, sense_f_hz, sense_bw_mhz,
+                                  tx_filter=wifi_like) >= preamble_detect_dbm:
+            return True
+        # Rashed-Step pre_20.D.3-10-08-2026-start
+        return self.nav_busy(sense_pos, preamble_detect_dbm, exclude_tx_id, sense_f_hz, sense_bw_mhz)
+        # Rashed-Step pre_20.D.3-10-08-2026-end
+
+    # Rashed-Step pre_20.D.3-10-08-2026-start
+    def set_nav(self, reservation: ActiveTx):
+        """Record a NAV reservation (tx_pos / power / channel of the frame
+        that carried it, t_end = end of the reserved time) and wake every
+        waiting node when it expires."""
+        self.nav_reservations.append(reservation)
+
+        def expire():
+            yield self.env.timeout(max(0.0, reservation.t_end - self.env.now))
+            self._pulse_state_changed()
+        self.env.process(expire())
+
+    def nav_busy(self, sense_pos: Pos, preamble_detect_dbm: float, exclude_tx_id: Optional[str] = None,
+                 sense_f_hz: Optional[float] = None, sense_bw_mhz: Optional[float] = None) -> bool:
+        """True while a NAV reservation is running whose frame reached
+        sense_pos at preamble_detect_dbm or more (it could be decoded there).
+        Simplification: every node in range honours it, including one that
+        was itself transmitting when the frame went out."""
+        if not self.nav_reservations:
+            return False
+        now = self.env.now
+        self.nav_reservations = [r for r in self.nav_reservations if r.t_end > now]
+        for r in self.nav_reservations:
+            if exclude_tx_id is not None and r.tx_id == exclude_tx_id:
+                continue
+            if sense_f_hz is not None and spectral_overlap_fraction(sense_f_hz, sense_bw_mhz, r.f_hz, r.bandwidth_mhz) <= 0.0:
+                continue
+            pr = rx_power_dbm(r.tx_power_dbm, dist(r.tx_pos, sense_pos), r.f_hz, n=r.pl_exp,
+                              shadow_db=self.shadow_db(r.tx_id, sense_pos))
+            if pr >= preamble_detect_dbm:
+                return True
+        return False
+
+    def unregister_control_tx(self, tx: ActiveTx, control_airtime: Dict[str, float]):
+        """End a control frame (e.g. NR-U's CTS-to-self): its airtime counts
+        toward its technology's total and the node's control airtime, not as
+        a data transmission."""
+        if tx in self.active_txs:
+            self.active_txs.remove(tx)
+        dur = max(0, tx.t_end - tx.tx_start)
+        self.tx_airtime_total_us[tx.tech] = self.tx_airtime_total_us.get(tx.tech, 0.0) + dur
+        control_airtime[tx.tx_id] = control_airtime.get(tx.tx_id, 0) + dur
+        self._pulse_state_changed()
+    # Rashed-Step pre_20.D.3-10-08-2026-end
     
     # Rashed-Step pre_20.A-10-08-2026-end
     def is_busy(self, sense_pos: Pos, ed_threshold_dbm: float, exclude_tx_id: Optional[str] = None,

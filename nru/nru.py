@@ -29,6 +29,13 @@ from ran.protocol.channel_access import LbtChannelAccess, generate_backoff_slots
 from ran.protocol.channel_access import CAPC_DL
 # Rashed-Step pre_20.D.2-10-08-2026-start
 from ran.protocol.channel_access import ts37213_ed_threshold_dbm
+# Rashed-Step pre_20.D.3-10-08-2026-start
+# 802.11 CTS at 6 Mbps: 20 us preamble + ceil((16 + 112 + 6) / 24) = 6
+# OFDM symbols x 4 us; then SIFS before the COT.
+CTS_TO_SELF_US = 44.0
+WIFI_SIFS_US = 16.0
+WIFI_RESERVATIONS = ("preamble", "cts_to_self")
+# Rashed-Step pre_20.D.3-10-08-2026-end
 # Rashed-Step pre_20.D.2-10-08-2026-end
 # Rashed-Step pre_20.D.1-10-08-2026-end
 # Rashed-Step 15.A-09-18-2026-end
@@ -382,6 +389,19 @@ class Config_NR:
     # given (-72 dBm), byte-identical.
     ed_threshold_mode: Optional[str] = None
     ed_t_a_db: float = 10.0
+    # Rashed-Step pre_20.D.3-10-08-2026-start
+    # Make COTs visible to Wi-Fi (pre_20.D.3; Wi-Fi needs preamble
+    # detection, wifi.Config.preamble_detect_dbm):
+    #   "preamble"    - every gNB COT transmission (and its UEs' uplink in
+    #                   it) carries an 802.11-decodable preamble: Wi-Fi
+    #                   defers from -82 dBm. No airtime cost; upper bound
+    #                   (a node that missed the start still defers).
+    #   "cts_to_self" - "slots" only: after LBT the gNB sends an 802.11
+    #                   CTS-to-self (44 us + SIFS 16 us, inside the MCOT)
+    #                   whose NAV covers the whole COT incl. its uplink.
+    # None (default) = neither, byte-identical.
+    wifi_reservation: Optional[str] = None
+    # Rashed-Step pre_20.D.3-10-08-2026-end
     # Rashed-Step pre_20.D.2-10-08-2026-end
     # Rashed-Step pre_20.D.1-10-08-2026-end
     # Rashed-Step 19.B.4-10-07-2026-end
@@ -430,6 +450,13 @@ class Config_NR:
                 raise ValueError(f"Config_NR.ed_threshold_mode must be None or 'ts37213' (got {self.ed_threshold_mode!r})")
             self.ed_threshold_dbm = ts37213_ed_threshold_dbm(self.tx_power_dbm, self.bandwidth_mhz, self.ed_t_a_db)
         # Rashed-Step pre_20.D.2-10-08-2026-end
+        # Rashed-Step pre_20.D.3-10-08-2026-start
+        if self.wifi_reservation is not None:
+            if self.wifi_reservation not in WIFI_RESERVATIONS:
+                raise ValueError(f"Config_NR.wifi_reservation must be None or one of {WIFI_RESERVATIONS} (got {self.wifi_reservation!r})")
+            if self.wifi_reservation == "cts_to_self" and self.cot_model != "slots":
+                raise ValueError("Config_NR.wifi_reservation=\"cts_to_self\" needs cot_model=\"slots\".")
+        # Rashed-Step pre_20.D.3-10-08-2026-end
         if not (0.0 < self.ul_cot_fraction < 1.0):
             raise ValueError(
                 f"Config_NR.ul_cot_fraction must be strictly between 0 and 1 "
@@ -849,6 +876,9 @@ class Gnb:
                            "dl_tbs_ok": 0, "dl_tbs_failed": 0, "dl_bits": 0, "dl_mcs_sum": 0,
                            "ul_tbs_ok": 0, "ul_tbs_failed": 0, "ul_bits": 0, "ul_mcs_sum": 0,
                            "ul_grants": 0, "ul_type2a_skips": 0}
+        # Rashed-Step pre_20.D.3-10-08-2026-start
+        self.slot_stats["cts_to_self"] = 0
+        # Rashed-Step pre_20.D.3-10-08-2026-end
         self.dl_buffers = {}
         saturated = self.traffic_config.mode == "saturated"
         for ue in self.ue_list:
@@ -1054,9 +1084,19 @@ class Gnb:
         decoded on its own, with that UE's SINR over just that slot."""
         cfg = self.config_nr
         saturated = self.traffic_config.mode == "saturated"
+        # Rashed-Step pre_20.D.3-10-08-2026-start
+        cts_us = 0.0
+        if cfg.wifi_reservation == "cts_to_self":
+            cts_us = yield from self._send_cts_to_self()
+        # Rashed-Step pre_20.D.3-10-08-2026-end
         tx_start = self.env.now
         total_us = cfg.mcot * 1000
         rs_time = 0 if gap else (self.next_sync_slot_boundry - self.env.now)
+        # Rashed-Step pre_20.D.3-10-08-2026-start
+        if cts_us:  # the CTS + SIFS took the start of the COT (and of its reservation signal)
+            total_us -= cts_us
+            rs_time = max(0.0, rs_time)
+        # Rashed-Step pre_20.D.3-10-08-2026-end
         ul_ues = self._ul_slot_ues()
         ul_window_us = total_us * cfg.ul_cot_fraction if ul_ues else 0.0
         data_us = max(0.0, total_us - ul_window_us - rs_time)
@@ -1097,6 +1137,14 @@ class Gnb:
             noise_figure_db=cfg.noise_figure_db,
             packet=head,
         )
+        # Rashed-Step pre_20.D.3-10-08-2026-start
+        self._mark_wifi_preamble(active)
+        if cts_us:
+            self.channel.set_nav(ActiveTx(tx_id=self.name, tx_pos=active.tx_pos, rx_pos=active.tx_pos,
+                                          tx_start=tx_start, tx_power_dbm=cfg.tx_power_dbm, f_hz=cfg.f_ghz,
+                                          pl_exp=cfg.pl_exp, t_end=tx_start + dl_us + ul_window_us, tech="NRU",
+                                          bandwidth_mhz=cfg.bandwidth_mhz, noise_figure_db=cfg.noise_figure_db))
+        # Rashed-Step pre_20.D.3-10-08-2026-end
         self.channel.register_tx(active)
         self.slot_stats["cots"] += 1
 
@@ -1145,6 +1193,33 @@ class Gnb:
             self.channel.airtime_control_NR[self.name] += rs_time
         return was_sent
 
+    # Rashed-Step pre_20.D.3-10-08-2026-start
+    def _mark_wifi_preamble(self, tx):
+        if self.config_nr.wifi_reservation == "preamble":
+            tx.wifi_preamble = True
+
+    def _send_cts_to_self(self):
+        """802.11 CTS-to-self (generator): a Wi-Fi-decodable frame from this
+        gNB at full power, then SIFS. Returns the time it took (us). The
+        caller sets the NAV for the COT. It occupies the channel (and can
+        collide) like any frame; its airtime is NR-U control airtime."""
+        cfg = self.config_nr
+        now = self.env.now
+        cts = ActiveTx(tx_id=self.name, tx_pos=self.current_pos(), rx_pos=self.current_pos(), tx_start=now,
+                       tx_power_dbm=cfg.tx_power_dbm, f_hz=cfg.f_ghz, pl_exp=cfg.pl_exp,
+                       t_end=now + CTS_TO_SELF_US, tech="NRU", bandwidth_mhz=cfg.bandwidth_mhz,
+                       noise_figure_db=cfg.noise_figure_db)
+        cts.wifi_preamble = True
+        self.channel.register_tx(cts)
+        try:
+            yield self.env.timeout(CTS_TO_SELF_US)
+        finally:
+            self.channel.unregister_control_tx(cts, self.channel.airtime_control_NR)
+        self.slot_stats["cts_to_self"] += 1
+        yield self.env.timeout(WIFI_SIFS_US)
+        return CTS_TO_SELF_US + WIFI_SIFS_US
+
+    # Rashed-Step pre_20.D.3-10-08-2026-end
     def _dl_view(self, active, ue):
         """The COT's downlink as seen at one UE: same transmission (and
         overlap history), received at that UE. Constant power per RB, so a
@@ -1361,6 +1436,9 @@ class Gnb:
                 packet=ue.ul_buffer.head(),
                 ofdma_cell=self.name,
             )
+            # Rashed-Step pre_20.D.3-10-08-2026-start
+            self._mark_wifi_preamble(tx)
+            # Rashed-Step pre_20.D.3-10-08-2026-end
             self.channel.register_tx(tx)
             txs[ue.name] = (ue, tx, rbs, [0, 0])
         try:
@@ -1757,6 +1835,9 @@ class Gnb:
         # Rashed-Step 4.B_4-01-20-2026-start
         #print(self.env.now, self.name, "TX->RX d=", dist(self.pos, rx_pos))
         # Rashed-Step 4.B_4-01-20-2026-end
+        # Rashed-Step pre_20.D.3-10-08-2026-start
+        self._mark_wifi_preamble(active)
+        # Rashed-Step pre_20.D.3-10-08-2026-end
         self.channel.register_tx(active)
 
         # Rashed-Step 5.1-02-06-2026-start

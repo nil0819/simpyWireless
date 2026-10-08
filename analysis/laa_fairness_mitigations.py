@@ -14,6 +14,9 @@ NR-U is no worse than next to a Wi-Fi neighbor (10% + CI slack).
 D.1 TS 37.213 channel access priority classes (Config_NR.priority_class).
 D.2 energy-detection threshold: TS 37.213 clause 4.1.5 (power-dependent,
     Config_NR.ed_threshold_mode="ts37213") and fixed lower thresholds.
+D.3 making COTs visible to Wi-Fi (Config_NR.wifi_reservation: an
+    802.11-decodable preamble, or a CTS-to-self whose NAV covers the
+    COT), alone and combined with a -82 dBm NR-U ED.
 
 Run from the repo root: `python -m analysis.laa_fairness_mitigations
 [capc|ed ...]` (default: all).
@@ -165,7 +168,35 @@ def study_ed_distance():
         print(f"{r['distance_m']:>4} {r['variant']:<34} {r['a_latency_ms']:>8.2f} ms {r['a_fail_pct']:>6.2f} %  B {r['b_mbps']:.1f}")
 
 
-STUDIES = {"capc": study_capc, "ed": study_ed, "ed_distance": study_ed_distance}
+# Rashed-Step pre_20.D.2-10-08-2026-end
+
+
+# Rashed-Step pre_20.D.3-10-08-2026-start
+RESERVATION_VARIANTS = [
+    ("NR-U, default", {}),
+    ("NR-U, Wi-Fi preamble", dict(wifi_reservation="preamble")),
+    ("NR-U, CTS-to-self", dict(wifi_reservation="cts_to_self")),
+    ("NR-U, ED -82 dBm", dict(ed_threshold_dbm=-82.0)),
+    ("NR-U, ED -82 dBm + CTS-to-self", dict(ed_threshold_dbm=-82.0, wifi_reservation="cts_to_self")),
+]
+
+
+def study_reservation():
+    variants = [(lab, dict(nru_config=Config_NR(cot_model="slots", **kw))) for lab, kw in RESERVATION_VARIANTS]
+    labels = ["Wi-Fi neighbor (reference)"] + [lab for lab, _ in RESERVATION_VARIANTS]
+    colors = dict(zip(labels, [WIFI_COLOR, BASELINE_COLOR, "#a9c4a6", "#7fa37b", "#2e4a2c", NRU_COLOR]))
+    markers = dict(zip(labels, ["^", "o", "s", "D", "v", "h"]))
+    rows = distance_curves(variants, "laa_fairness_reservation_vs_distance", colors, markers)
+    ref = {r["distance_m"]: r for r in rows if r["variant"] == labels[0]}
+    for r in rows:
+        r["passes"] = "" if r["variant"] == labels[0] else passes(r, ref[r["distance_m"]])
+    write_csv(rows, "laa_fairness_reservation.csv")
+    for r in rows:
+        print(f"{r['distance_m']:>4} {r['variant']:<34} {r['a_latency_ms']:>8.2f} ms {r['a_fail_pct']:>6.2f} %  "
+              f"B {r['b_mbps']:.1f}  {r['passes']}")
+
+
+STUDIES = {"capc": study_capc, "ed": study_ed, "ed_distance": study_ed_distance, "reservation": study_reservation}
 
 
 def main(names=None):
@@ -176,4 +207,4 @@ def main(names=None):
 
 if __name__ == "__main__":
     main(sys.argv[1:])
-# Rashed-Step pre_20.D.2-10-08-2026-end
+# Rashed-Step pre_20.D.3-10-08-2026-end
