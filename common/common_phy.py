@@ -225,6 +225,30 @@ def spectral_overlap_fraction(f1_hz: float, bw1_mhz: float, f2_hz: float, bw2_mh
     return min(1.0, overlap_hz / bw1_hz)
 # Rashed-Step 5.E-02-06-2026-end
 
+# Rashed-Step pre_20.C0-10-08-2026-start
+def power_fraction_in_band(rx_f_hz: float, rx_bw_mhz: float, tx_f_hz: float, tx_bw_mhz: float) -> float:
+    """
+    Share of a transmitter's power that falls inside a receiver's band
+    (flat PSD): overlap / TRANSMITTER bandwidth. This is what scales
+    interference and sensed energy. spectral_overlap_fraction() above
+    divides by the RECEIVER's bandwidth - the same number when both
+    bandwidths are equal (every default run), wrong when they differ:
+    a 20 MHz NR-U carrier inside an 80 MHz Wi-Fi channel puts all its
+    power in-band (not 25%), and an 80 MHz signal reaching a 20 MHz
+    receiver puts 25% there (not all of it). Same for partial-bandwidth
+    transmissions (NR-U uplink interlaces, licensed NR per-UE RBs, with
+    power per RB): their interference was counted twice reduced.
+    """
+    bw_rx_hz = max(rx_bw_mhz, 0.0) * 1e6
+    bw_tx_hz = max(tx_bw_mhz, 0.0) * 1e6
+    if bw_rx_hz <= 0.0 or bw_tx_hz <= 0.0:
+        return 0.0
+    lo1, hi1 = rx_f_hz - bw_rx_hz / 2.0, rx_f_hz + bw_rx_hz / 2.0
+    lo2, hi2 = tx_f_hz - bw_tx_hz / 2.0, tx_f_hz + bw_tx_hz / 2.0
+    overlap_hz = max(0.0, min(hi1, hi2) - max(lo1, lo2))
+    return min(1.0, overlap_hz / bw_tx_hz)
+# Rashed-Step pre_20.C0-10-08-2026-end
+
 # Rashed-Step 5.G-02-06-2026-start
 class WaypointMobility:
     """

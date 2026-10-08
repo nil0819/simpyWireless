@@ -10,6 +10,9 @@ from dataclasses import field
 import simpy
 import math
 from common.common_phy import rx_power_dbm, dbm_to_mw, mw_to_dbm, Pos, sample_shadow_db, thermal_noise_dbm, spectral_overlap_fraction
+# Rashed-Step pre_20.C0-10-08-2026-start
+from common.common_phy import power_fraction_in_band
+# Rashed-Step pre_20.C0-10-08-2026-end
 from typing import Optional, List
 from typing import Any, List, Tuple
 # Rashed-Step 8.A-08-06-2026-start
@@ -363,7 +366,9 @@ class Channel:
              # Rashed-Step pre_20.A-10-08-2026-end
              # Rashed-Step 5.E-02-06-2026-start
              if sense_f_hz is not None:
-                 overlap = spectral_overlap_fraction(sense_f_hz, sense_bw_mhz, tx.f_hz, tx.bandwidth_mhz)
+                 # Rashed-Step pre_20.C0-10-08-2026-start
+                 overlap = power_fraction_in_band(sense_f_hz, sense_bw_mhz, tx.f_hz, tx.bandwidth_mhz)
+                 # Rashed-Step pre_20.C0-10-08-2026-end
                  if overlap <= 0.0:
                      continue
              else:
@@ -600,9 +605,9 @@ class Channel:
             # actually overlaps (1.0 = full co-channel, same as before
             # Step 5.E when both were hardcoded to 5.18 GHz; 0.0 = fully
             # separated channels, no RF interference).
-            overlap = spectral_overlap_fraction(
-                target.f_hz, target.bandwidth_mhz, other.f_hz, other.bandwidth_mhz
-            )
+            # Rashed-Step pre_20.C0-10-08-2026-start
+            overlap = power_fraction_in_band(target.f_hz, target.bandwidth_mhz, other.f_hz, other.bandwidth_mhz)
+            # Rashed-Step pre_20.C0-10-08-2026-end
             if overlap <= 0.0:
                 continue
             i_dbm = self._rx_pwr_dbm(other, target.rx_pos)
