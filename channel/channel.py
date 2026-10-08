@@ -479,6 +479,15 @@ class Channel:
             return max(0.0, covered / duration)
 
         seen = set()
+        # Rashed-Step pre_20.D.3a-10-08-2026-start
+        # Wi-Fi target (full-power rule): one transmitter's frames that
+        # follow each other (an NR-U CTS-to-self, then its COT) must not add
+        # up - it never sends both at once. Collected per tx_id and counted
+        # at that transmitter's peak instantaneous power; a transmitter with
+        # one overlapping transmission (every case before) adds exactly as
+        # before, in the same order.
+        per_tx = {} if target.tech == "WiFi" else None
+        # Rashed-Step pre_20.D.3a-10-08-2026-end
         # On the air now first (same order as before, so shadowing draws
         # happen in the same order), then remembered ones that ended.
         candidates = list(self.active_txs) + list(getattr(target, "overlap_history", ()))
@@ -517,9 +526,22 @@ class Channel:
             if overlap <= 0.0:
                 continue
             i_dbm = self._rx_pwr_dbm(other, target.rx_pos)
+            # Rashed-Step pre_20.D.3a-10-08-2026-start
+            if per_tx is not None:
+                per_tx.setdefault(other.tx_id, []).append((other.tx_start, other.t_end, dbm_to_mw(i_dbm) * overlap))
+                continue
+            # Rashed-Step pre_20.D.3a-10-08-2026-end
             i_mw += dbm_to_mw(i_dbm) * overlap * time_weight(other)  # Rashed-Step pre_18.A-10-04-2026
             # Rashed-Step 5.E-02-06-2026-end
 
+        # Rashed-Step pre_20.D.3a-10-08-2026-start
+        for parts in (per_tx or {}).values():
+            if len(parts) == 1:
+                i_mw += parts[0][2]
+            else:  # peak of what this transmitter has on the air at any one instant
+                i_mw += max(sum(mw for a, b, mw in parts if a <= max(t, w0) < b)
+                            for t, _, _ in parts)
+        # Rashed-Step pre_20.D.3a-10-08-2026-end
         n_mw = dbm_to_mw(noise_dbm)
 
         # guard against weird numerical issues
