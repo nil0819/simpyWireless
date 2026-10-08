@@ -94,6 +94,11 @@ SERIES_STYLE: Dict[str, dict] = {
     # Rashed-Step 14.C-08-28-2026-start
     "Wi-Fi (Long TXOP)": dict(color=WIFI_COLOR, marker=WIFI_MARKER, linestyle="-"),
     # Rashed-Step 14.C-08-28-2026-end
+    # Rashed-Step pre_20.C-10-08-2026-start
+    # LAA fairness study: Wi-Fi network A next to neighbor network B.
+    "Neighbor: Wi-Fi":   dict(color=WIFI_COLOR, marker=WIFI_MARKER, linestyle="-"),
+    "Neighbor: NR-U":    dict(color=NRU_COLOR, marker=NRU_MARKER, linestyle="-"),
+    # Rashed-Step pre_20.C-10-08-2026-end
 }
 
 LINEWIDTH = 2.2

@@ -52,7 +52,11 @@ def run_case(network_b: str, load_a_pps: float, load_b_pps: float, distance_m: f
     if wifi_preamble_detect:
         wifi = replace(wifi, preamble_detect_dbm=-82.0)
     nru = nru_config or Config_NR(cot_model="slots")
-    ta = TrafficConfig(mode="poisson", arrival_rate_pps=load_a_pps, packet_size_bytes=PACKET_BYTES)
+    # Rashed-Step pre_20.C-10-08-2026-start
+    # load_a_pps None = network A saturated (always has data).
+    ta = (TrafficConfig(mode="saturated", packet_size_bytes=PACKET_BYTES) if load_a_pps is None else
+          TrafficConfig(mode="poisson", arrival_rate_pps=load_a_pps, packet_size_bytes=PACKET_BYTES))
+    # Rashed-Step pre_20.C-10-08-2026-end
     tb = TrafficConfig(mode="poisson", arrival_rate_pps=load_b_pps, packet_size_bytes=PACKET_BYTES)
     n_ap = 2 if network_b == "wifi" else 1
     n_gnb = 1 if network_b == "nru" else 0
