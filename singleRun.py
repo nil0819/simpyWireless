@@ -288,6 +288,10 @@ def parse_traffic_class_mix(raw_values, label: str):
 # Rashed-Step 19.F-10-07-2026-end
 # Rashed-Step pre_20.A-10-08-2026-start
 # Rashed-Step pre_20.D.1-10-08-2026-start
+# Rashed-Step pre_20.D.2-10-08-2026-start
+@click.option("--nru-ed-threshold-dbm", "nru_ed_threshold_dbm", type=float, default=None, help="NR-U energy-detection threshold for LBT (Step pre_20.D.2). Default (unset) = -72 dBm, byte-identical.")
+@click.option("--nru-ed-mode", "nru_ed_mode", type=click.Choice(["ts37213"]), default=None, help="NR-U energy-detection threshold from 3GPP TS 37.213 clause 4.1.5 (Step pre_20.D.2): computed from --nru-tx-power-dbm and --nru-bandwidth-mhz (T_A 10 dB, P_H 23 dBm) - -72 dBm at 23 dBm / 20 MHz, up to -62 dBm at 13 dBm. Overrides --nru-ed-threshold-dbm.")
+# Rashed-Step pre_20.D.2-10-08-2026-end
 @click.option("--nru-priority-class", "nru_priority_class", type=click.IntRange(1, 4), default=None, help="NR-U channel access priority class (Step pre_20.D.1, 3GPP TS 37.213): sets the defer slots m_p, CW_min/CW_max and MCOT from Table 4.1.1-1 (gNB downlink: p1 1/3/7/2ms, p2 1/7/15/3ms, p3 3/15/63/8ms, p4 7/15/1023/8ms) and Table 4.2.1-1 for UEs' own Type 1 LBT; overrides --nru_cw_min/--nru_cw_max/--mcot. Default (unset) = those flags as given, byte-identical.")
 # Rashed-Step pre_20.D.1-10-08-2026-end
 # Rashed-Step pre_20.B-10-08-2026-start
@@ -465,6 +469,7 @@ def single_run(
         wifi_preamble_detect: bool = False,  # pre_20.A
         wifi_ampdu: int = 1, wifi_max_ppdu_us: float = 5484.0,  # pre_20.B
         nru_priority_class: Optional[int] = None,  # pre_20.D.1
+        nru_ed_threshold_dbm: Optional[float] = None, nru_ed_mode: Optional[str] = None,  # pre_20.D.2
         # Rashed-Step pre_20.A-10-08-2026-end
         # Rashed-Step 19.F-10-07-2026-end
         # Rashed-Step 19.E.2-10-07-2026-end
@@ -845,6 +850,8 @@ def single_run(
                                  # Rashed-Step 18.C-10-06-2026-start
                                  cot_model=nru_cot_model,
                                  priority_class=nru_priority_class,  # pre_20.D.1
+                                 ed_threshold_mode=nru_ed_mode,  # pre_20.D.2
+                                 **({} if nru_ed_threshold_dbm is None else {"ed_threshold_dbm": nru_ed_threshold_dbm}),
                                  numerology=1 if nru_numerology is None else nru_numerology,
                                  buffer_limit_bytes=nru_buffer_limit_bytes,
                                  # Rashed-Step 18.D-10-06-2026-start

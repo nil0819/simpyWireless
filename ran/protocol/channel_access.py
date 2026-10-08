@@ -70,6 +70,29 @@ CAPC_UL = {1: (2, 3, 7, 2), 2: (2, 7, 15, 4), 3: (3, 15, 1023, 6), 4: (7, 15, 10
 
 # Rashed-Step pre_20.D.1-10-08-2026-end
 
+# Rashed-Step pre_20.D.2-10-08-2026-start
+def ts37213_ed_threshold_dbm(tx_power_dbm: float, bandwidth_mhz: float = 20.0, t_a_db: float = 10.0,
+                             p_h_dbm: float = 23.0) -> float:
+    """
+    Maximum energy-detection threshold of 3GPP TS 37.213 clause 4.1.5,
+    for when the absence of any other technology on the carrier cannot
+    be guaranteed (the coexistence case):
+      X = max{ -72 + 10 log10(BW/20),
+               min{ T_max, T_max - T_A + (P_H + 10 log10(BW/20) - P_TX) } }
+    T_max = 10 log10(3.16228e-8 mW/MHz x BW) = -75 dBm/MHz + 10 log10(BW);
+    T_A = 10 dB for transmissions with PDSCH (5 dB discovery-only);
+    P_H = 23 dBm; P_TX = the node's maximum output power. At 20 MHz and
+    23 dBm this is -72 dBm (the long-standing default); lower power
+    raises it 1 dB per dB up to T_max (-62 dBm); it never goes below
+    -72 dBm (+ bandwidth term).
+    """
+    import math
+    bw_db = 10.0 * math.log10(bandwidth_mhz / 20.0)
+    t_max = -75.0 + 10.0 * math.log10(bandwidth_mhz)
+    return max(-72.0 + bw_db, min(t_max, t_max - t_a_db + (p_h_dbm + bw_db - tx_power_dbm)))
+
+# Rashed-Step pre_20.D.2-10-08-2026-end
+
 def generate_backoff_slots(failed_transmissions_in_row: int, cw_min: int, cw_max: int) -> int:
     """
     Pure Cat-4 LBT backoff-slot draw (3GPP-style binary-exponential

@@ -12,8 +12,11 @@ pre_20.C), 5 seeds x 1 s. "Pass" = network A's mean latency next to
 NR-U is no worse than next to a Wi-Fi neighbor (10% + CI slack).
 
 D.1 TS 37.213 channel access priority classes (Config_NR.priority_class).
+D.2 energy-detection threshold: TS 37.213 clause 4.1.5 (power-dependent,
+    Config_NR.ed_threshold_mode="ts37213") and fixed lower thresholds.
 
-Run from the repo root: `python -m analysis.laa_fairness_mitigations`.
+Run from the repo root: `python -m analysis.laa_fairness_mitigations
+[capc|ed ...]` (default: all).
 """
 import csv
 import os
@@ -93,7 +96,7 @@ def capc_variants():
         (f"NR-U, CAPC p={p}", dict(nru_config=Config_NR(cot_model="slots", priority_class=p))) for p in (1, 2, 3, 4)]
 
 
-def main():
+def study_capc():
     rows = score(capc_variants())
     print_rows(rows)
     write_csv(rows, "laa_fairness_capc.csv")
@@ -101,8 +104,76 @@ def main():
     greens = ["#a9c4a6", "#7fa37b", "#4b7248", "#2e4a2c"]
     colors = dict(zip(labels, [WIFI_COLOR, BASELINE_COLOR] + greens))
     bar_figure(rows, labels, "laa_fairness_capc", colors)
+# Rashed-Step pre_20.D.1-10-08-2026-end
+
+
+# Rashed-Step pre_20.D.2-10-08-2026-start
+ED_VARIANTS = [
+    # (label, Config_NR kwargs)
+    ("NR-U, default (-72 dBm, 23 dBm)", {}),
+    ("NR-U, TS 37.213 at 18 dBm (-67)", dict(tx_power_dbm=18.0, ed_threshold_mode="ts37213")),
+    ("NR-U, TS 37.213 at 13 dBm (-62)", dict(tx_power_dbm=13.0, ed_threshold_mode="ts37213")),
+    ("NR-U, ED -77 dBm (23 dBm)", dict(ed_threshold_dbm=-77.0)),
+    ("NR-U, ED -82 dBm (23 dBm)", dict(ed_threshold_dbm=-82.0)),
+]
+
+
+def ed_variants():
+    return [(lab, dict(nru_config=Config_NR(cot_model="slots", **kw))) for lab, kw in ED_VARIANTS]
+
+
+def study_ed():
+    rows = score(ed_variants())
+    print_rows(rows)
+    write_csv(rows, "laa_fairness_ed.csv")
+    labels = ["Wi-Fi neighbor (reference)"] + [lab for lab, _ in ED_VARIANTS]
+    colors = dict(zip(labels, [WIFI_COLOR, BASELINE_COLOR, "#a9c4a6", "#7fa37b", "#4b7248", "#2e4a2c"]))
+    bar_figure(rows, labels, "laa_fairness_ed", colors)
+
+
+CURVE_DISTANCES = [5, 10, 15, 20, 25, 30, 35, 40, 50, 60, 70, 80]
+
+
+def distance_curves(variants, stem, colors, markers):
+    """A latency vs distance: the Wi-Fi reference plus each NR-U variant."""
+    from analysis.plot_utils import save_line_figure, SERIES_STYLE
+    from analysis.laa_fairness_sweeps import crossover_m
+    series, rows = {}, []
+    for label, b, kw in [("Wi-Fi neighbor (reference)", "wifi", {})] + [(l, "nru", k) for l, k in variants]:
+        SERIES_STYLE.setdefault(label, dict(color=colors[label], marker=markers[label], linestyle="-"))
+        series[label] = []
+        for d in CURVE_DISTANCES:
+            m = measure(b, float(d), **kw)
+            series[label].append(m["a_latency_ms"])
+            rows.append({"distance_m": d, "variant": label, **m})
+    v = [(round(crossover_m(23.0, -62.0), 1), "NR-U (23 dBm) below Wi-Fi ED"),
+         (round(crossover_m(20.0, -72.0), 1), "Wi-Fi below NR-U ED (-72 dBm)")]
+    save_line_figure(CURVE_DISTANCES, series, "Distance between the networks (m)", "Network A latency (ms)", "",
+                     stem, vlines=v)
+    return rows
+
+
+def study_ed_distance():
+    keep = ["NR-U, default (-72 dBm, 23 dBm)", "NR-U, TS 37.213 at 18 dBm (-67)",
+            "NR-U, TS 37.213 at 13 dBm (-62)", "NR-U, ED -82 dBm (23 dBm)"]
+    variants = [(lab, kw) for lab, kw in ed_variants() if lab in keep]
+    colors = dict(zip(["Wi-Fi neighbor (reference)"] + keep, [WIFI_COLOR, BASELINE_COLOR, "#a9c4a6", "#7fa37b", NRU_COLOR]))
+    markers = dict(zip(["Wi-Fi neighbor (reference)"] + keep, ["^", "o", "s", "D", "h"]))
+    rows = distance_curves(variants, "laa_fairness_ed_vs_distance", colors, markers)
+    write_csv(rows, "laa_fairness_ed_distance.csv")
+    for r in rows:
+        print(f"{r['distance_m']:>4} {r['variant']:<34} {r['a_latency_ms']:>8.2f} ms {r['a_fail_pct']:>6.2f} %  B {r['b_mbps']:.1f}")
+
+
+STUDIES = {"capc": study_capc, "ed": study_ed, "ed_distance": study_ed_distance}
+
+
+def main(names=None):
+    for name in names or list(STUDIES):
+        print(f"=== {name} ===")
+        STUDIES[name]()
 
 
 if __name__ == "__main__":
-    main()
-# Rashed-Step pre_20.D.1-10-08-2026-end
+    main(sys.argv[1:])
+# Rashed-Step pre_20.D.2-10-08-2026-end

@@ -27,6 +27,9 @@ from common.packet import pick_traffic_class
 from ran.protocol.channel_access import LbtChannelAccess, generate_backoff_slots as _lbt_generate_backoff_slots
 # Rashed-Step pre_20.D.1-10-08-2026-start
 from ran.protocol.channel_access import CAPC_DL
+# Rashed-Step pre_20.D.2-10-08-2026-start
+from ran.protocol.channel_access import ts37213_ed_threshold_dbm
+# Rashed-Step pre_20.D.2-10-08-2026-end
 # Rashed-Step pre_20.D.1-10-08-2026-end
 # Rashed-Step 15.A-09-18-2026-end
 # Rashed-Step 15.F-09-18-2026-start
@@ -371,6 +374,15 @@ class Config_NR:
     # None (default) = the fields as given (M=3, CW 15-63 = class 3 with
     # the ETSI 6 ms MCOT), byte-identical to every earlier run.
     priority_class: Optional[int] = None
+    # Rashed-Step pre_20.D.2-10-08-2026-start
+    # Energy-detection threshold rule (pre_20.D.2): "ts37213" sets
+    # ed_threshold_dbm from TS 37.213 clause 4.1.5 (tx_power_dbm,
+    # bandwidth_mhz, ed_t_a_db) - see channel_access.
+    # ts37213_ed_threshold_dbm. None (default) = ed_threshold_dbm as
+    # given (-72 dBm), byte-identical.
+    ed_threshold_mode: Optional[str] = None
+    ed_t_a_db: float = 10.0
+    # Rashed-Step pre_20.D.2-10-08-2026-end
     # Rashed-Step pre_20.D.1-10-08-2026-end
     # Rashed-Step 19.B.4-10-07-2026-end
     # Rashed-Step 19.B.3-10-07-2026-end
@@ -412,6 +424,12 @@ class Config_NR:
                 raise ValueError(f"Config_NR.priority_class must be 1-4 (got {self.priority_class})")
             self.M, self.cw_min, self.cw_max, self.mcot = CAPC_DL[self.priority_class]
         # Rashed-Step pre_20.D.1-10-08-2026-end
+        # Rashed-Step pre_20.D.2-10-08-2026-start
+        if self.ed_threshold_mode is not None:
+            if self.ed_threshold_mode != "ts37213":
+                raise ValueError(f"Config_NR.ed_threshold_mode must be None or 'ts37213' (got {self.ed_threshold_mode!r})")
+            self.ed_threshold_dbm = ts37213_ed_threshold_dbm(self.tx_power_dbm, self.bandwidth_mhz, self.ed_t_a_db)
+        # Rashed-Step pre_20.D.2-10-08-2026-end
         if not (0.0 < self.ul_cot_fraction < 1.0):
             raise ValueError(
                 f"Config_NR.ul_cot_fraction must be strictly between 0 and 1 "
