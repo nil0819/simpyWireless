@@ -98,18 +98,28 @@ def test_uplink_enabled_requires_env_channel_config():
         assert "requires env, channel, and config" in str(e)
 
 
-def test_uplink_enabled_rejects_non_saturated_traffic():
+# Rashed-Step 20.B-10-08-2026-start
+# Poisson/CBR uplink is supported since Step 20.B (this used to assert a
+# "saturated only" ValueError); an unknown mode is still rejected.
+def test_uplink_accepts_poisson_and_rejects_unknown_traffic():
     env = simpy.Environment()
     channel = _make_channel(env)
+    sta = WiFiSTA(
+        name="S", pos=(0.0, 0.0), ap_name="AP 1", uplink_enabled=True,
+        env=env, channel=channel, config=Config(),
+        traffic_config=TrafficConfig(mode="poisson", arrival_rate_pps=10.0),
+    )
+    assert sta.packet_queue is not None
     try:
         WiFiSTA(
-            name="S", pos=(0.0, 0.0), ap_name="AP 1", uplink_enabled=True,
+            name="S2", pos=(0.0, 0.0), ap_name="AP 1", uplink_enabled=True,
             env=env, channel=channel, config=Config(),
-            traffic_config=TrafficConfig(mode="poisson"),
+            traffic_config=TrafficConfig(mode="bursty"),
         )
         assert False, "expected ValueError"
     except ValueError as e:
-        assert "only supports traffic_config.mode='saturated'" in str(e)
+        assert "unknown traffic_config.mode" in str(e)
+# Rashed-Step 20.B-10-08-2026-end
 
 
 def test_uplink_process_raises_runtime_error_if_never_wired_to_an_ap():

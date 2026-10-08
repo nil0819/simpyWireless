@@ -205,6 +205,7 @@ def run_simulation(
         # supported with is_rogue_wifi (RogueWiFiCAD never wires
         # sta.ap) - singleRun.py rejects that combination.
         wifi_sta_uplink_enabled: bool = False,
+        wifi_sta_traffic_config: Optional[TrafficConfig] = None,  # 20.B: STA uplink traffic (None = saturated)
         # Rashed-Step pre_17.B-10-04-2026-end
         # Rashed-Step 18.A-10-06-2026-start
         # Link error model shared by every Wi-Fi AP/STA and NR-U gNB/UE
@@ -346,6 +347,7 @@ def run_simulation(
                 channel=channel if wifi_sta_uplink_enabled else None,
                 config=wifi_config if wifi_sta_uplink_enabled else None,
                 uplink_enabled=wifi_sta_uplink_enabled,
+                traffic_config=wifi_sta_traffic_config if wifi_sta_uplink_enabled else None,  # 20.B
                 # Rashed-Step pre_17.B-10-04-2026-end
             )
             stas_for_ap.append(sta)
@@ -763,6 +765,12 @@ def run_simulation(
         print(f'Wifi uplink packets dropped: {wifi_ul_stats["dropped"]}')
         print(f"Wifi uplink packet throughput (Mbps): {(wifi_ul_delivered_bytes * 8) / (simulation_time * 1e6)}")
         print(f'Wifi uplink packet avg latency (us): {wifi_ul_stats["avg_latency_us"]}')
+        # Rashed-Step 20.B-10-08-2026-start
+        if getattr(config, "ampdu_max_mpdus", 1) > 1:
+            ua = {k: sum(s.ampdu_stats[k] for s in wifi_stas if hasattr(s, "ampdu_stats")) for k in ("ppdus", "mpdus", "mpdus_ok")}
+            print(f'Wifi uplink A-MPDU PPDUs: {ua["ppdus"]}, mean MPDUs per PPDU: {(ua["mpdus"] / ua["ppdus"]) if ua["ppdus"] else None}, '
+                  f'MPDU success ratio: {(ua["mpdus_ok"] / ua["mpdus"]) if ua["mpdus"] else None}')
+        # Rashed-Step 20.B-10-08-2026-end
     # Rashed-Step pre_17.B-10-04-2026-end
 
     # Rashed-Step 17.G-10-04-2026-start

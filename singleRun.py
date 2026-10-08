@@ -182,7 +182,7 @@ def parse_traffic_class_mix(raw_values, label: str):
 @click.option("--nru-traffic-class-mix", "nru_traffic_class_mix", type=str, multiple=True, help="NR-U QoS traffic-class mix. See --wifi-traffic-class-mix.")
 # Rashed-Step 10.A-08-07-2026-end
 # Rashed-Step 10.B-08-07-2026-start
-@click.option("--wifi-edca", "wifi_edca", is_flag=True, default=False, help="Enable real 802.11e EDCA differentiated channel access for Wi-Fi (per-AC voice/video/best_effort/background contention with independent CWmin/CWmax/AIFSN and virtual-collision resolution - see Project details/Step 10.txt's 10.B section). Wi-Fi only (NR-U is unaffected - no standardized EDCA-equivalent exists for unlicensed LBT). Default (unset/False) = legacy single-queue DCF contention, byte-identical to every pre-Step-10.B run. Currently requires --wifi-traffic-model=saturated (the default) - EDCA + poisson/cbr queueing is a deferred follow-up.")
+@click.option("--wifi-edca", "wifi_edca", is_flag=True, default=False, help="Enable real 802.11e EDCA differentiated channel access for Wi-Fi (per-AC voice/video/best_effort/background contention with independent CWmin/CWmax/AIFSN and virtual-collision resolution - see Project details/Step 10.txt's 10.B section). Wi-Fi only (NR-U is unaffected - no standardized EDCA-equivalent exists for unlicensed LBT). Default (unset/False) = legacy single-queue DCF contention, byte-identical to every pre-Step-10.B run. Works with any --wifi-traffic-model: poisson/cbr arrivals go into one queue per access category (Step 20.B), and --wifi-ampdu aggregates per access category within its TXOP limit.")
 # Rashed-Step 10.B-08-07-2026-end
 # Rashed-Step 11.A-08-21-2026-start
 @click.option("--wifi-rate-adapt", "wifi_rate_adapt", is_flag=True, default=False, help="Enable dynamic per-STA MCS rate adaptation for Wi-Fi, ARF-style (Kamerman & Monteban 1997): step MCS up after 10 consecutive successes, down after 2 consecutive failures - no channel-state feedback, matches real legacy 802.11 hardware behavior. Default (unset/False) = -m/--mcs-value stays fixed for the whole run, byte-identical to every pre-Step-11 run.")
@@ -302,13 +302,17 @@ def parse_traffic_class_mix(raw_values, label: str):
 @click.option("--nru-priority-class", "nru_priority_class", type=click.IntRange(1, 4), default=None, help="NR-U channel access priority class (Step pre_20.D.1, 3GPP TS 37.213): sets the defer slots m_p, CW_min/CW_max and MCOT from Table 4.1.1-1 (gNB downlink: p1 1/3/7/2ms, p2 1/7/15/3ms, p3 3/15/63/8ms, p4 7/15/1023/8ms) and Table 4.2.1-1 for UEs' own Type 1 LBT; overrides --nru_cw_min/--nru_cw_max/--mcot. Default (unset) = those flags as given, byte-identical.")
 # Rashed-Step pre_20.D.1-10-08-2026-end
 # Rashed-Step pre_20.B-10-08-2026-start
-@click.option("--wifi-ampdu", "wifi_ampdu", type=int, default=1, help="Wi-Fi A-MPDU aggregation (Step pre_20.B, AP downlink): up to this many MPDUs per channel access in one PPDU of at most --wifi-max-ppdu-us, each MPDU decoded on its own, Block Ack, failed MPDUs retried. Default 1 = one frame per access, byte-identical. Prints a Wi-Fi A-MPDU block.")
+@click.option("--wifi-ampdu", "wifi_ampdu", type=int, default=1, help="Wi-Fi A-MPDU aggregation (Step pre_20.B; AP downlink, and since Step 20.B also EDCA per access category within its TXOP limit and STA uplink): up to this many MPDUs per channel access in one PPDU of at most --wifi-max-ppdu-us, each MPDU decoded on its own, Block Ack, failed MPDUs retried. Default 1 = one frame per access, byte-identical. Prints a Wi-Fi A-MPDU block.")
 @click.option("--wifi-max-ppdu-us", "wifi_max_ppdu_us", type=float, default=5484.0, help="Longest A-MPDU PPDU (us; default 5484 = 802.11 aPPDUMaxTime).")
 # Rashed-Step pre_20.B-10-08-2026-end
 # Rashed-Step 20.A-10-08-2026-start
 @click.option("--wifi-mac-exchange", "wifi_mac_exchange", is_flag=True, default=False, help="802.11 frame exchange on the air (Step 20.A): the receiver transmits the ACK (or Block Ack) after SIFS, every decoded frame sets a NAV for the rest of its exchange, and a node that heard an undecoded frame defers EIFS (94 us) instead of DIFS. Prints a Wi-Fi MAC block. Default (unset) = the ACK time is only waited out, byte-identical.")
 @click.option("--wifi-rts-threshold", "wifi_rts_threshold", type=click.IntRange(0, None), default=None, help="RTS/CTS before any Wi-Fi data frame (or A-MPDU) whose payload exceeds this many bytes (Step 20.A; 0 = always). Needs --wifi-mac-exchange. Default (unset) = never.")
 # Rashed-Step 20.A-10-08-2026-end
+# Rashed-Step 20.B-10-08-2026-start
+@click.option("--wifi-sta-traffic-model", "wifi_sta_traffic_model", type=click.Choice(["saturated", "poisson", "cbr"]), default="saturated", help="Wi-Fi STA uplink traffic (Step 20.B; with --wifi-sta-uplink-enabled): saturated (default, as before) or poisson/cbr arrivals into a per-STA queue at --wifi-sta-arrival-rate-pps.")
+@click.option("--wifi-sta-arrival-rate-pps", "wifi_sta_arrival_rate_pps", type=float, default=100.0, help="Per-STA uplink arrival rate (packets/s) for --wifi-sta-traffic-model poisson/cbr (Step 20.B).")
+# Rashed-Step 20.B-10-08-2026-end
 @click.option("--wifi-preamble-detect", "wifi_preamble_detect", is_flag=True, default=False, help="802.11 preamble detection (Step pre_20.A): Wi-Fi defers to Wi-Fi frames from -82 dBm and to other signals (NR-U, licensed NR) from its -62 dBm energy-detection threshold - the asymmetry behind LAA coexistence. Default (unset) = one -62 dBm rule for everything, byte-identical.")
 @click.option("--fairness-report", "fairness_report", is_flag=True, default=False, help="Print a Coexistence Fairness block (Step pre_20.A): per technology the share of airtime it occupied (failed transmissions included), transmissions and their failure ratio, throughput and latency, and Jain's index over the airtime shares. Default (unset) = not printed.")
 # Rashed-Step pre_20.A-10-08-2026-end
@@ -484,6 +488,7 @@ def single_run(
         nru_wifi_reservation: Optional[str] = None,  # pre_20.D.3
         nru_ref_nack_threshold: float = 0.8, nru_adaptive_cot: bool = False,  # pre_20.D.4
         wifi_mac_exchange: bool = False, wifi_rts_threshold: Optional[int] = None,  # 20.A
+        wifi_sta_traffic_model: str = "saturated", wifi_sta_arrival_rate_pps: float = 100.0,  # 20.B
         # Rashed-Step pre_20.A-10-08-2026-end
         # Rashed-Step 19.F-10-07-2026-end
         # Rashed-Step 19.E.2-10-07-2026-end
@@ -562,12 +567,12 @@ def single_run(
     # surfaced earlier. That ValueError guard stays in place too (defense
     # in depth for anyone constructing WiFi directly, not just via this
     # CLI).
-    if wifi_edca and wifi_traffic_model != "saturated":
-        raise click.BadParameter(
-            "--wifi-edca currently only supports --wifi-traffic-model=saturated "
-            "(EDCA + poisson/cbr queueing is a deferred follow-up - see "
-            "Project details/Step 10.txt's 10.B NOT DONE list)."
-        )
+    # Rashed-Step 20.B-10-08-2026-start
+    # --wifi-edca with poisson/cbr traffic is supported since Step 20.B
+    # (per-AC queues); it used to be rejected here.
+    if wifi_sta_traffic_model != "saturated" and not wifi_sta_uplink_enabled:
+        raise click.BadParameter("--wifi-sta-traffic-model needs --wifi-sta-uplink-enabled.")
+    # Rashed-Step 20.B-10-08-2026-end
     # Rashed-Step 10.B-08-07-2026-end
 
     # Rashed-Step 13.D-08-23-2026-start
@@ -957,6 +962,9 @@ def single_run(
                        core_config=core_config,
                        # Rashed-Step pre_17.B-10-04-2026-start
                        wifi_sta_uplink_enabled=wifi_sta_uplink_enabled,
+                       wifi_sta_traffic_config=(None if wifi_sta_traffic_model == "saturated" else
+                           TrafficConfig(mode=wifi_sta_traffic_model, arrival_rate_pps=wifi_sta_arrival_rate_pps,
+                                         packet_size_bytes=wifi_packet_size_bytes)),  # 20.B
                        # Rashed-Step pre_17.B-10-04-2026-end
                        # Rashed-Step 18.A-10-06-2026-start
                        error_model_config=error_model_config,

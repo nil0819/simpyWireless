@@ -24,6 +24,9 @@ from typing import Optional
 from common.error_model import decode_ok
 # Rashed-Step 20.A-10-08-2026-start
 from wifi import mac as wifi_mac
+# Rashed-Step 20.B-10-08-2026-start
+from wifi import ampdu as wifi_ampdu
+# Rashed-Step 20.B-10-08-2026-end
 # Rashed-Step 20.A-10-08-2026-end
 # Rashed-Step 18.A-10-06-2026-end
 # Rashed-Step 5.D-02-06-2026-end
@@ -67,7 +70,8 @@ class Config:
     # rule for everything, as in every earlier run.
     preamble_detect_dbm: Optional[float] = None
     # Rashed-Step pre_20.B-10-08-2026-start
-    # A-MPDU aggregation (pre_20.B, AP downlink, DCF path): up to this many
+    # A-MPDU aggregation (pre_20.B, AP downlink, DCF path; since 20.B also
+    # EDCA per access category and STA uplink - wifi/ampdu.py): up to this many
     # MPDUs per channel access, in one PPDU of at most ampdu_max_ppdu_us
     # (802.11 aPPDUMaxTime, 5.484 ms); per-MPDU decoding + Block Ack.
     # 1 (default) = one frame per access, as in every earlier run.
@@ -222,6 +226,13 @@ class WiFi:
     "fixed" to be more spec-pure, since that would be an unrelated,
     out-of-scope behavioral change to already-validated non-EDCA logic.
 
+    Step 20.B UPDATE: poisson/cbr traffic now works with EDCA (one queue
+    per AC, an AC contends only while backlogged - _start_edca_queued),
+    and with Config.ampdu_max_mpdus > 1 each won access carries an A-MPDU
+    from that AC, capped by its TXOP limit (wifi/ampdu.py). The first and
+    second items below are therefore historical (one PPDU per TXOP is
+    still the model - no multi-PPDU bursting).
+
     NOT YET SUPPORTED (raises ValueError at construction if attempted -
     see __init__):
       - traffic_config.mode other than "saturated". EDCA-saturated
@@ -335,7 +346,7 @@ class WiFi:
         # matters.
         self.packet_log = []
         # Rashed-Step pre_20.B-10-08-2026-start
-        self.ampdu_stats = {"ppdus": 0, "mpdus": 0, "mpdus_ok": 0, "header_lost": 0}
+        self.ampdu_stats = {"ppdus": 0, "mpdus": 0, "mpdus_ok": 0, "header_lost": 0}  # = wifi_ampdu.new_stats()
         # Rashed-Step 20.A-10-08-2026-start
         self.mac_stats = wifi_mac.new_stats()
         # Rashed-Step 20.A-10-08-2026-end
@@ -350,16 +361,15 @@ class WiFi:
         self.edca_params = config.edca_params if config.edca_params is not None else DEFAULT_EDCA_PARAMS
         self.ac_frame_to_send: Dict[str, Optional[Frame]] = {ac: None for ac in QOS_TRAFFIC_CLASSES}
         self.ac_failed_in_row: Dict[str, int] = {ac: 0 for ac in QOS_TRAFFIC_CLASSES}
-        if config.qos_enabled and self.traffic_config.mode != "saturated":
-            # Fail fast rather than silently produce undefined behavior -
-            # see class docstring's "NOT YET SUPPORTED" note. This is a
-            # deliberately scoped-down first EDCA cut, not a bug.
-            raise ValueError(
-                "WiFi: qos_enabled=True currently only supports "
-                "traffic_config.mode='saturated' (EDCA + poisson/cbr "
-                "queueing is a deferred follow-up - see Project details/"
-                "Step 10.txt's 10.B NOT DONE list)."
-            )
+        # Rashed-Step 20.B-10-08-2026-start
+        # EDCA with poisson/cbr traffic (Step 20.B): arrivals go into one queue
+        # per access category (by the packet's traffic class); an AC contends
+        # only while it has something queued. A-MPDU retransmissions wait per
+        # AC in ac_pending. (Before 20.B this combination raised ValueError.)
+        self.ac_queue: Dict[str, list] = {ac: [] for ac in QOS_TRAFFIC_CLASSES}
+        self.ac_pending: Dict[str, list] = {ac: [] for ac in QOS_TRAFFIC_CLASSES}
+        self._ac_arrival = env.event()
+        # Rashed-Step 20.B-10-08-2026-end
         # Rashed-Step 10.B-08-07-2026-end
 
         if config.qos_enabled:
@@ -524,6 +534,15 @@ class WiFi:
             else:  # "cbr"
                 interval_us = 1e6 / self.traffic_config.arrival_rate_pps
             yield self.env.timeout(interval_us)
+            # Rashed-Step 20.B-10-08-2026-start
+            if self.config.qos_enabled:
+                pkt = self._make_packet()
+                self.ac_queue[pkt.traffic_class].append(pkt)
+                if not self._ac_arrival.triggered:
+                    self._ac_arrival.succeed()
+                self._ac_arrival = self.env.event()
+                continue
+            # Rashed-Step 20.B-10-08-2026-end
             yield self.packet_queue.put(self._make_packet())
     # Rashed-Step 8.B-08-06-2026-end
 
@@ -606,6 +625,15 @@ class WiFi:
             remaining_us[ac] = aifs_us + backoff_slots * Times.t_slot
 
         while True:
+            # Rashed-Step 20.B-10-08-2026-start
+            if self.traffic_config.mode != "saturated":
+                for ac in QOS_TRAFFIC_CLASSES:          # newly non-empty ACs start their AIFS + backoff
+                    if ac not in remaining_us:
+                        self._edca_refresh(ac)
+                        if self.ac_frame_to_send[ac] is not None:
+                            remaining_us[ac] = (Times.get_aifs_us(self.edca_params[ac].aifsn)
+                                                + self.generate_new_back_off_slots_edca(ac) * Times.t_slot)
+            # Rashed-Step 20.B-10-08-2026-end
             if _DCF_ACCESS._busy(self):  # pre_20.A: same CCA as DCF (incl. preamble detection)
                 log(self, "Channel busy during EDCA AIFS/backoff, waiting...")
                 yield self.channel.state_changed
@@ -730,7 +758,12 @@ class WiFi:
             if frame.packet is not None:
                 frame.packet.status = "DROPPED"
                 self.packet_log.append(frame.packet)
-            self._refresh_ac_frame(ac)
+            # Rashed-Step 20.B-10-08-2026-start
+            if self.traffic_config.mode == "saturated":
+                self._refresh_ac_frame(ac)
+            else:
+                self.ac_frame_to_send[ac] = None   # next queued packet, if any (start_edca)
+            # Rashed-Step 20.B-10-08-2026-end
             self.ac_failed_in_row[ac] = 0
 
     def sent_completed_edca(self, ac: str):
@@ -763,6 +796,11 @@ class WiFi:
         this never blocks waiting for "something to send" the way the
         poisson/cbr legacy path can.
         """
+        # Rashed-Step 20.B-10-08-2026-start
+        if self.traffic_config.mode != "saturated" or self.config.ampdu_max_mpdus > 1:
+            yield from self._start_edca_queued()
+            return
+        # Rashed-Step 20.B-10-08-2026-end
         for ac in QOS_TRAFFIC_CLASSES:
             self._refresh_ac_frame(ac)
         while True:
@@ -780,6 +818,63 @@ class WiFi:
                 self._refresh_ac_frame(winner)
     # Rashed-Step 10.B-08-07-2026-end
 
+    # Rashed-Step 20.B-10-08-2026-start
+    def _edca_head(self, ac):
+        """Next packet for AC ac without waiting: a new one (saturated) or
+        the queue's head, or None."""
+        if self.traffic_config.mode == "saturated":
+            return self._make_packet_for_ac(ac)
+        return self.ac_queue[ac].pop(0) if self.ac_queue[ac] else None
+
+    def _edca_refresh(self, ac):
+        """Make sure AC ac has a contending frame if it has anything to
+        send. With A-MPDU the frame only stands for the AC's head packet
+        in contention; the PPDU itself is built when the AC wins."""
+        if self.ac_frame_to_send[ac] is not None:
+            return
+        if self.config.ampdu_max_mpdus > 1:
+            if not self.ac_pending[ac]:
+                p = self._edca_head(ac)
+                if p is not None:
+                    self.ac_pending[ac] = [p]
+            head = self.ac_pending[ac][0] if self.ac_pending[ac] else None
+        else:
+            head = self._edca_head(ac)
+        if head is not None:
+            frame = self.generate_new_frame(head)
+            frame.packet = head
+            self.ac_frame_to_send[ac] = frame
+
+    def _start_edca_queued(self):
+        """EDCA driving loop for poisson/cbr traffic (per-AC queues) and/or
+        A-MPDU (per-AC aggregation within the AC's TXOP limit, wifi/ampdu.py).
+        Same contention (wait_back_off_edca) as the saturated loop."""
+        agg = self.config.ampdu_max_mpdus > 1
+        while True:
+            for ac in QOS_TRAFFIC_CLASSES:
+                self._edca_refresh(ac)
+            if all(f is None for f in self.ac_frame_to_send.values()):
+                yield self._ac_arrival
+                continue
+            winner = yield from self.wait_back_off_edca()
+            if agg:
+                header_us, per_mpdu = self._ampdu_times()
+                put_back = (lambda p: None) if self.traffic_config.mode == "saturated" else \
+                    (lambda p: self.ac_queue[winner].insert(0, p))
+                mpdus = wifi_ampdu.build(self.ac_pending[winner], lambda: self._edca_head(winner), put_back,
+                                         header_us, per_mpdu, self.config.ampdu_max_mpdus,
+                                         wifi_ampdu.ppdu_budget_us(self, winner))
+                rx_name, rx_pos = self._ampdu_rx()
+                yield self.env.process(wifi_ampdu.send_any(self, mpdus, header_us, per_mpdu, rx_name, rx_pos,
+                                                           ac=winner))
+                self.ac_pending[winner] = wifi_ampdu.next_pending(self.ac_pending[winner], mpdus)
+                self.ac_frame_to_send[winner] = None
+            else:
+                was_sent = yield self.env.process(self.send_frame_edca(winner))
+                if was_sent:
+                    self.ac_frame_to_send[winner] = None
+
+    # Rashed-Step 20.B-10-08-2026-end
     def start(self):
         # Rashed-Step pre_20.B-10-08-2026-start
         if self.config.ampdu_max_mpdus > 1:
@@ -1506,16 +1601,14 @@ class WiFi:
     # A-MPDU aggregation (Config.ampdu_max_mpdus > 1), AP downlink on the
     # DCF path. One channel access carries one PPDU of several MPDUs.
     # ------------------------------------------------------------------
-    AMPDU_DELIMITER_BITS = 32
+    # Rashed-Step 20.B-10-08-2026-start
+    # The A-MPDU machinery moved to wifi/ampdu.py (shared with EDCA and STA
+    # uplink); the AP DCF path below behaves exactly as before.
+    AMPDU_DELIMITER_BITS = wifi_ampdu.AMPDU_DELIMITER_BITS
 
     def _ampdu_times(self):
         """(PHY header us, us per MPDU of payload_bytes) at the current MCS."""
-        t = self.times
-        if self.config.rate_adapt_enabled:
-            t = Times(self.config.data_size, self.current_mcs_for_link(self.rate_adapt_link_key()))
-        header_us = t.ofdm_preamble + t.ofdm_signal
-        per_mpdu = lambda payload: (Times.mac_overhead + payload * 8 + self.AMPDU_DELIMITER_BITS) / t.data_rate
-        return header_us, per_mpdu
+        return wifi_ampdu.times_for(self)
 
     def _take_queued_packet(self):
         """A packet for the A-MPDU without waiting: a new one in saturated
@@ -1526,6 +1619,14 @@ class WiFi:
             return self.packet_queue.items.pop(0)
         return None
 
+    def _put_back_packet(self, pkt):
+        if self.traffic_config.mode != "saturated":
+            self.packet_queue.items.insert(0, pkt)
+
+    def _ampdu_rx(self):
+        rx = self.sta_list[0] if self.sta_list else None
+        return (rx.name, rx.current_pos()) if rx is not None else (self.name, self.current_pos())
+
     def _start_ampdu(self):
         pending = []  # MPDUs waiting for a retransmission (Block Ack said failed)
         while True:
@@ -1534,97 +1635,15 @@ class WiFi:
             self.process = self.env.process(self.wait_back_off())
             yield self.process
             header_us, per_mpdu = self._ampdu_times()
-            budget = self.config.ampdu_max_ppdu_us - header_us
-            mpdus, used = [], 0.0
-            for pkt in pending:
-                if len(mpdus) < self.config.ampdu_max_mpdus and used + per_mpdu(pkt.payload_bytes) <= budget:
-                    mpdus.append(pkt)
-                    used += per_mpdu(pkt.payload_bytes)
-            while len(mpdus) < self.config.ampdu_max_mpdus:
-                nxt = self._take_queued_packet()
-                if nxt is None:
-                    break
-                if used + per_mpdu(nxt.payload_bytes) > budget:
-                    if self.traffic_config.mode != "saturated":
-                        self.packet_queue.items.insert(0, nxt)
-                    break
-                mpdus.append(nxt)
-                used += per_mpdu(nxt.payload_bytes)
-            if not mpdus:  # a single MPDU longer than the PPDU budget: send it alone
-                mpdus = pending[:1]
-            # Rashed-Step 20.A-10-08-2026-start
-            send = self._send_ampdu_mac if (self.config.mac_exchange and self.sta_list) else self._send_ampdu
-            # Rashed-Step 20.A-10-08-2026-end
-            ok = yield self.env.process(send(mpdus, header_us, per_mpdu))
-            carried = {id(p) for p in mpdus}
-            pending = [p for p in pending if id(p) not in carried] + \
-                      [p for p in mpdus if p.status == "PENDING" or getattr(p, "_dup", False)]  # 20.A: _dup
-
-    def _send_ampdu(self, mpdus, header_us, per_mpdu):
-        """One PPDU: the PHY header has to survive (else nothing decodes and
-        no Block Ack comes back), then each MPDU is decoded on its own time
-        window; the Block Ack reports which ones got through. Returns True
-        if at least one MPDU was delivered."""
-        start = self.env.now
-        dur = header_us + sum(per_mpdu(p.payload_bytes) for p in mpdus)
-        tx_pos = self.current_pos()
-        rx_pos = self.sta_list[0].current_pos() if self.sta_list else tx_pos
-        tx = ActiveTx(tx_id=self.name, tx_pos=tx_pos, rx_pos=rx_pos, tx_start=start,
-                      tx_power_dbm=self.config.tx_power_dbm, f_hz=self.config.f_ghz, pl_exp=self.config.pl_exp,
-                      t_end=start + dur, tech="WiFi", bandwidth_mhz=self.config.bandwidth_mhz,
-                      noise_figure_db=self.config.noise_figure_db, packet=mpdus[0])
-        self.channel.register_tx(tx)
-        required = self.required_sinr_db()
-        em = getattr(self.config, "error_model", None)
-        n_ok = 0
-        try:
-            yield self.env.timeout(dur)
-            sinr_h = self.channel.sinr_db(tx, window=(start, start + header_us))
-            header_ok = decode_ok(em, sinr_h, required)
-            t0 = start + header_us
-            for p in mpdus:
-                t1 = t0 + per_mpdu(p.payload_bytes)
-                sinr = self.channel.sinr_db(tx, window=(t0, t1))
-                p.measured_sinr_db = sinr
-                if header_ok and decode_ok(em, sinr, required):
-                    p.status = "DELIVERED"
-                    n_ok += 1
-                t0 = t1
-            self.rate_adapt_record_result(self.rate_adapt_link_key(), n_ok > 0, measured_sinr_db=sinr_h)
-            yield self.env.timeout(0)
-            self.channel.unregister_tx(tx, success=n_ok > 0)
-        except BaseException:
-            self.channel.unregister_tx(tx, success=n_ok > 0)
-            raise
-        self.ampdu_stats["ppdus"] += 1
-        self.ampdu_stats["mpdus"] += len(mpdus)
-        self.ampdu_stats["mpdus_ok"] += n_ok
-        if n_ok > 0:
-            self.channel.succeeded_transmissions += 1
-            self.succeeded_transmissions += 1
-            self.failed_transmissions_in_row = 0
-            self.channel.airtime_control[self.name] += self.times.get_ack_frame_time()
-            yield self.env.timeout(self.times.get_ack_frame_time())   # SIFS + Block Ack
-        else:
-            self.channel.failed_transmissions += 1
-            self.failed_transmissions += 1
-            self.failed_transmissions_in_row += 1
-            if not header_ok:
-                self.ampdu_stats["header_lost"] += 1
-            yield self.env.timeout(self.times.ack_timeout)              # no Block Ack
-        for p in mpdus:
-            if p.status == "DELIVERED":
-                p.delivered_at = self.env.now
-                self.channel.bytes_sent += p.payload_bytes
-                self.packet_log.append(p)
+            mpdus = wifi_ampdu.build(pending, self._take_queued_packet, self._put_back_packet, header_us, per_mpdu,
+                                     self.config.ampdu_max_mpdus, self.config.ampdu_max_ppdu_us)
+            rx_name, rx_pos = self._ampdu_rx()
+            if self.config.mac_exchange and self.sta_list:
+                ok = yield self.env.process(wifi_ampdu.send_mac(self, mpdus, header_us, per_mpdu, rx_name, rx_pos))
             else:
-                p.retry_count += 1
-                if p.retry_count > self.config.r_limit:
-                    p.status = "DROPPED"
-                    self.packet_log.append(p)
-        if self.failed_transmissions_in_row > self.config.r_limit:
-            self.failed_transmissions_in_row = 0
-        return n_ok > 0
+                ok = yield self.env.process(wifi_ampdu.send(self, mpdus, header_us, per_mpdu, rx_pos))
+            pending = wifi_ampdu.next_pending(pending, mpdus)
+    # Rashed-Step 20.B-10-08-2026-end
     # Rashed-Step pre_20.B-10-08-2026-end
 
     # Rashed-Step 20.A-10-08-2026-start
@@ -1651,76 +1670,6 @@ class WiFi:
         res, data_end = yield from wifi_mac.data_exchange(self, tx, frame.frame_time, frame.packet.payload_bytes,
                                                           rx.name, tx.rx_pos, decide)
         return wifi_mac.finish(self, frame, res, data_end, on_ok, on_fail)
-
-    def _send_ampdu_mac(self, mpdus, header_us, per_mpdu):
-        """_send_ampdu with the Block Ack on the air (and RTS/CTS when the
-        PPDU's payload exceeds the threshold). An MPDU is delivered when it
-        is decoded; a lost Block Ack makes the sender retry every MPDU of
-        the PPDU - the ones the receiver already has go again as duplicates
-        (p._dup) until a Block Ack confirms them."""
-        start = self.env.now
-        dur = header_us + sum(per_mpdu(p.payload_bytes) for p in mpdus)
-        rx = self.sta_list[0]
-        tx = ActiveTx(tx_id=self.name, tx_pos=self.current_pos(), rx_pos=rx.current_pos(), tx_start=start,
-                      tx_power_dbm=self.config.tx_power_dbm, f_hz=self.config.f_ghz, pl_exp=self.config.pl_exp,
-                      t_end=start + dur, tech="WiFi", bandwidth_mhz=self.config.bandwidth_mhz,
-                      noise_figure_db=self.config.noise_figure_db, packet=mpdus[0])
-        required = self.required_sinr_db()
-        em = getattr(self.config, "error_model", None)
-        st = {"header_ok": False, "decoded": []}
-
-        def decide(t):
-            s0 = t.tx_start
-            sinr_h = self.channel.sinr_db(t, window=(s0, s0 + header_us))
-            st["header_ok"] = decode_ok(em, sinr_h, required)
-            t0 = s0 + header_us
-            for p in mpdus:
-                t1 = t0 + per_mpdu(p.payload_bytes)
-                sinr = self.channel.sinr_db(t, window=(t0, t1))
-                if st["header_ok"] and decode_ok(em, sinr, required):
-                    st["decoded"].append(p)
-                    if p.status == "DELIVERED":
-                        self.mac_stats["duplicates"] += 1
-                    else:
-                        p.measured_sinr_db = sinr
-                        p.status = "DELIVERED"
-                        p.delivered_at = self.env.now
-                        self.channel.bytes_sent += p.payload_bytes
-                        self.packet_log.append(p)
-                elif p.status != "DELIVERED":
-                    p.measured_sinr_db = sinr
-                t0 = t1
-            self.rate_adapt_record_result(self.rate_adapt_link_key(), bool(st["decoded"]), measured_sinr_db=sinr_h)
-            return bool(st["decoded"])
-        res, _ = yield from wifi_mac.data_exchange(self, tx, dur, sum(p.payload_bytes for p in mpdus), rx.name,
-                                                   tx.rx_pos, decide, response_bytes=wifi_mac.BA_BYTES)
-        self.ampdu_stats["ppdus"] += 1
-        self.ampdu_stats["mpdus"] += len(mpdus)
-        self.ampdu_stats["mpdus_ok"] += len(st["decoded"])
-        acked = {id(p) for p in st["decoded"]} if res == "ok" else set()
-        if res == "ok":
-            self.channel.succeeded_transmissions += 1
-            self.succeeded_transmissions += 1
-            self.failed_transmissions_in_row = 0
-        else:
-            self.channel.failed_transmissions += 1
-            self.failed_transmissions += 1
-            self.failed_transmissions_in_row += 1
-            if res == "data_fail" and not st["header_ok"]:
-                self.ampdu_stats["header_lost"] += 1
-        for p in mpdus:
-            if id(p) in acked:
-                p._dup = False
-                continue
-            p.retry_count += 1
-            if p.status == "DELIVERED":
-                p._dup = p.retry_count <= self.config.r_limit   # retry until a Block Ack confirms it
-            elif p.retry_count > self.config.r_limit:
-                p.status = "DROPPED"
-                self.packet_log.append(p)
-        if self.failed_transmissions_in_row > self.config.r_limit:
-            self.failed_transmissions_in_row = 0
-        return res == "ok"
 
     # Rashed-Step 20.A-10-08-2026-end
     def sent_completed(self):

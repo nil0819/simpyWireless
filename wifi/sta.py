@@ -18,6 +18,10 @@ from common.error_model import decode_ok
 # Rashed-Step 18.A-10-06-2026-end
 # Rashed-Step 20.A-10-08-2026-start
 from wifi import mac as wifi_mac
+# Rashed-Step 20.B-10-08-2026-start
+from wifi import ampdu as wifi_ampdu
+import simpy
+# Rashed-Step 20.B-10-08-2026-end
 # Rashed-Step 20.A-10-08-2026-end
 _DCF_ACCESS = DcfChannelAccess(Times.t_slot, Times.t_difs)
 # Rashed-Step pre_18.D-10-05-2026-end
@@ -64,7 +68,8 @@ class WiFiSTA:
         touched nothing - byte-identical to every pre-15.B run.
       - Legacy DCF only (mirrors WiFi's qos_enabled=False path) - no
         EDCA differentiation for uplink traffic in this first cut.
-      - Saturated traffic only (mirrors WiFi's own EDCA scope-out) -
+      - (Lifted in Step 20.B: poisson/cbr uplink queues, and A-MPDU when
+        config.ampdu_max_mpdus > 1.) Saturated traffic only (mirrors WiFi's own EDCA scope-out) -
         this STA always has a fresh frame ready the instant it wins
         contention. Poisson/cbr uplink queueing is a real, separate
         piece of complexity, deferred to a follow-up.
@@ -133,14 +138,13 @@ class WiFiSTA:
             self.traffic_config if self.traffic_config is not None
             else TrafficConfig(mode="saturated")
         )
-        if self.traffic_config.mode != "saturated":
-            raise ValueError(
-                "WiFiSTA: uplink_enabled=True currently only supports "
-                "traffic_config.mode='saturated' - poisson/cbr uplink "
-                "queueing is a deferred follow-up, mirroring WiFi's "
-                "own qos_enabled=True EDCA path (see wifi.py's WiFi "
-                "class docstring for the precedent)."
-            )
+        # Rashed-Step 20.B-10-08-2026-start
+        # poisson/cbr uplink (Step 20.B): packets arrive into a queue and the
+        # STA contends only while it has something queued - the AP's own
+        # Step 8.B model. (Before 20.B this raised ValueError.)
+        if self.traffic_config.mode not in ("saturated", "poisson", "cbr"):
+            raise ValueError(f"WiFiSTA: unknown traffic_config.mode {self.traffic_config.mode!r}")
+        # Rashed-Step 20.B-10-08-2026-end
         self.col = random.choice(colors)
         self.times = Times(self.config.data_size, self.config.mcs)
         self.cw_min = self.config.cw_min
@@ -155,6 +159,13 @@ class WiFiSTA:
         self.process = None
         # Rashed-Step 20.A-10-08-2026-start
         self.mac_stats = wifi_mac.new_stats()
+        # Rashed-Step 20.B-10-08-2026-start
+        self.ampdu_stats = wifi_ampdu.new_stats()
+        self.packet_queue = simpy.Store(self.env)
+        self._need_new_packet = False
+        if self.traffic_config.mode != "saturated":
+            self.env.process(self._traffic_generator())
+        # Rashed-Step 20.B-10-08-2026-end
         # Rashed-Step 20.A-10-08-2026-end
         # Same "cheap, .get()-safe downstream" registration WiFi.__init__
         # does for the AP - see channel.unregister_tx()'s .get(tx.tx_id,
@@ -194,6 +205,48 @@ class WiFiSTA:
             traffic_class=data_packet.traffic_class if data_packet is not None else "best_effort",
         )
 
+    # Rashed-Step 20.B-10-08-2026-start
+    def _next_packet(self):
+        """Generator: a new packet (saturated, never waits) or the next
+        queued one (poisson/cbr, waits until one arrives)."""
+        if self.traffic_config.mode == "saturated":
+            return self._make_packet()
+        pkt = yield self.packet_queue.get()
+        return pkt
+
+    def _traffic_generator(self):
+        while True:
+            rate = self.traffic_config.arrival_rate_pps
+            interval_us = random.expovariate(rate / 1e6) if self.traffic_config.mode == "poisson" else 1e6 / rate
+            yield self.env.timeout(interval_us)
+            yield self.packet_queue.put(self._make_packet())
+
+    def _take_queued_packet(self):
+        if self.traffic_config.mode == "saturated":
+            return self._make_packet()
+        return self.packet_queue.items.pop(0) if self.packet_queue.items else None
+
+    def _put_back_packet(self, pkt):
+        if self.traffic_config.mode != "saturated":
+            self.packet_queue.items.insert(0, pkt)
+
+    def _start_uplink_ampdu(self):
+        """Uplink A-MPDU (config.ampdu_max_mpdus > 1): same aggregation and
+        Block Ack as the AP's downlink (wifi/ampdu.py), to the AP."""
+        pending = []
+        while True:
+            if not pending:
+                pending = [(yield from self._next_packet())]
+            self.process = self.env.process(self.wait_back_off())
+            yield self.process
+            header_us, per_mpdu = wifi_ampdu.times_for(self)
+            mpdus = wifi_ampdu.build(pending, self._take_queued_packet, self._put_back_packet, header_us, per_mpdu,
+                                     self.config.ampdu_max_mpdus, self.config.ampdu_max_ppdu_us)
+            yield self.env.process(wifi_ampdu.send_any(self, mpdus, header_us, per_mpdu, self.ap.name,
+                                                       self.ap.current_pos()))
+            pending = wifi_ampdu.next_pending(pending, mpdus)
+
+    # Rashed-Step 20.B-10-08-2026-end
     def generate_new_back_off_slots(self, failed_transmissions_in_row: int) -> int:
         upper_limit = pow(2, failed_transmissions_in_row) * (self.cw_min + 1) - 1
         upper_limit = upper_limit if upper_limit <= self.cw_max else self.cw_max
@@ -340,6 +393,12 @@ class WiFiSTA:
             if self.frame_to_send.packet is not None:
                 self.frame_to_send.packet.status = "DROPPED"
                 self.packet_log.append(self.frame_to_send.packet)
+            # Rashed-Step 20.B-10-08-2026-start
+            if self.traffic_config.mode != "saturated":
+                self._need_new_packet = True          # start_uplink takes the next queued one
+                self.failed_transmissions_in_row = 0
+                return
+            # Rashed-Step 20.B-10-08-2026-end
             new_packet = self._make_packet()
             self.frame_to_send = self.generate_new_frame(new_packet)
             self.frame_to_send.packet = new_packet
@@ -355,12 +414,24 @@ class WiFiSTA:
                 "STA in its own sta_list - see this class's own "
                 "docstring's WIRING section)."
             )
+        # Rashed-Step 20.B-10-08-2026-start
+        if getattr(self.config, "ampdu_max_mpdus", 1) > 1:
+            yield from self._start_uplink_ampdu()
+            return
+        # Rashed-Step 20.B-10-08-2026-end
         while True:
-            packet = self._make_packet()
+            packet = yield from self._next_packet()   # 20.B: saturated = a new one at once, as before
             self.frame_to_send = self.generate_new_frame(packet)
             self.frame_to_send.packet = packet
             was_sent = False
             while not was_sent:
+                # Rashed-Step 20.B-10-08-2026-start
+                if self._need_new_packet:              # retries ran out (poisson/cbr): next queued packet
+                    self._need_new_packet = False
+                    packet = yield from self._next_packet()
+                    self.frame_to_send = self.generate_new_frame(packet)
+                    self.frame_to_send.packet = packet
+                # Rashed-Step 20.B-10-08-2026-end
                 self.process = self.env.process(self.wait_back_off())
                 yield self.process
                 was_sent = yield self.env.process(self.send_frame())

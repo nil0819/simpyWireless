@@ -680,12 +680,13 @@ def test_wifi_config_qos_disabled_by_default():
     assert Config().edca_params is None
 
 
-def test_wifi_qos_enabled_requires_saturated_traffic_mode():
-    try:
-        _make_test_edca_wifi(qos_enabled=True, traffic_config=TrafficConfig(mode="poisson", arrival_rate_pps=10.0))
-        assert False, "expected ValueError for qos_enabled=True + non-saturated mode"
-    except ValueError as e:
-        assert "saturated" in str(e)
+# Rashed-Step 20.B-10-08-2026-start
+# EDCA with poisson/cbr traffic is supported since Step 20.B (this used to
+# assert a "saturated only" ValueError): one queue per access category.
+def test_wifi_qos_enabled_with_poisson_gets_per_ac_queues():
+    _, ap = _make_test_edca_wifi(qos_enabled=True, traffic_config=TrafficConfig(mode="poisson", arrival_rate_pps=10.0))
+    assert set(ap.ac_queue) == set(QOS_TRAFFIC_CLASSES) and all(q == [] for q in ap.ac_queue.values())
+# Rashed-Step 20.B-10-08-2026-end
 
 
 def test_wifi_qos_enabled_true_uses_default_edca_params_when_unset():
