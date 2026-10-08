@@ -983,7 +983,24 @@ class Gnb:
             else:
                 needs[ue.name] = self._rbs_needed(self.dl_buffers[ue.name].backlog_bytes,
                                                   self._slot_mcs(ue), duration_us)
-        return self._maxmin_rbs(self.total_rbs, needs)
+        # Rashed-Step pre_19.F-10-07-2026-start
+        # Due HARQ retransmissions get their RBs first (oldest need first);
+        # the rest are split max-min among the others. Before this, a
+        # retransmission cut below its original RBs by the max-min split
+        # could never go out, and once all HARQ processes held such TBs
+        # the UE got no new data either.
+        retx = {ue.name: needs[ue.name] for ue in ues
+                if self._due_retx(self.dl_buffers[ue.name]) is not None}
+        if not retx:
+            return self._maxmin_rbs(self.total_rbs, needs)
+        out, remaining = {}, self.total_rbs
+        for name, need in retx.items():
+            out[name] = min(need, remaining)
+            remaining -= out[name]
+        rest = {k: v for k, v in needs.items() if k not in retx}
+        out.update(self._maxmin_rbs(remaining, rest) if rest else {})
+        return out
+        # Rashed-Step pre_19.F-10-07-2026-end
 
     def _send_cot_slots(self):
         """One COT under the "slots" model: optional reservation signal,
@@ -1181,7 +1198,12 @@ class Gnb:
         if harq is not None:
             ent = self._harq_for(buf)
             due = ent.peek_retx(self.env.now)
-            if due is not None and rbs >= due.rbs:
+            # Rashed-Step pre_19.F-10-07-2026-start
+            # A due retransmission goes out on the RBs it gets (same TB; on
+            # fewer RBs that's a higher code rate - not modeled) instead of
+            # waiting for a share it may never get again.
+            if due is not None and rbs > 0:
+            # Rashed-Step pre_19.F-10-07-2026-end
                 tb = ent.next_retx(self.env.now)
                 sinr = sinr_fn()
                 for pkt, _n, _l in tb.segments:
