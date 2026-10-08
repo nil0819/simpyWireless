@@ -286,6 +286,10 @@ def parse_traffic_class_mix(raw_values, label: str):
 # Rashed-Step 19.F-10-07-2026-start
 @click.option("--nru-scell", "nru_scell", is_flag=True, default=False, help="NR-U as a secondary cell (Step 19.F, LAA-anchored carrier aggregation): every licensed UE also gets an NR-U SCell on the co-located NR-U gNB - one downlink queue served by both carriers, RRC/Core/uplink on the licensed PCell, SCell active only while the UE is connected to that anchor. Needs --nr-colocated, --nr-dl-traffic poisson/cbr, --nru-cot-model slots and no --nru-ue-uplink-enabled (LAA's uplink is licensed). Prints an 'NR-U SCell (LAA)' block.")
 # Rashed-Step 19.F-10-07-2026-end
+# Rashed-Step pre_20.A-10-08-2026-start
+@click.option("--wifi-preamble-detect", "wifi_preamble_detect", is_flag=True, default=False, help="802.11 preamble detection (Step pre_20.A): Wi-Fi defers to Wi-Fi frames from -82 dBm and to other signals (NR-U, licensed NR) from its -62 dBm energy-detection threshold - the asymmetry behind LAA coexistence. Default (unset) = one -62 dBm rule for everything, byte-identical.")
+@click.option("--fairness-report", "fairness_report", is_flag=True, default=False, help="Print a Coexistence Fairness block (Step pre_20.A): per technology the share of airtime it occupied (failed transmissions included), transmissions and their failure ratio, throughput and latency, and Jain's index over the airtime shares. Default (unset) = not printed.")
+# Rashed-Step pre_20.A-10-08-2026-end
 @click.option("--nr-handover", "nr_handover", is_flag=True, default=False, help="A3 handover between the licensed cells (needs --nr-rrc-enabled).")
 # Rashed-Step 19.E.2-10-07-2026-end
 @click.option("--nru-buffer-limit-bytes", "nru_buffer_limit_bytes", type=int, default=None, help="slots only: drop-tail limit of each per-UE downlink buffer (default unbounded).")
@@ -449,6 +453,10 @@ def single_run(
         nr_handover: bool = False,
         # Rashed-Step 19.F-10-07-2026-start
         nru_scell: bool = False,
+        # Rashed-Step pre_20.A-10-08-2026-start
+        fairness_report: bool = False,
+        wifi_preamble_detect: bool = False,  # pre_20.A
+        # Rashed-Step pre_20.A-10-08-2026-end
         # Rashed-Step 19.F-10-07-2026-end
         # Rashed-Step 19.E.2-10-07-2026-end
         # Rashed-Step 19.D.2-10-07-2026-start
@@ -781,6 +789,7 @@ def single_run(
                        # Rashed-Step 5.C-02-06-2026-start
                        Config(1472, wifi_cw_min, wifi_cw_max, wifi_r_limit, mcs_value,
                               bandwidth_mhz=wifi_bandwidth_mhz, noise_figure_db=wifi_noise_figure_db,
+                              preamble_detect_dbm=-82.0 if wifi_preamble_detect else None,  # pre_20.A
                               # Rashed-Step 5.D-02-06-2026-start
                               wifi_sinr_thr_db_override=wifi_sinr_thr_db_override,
                               # Rashed-Step 5.D-02-06-2026-end
@@ -908,6 +917,7 @@ def single_run(
                        nr_ue_radius=nr_ue_radius, nr_colocated=nr_colocated,
                        nr_ue_uplink_enabled=nr_ue_uplink_enabled, nr_rrc_enabled=nr_rrc_enabled,
                        nru_scell=nru_scell,  # 19.F
+                       fairness_report=fairness_report,  # pre_20.A
                        # Rashed-Step 19.E.2-10-07-2026-end
                        # Rashed-Step 16.F-10-02-2026-end
                        )

@@ -57,6 +57,13 @@ class Config:
 
     # Rashed-Step 3.A-01-12-2026-start
     ed_threshold_dbm: float = -62.0   # energy detect threshold 
+    # Rashed-Step pre_20.A-10-08-2026-start
+    # 802.11 preamble detection (pre_20.A): Wi-Fi defers to Wi-Fi-
+    # decodable frames from this level (-82 dBm), to anything else from
+    # ed_threshold_dbm. None (default) = the single ed_threshold_dbm
+    # rule for everything, as in every earlier run.
+    preamble_detect_dbm: Optional[float] = None
+    # Rashed-Step pre_20.A-10-08-2026-end
     # Rashed-Step 3.A-01-12-2026-end
 
     # Rashed-Step 4.D_1-01-28-2026-start
@@ -572,8 +579,7 @@ class WiFi:
             remaining_us[ac] = aifs_us + backoff_slots * Times.t_slot
 
         while True:
-            if self.channel.is_busy(self.current_pos(), self.config.ed_threshold_dbm, exclude_tx_id=self.name,
-                                     sense_f_hz=self.config.f_ghz, sense_bw_mhz=self.config.bandwidth_mhz):
+            if _DCF_ACCESS._busy(self):  # pre_20.A: same CCA as DCF (incl. preamble detection)
                 log(self, "Channel busy during EDCA AIFS/backoff, waiting...")
                 yield self.channel.state_changed
                 continue

@@ -69,6 +69,12 @@ class ActiveTx:
     # after the gNB, in the same slot. -1 = never registered.
     uid: int = field(default=-1, repr=False, compare=False)
     # Rashed-Step pre_18.A-10-04-2026-end
+    # Rashed-Step pre_20.A-10-08-2026-start
+    # True when the transmission starts with a Wi-Fi-decodable header
+    # (pre_20.D mitigation: NR-U sending a Wi-Fi preamble / CTS-to-self),
+    # so Wi-Fi with preamble detection defers to it from -82 dBm.
+    wifi_preamble: bool = field(default=False, compare=False)
+    # Rashed-Step pre_20.A-10-08-2026-end
     # Rashed-Step pre_18.F-10-06-2026-start
     # Name of the cell whose scheduler placed this transmission on its
     # own resource blocks (OFDMA), or None. Transmissions sharing a
@@ -161,6 +167,13 @@ class Channel:
     succeeded_transmissions_NRL: int = 0
     airtime_data_NRL: Dict[str, int] = field(default_factory=dict)
     airtime_control_NRL: Dict[str, int] = field(default_factory=dict)
+    # Rashed-Step pre_20.A-10-08-2026-start
+    # Fairness study (pre_20.A): every transmission per technology,
+    # failed ones included - airtime_data* only counts successful ones.
+    tx_airtime_total_us: Dict[str, float] = field(default_factory=dict)
+    tx_count: Dict[str, int] = field(default_factory=dict)
+    tx_failed: Dict[str, int] = field(default_factory=dict)
+    # Rashed-Step pre_20.A-10-08-2026-end
     # Rashed-Step 6.B-07-31-2026-end
 
 
@@ -266,6 +279,12 @@ class Channel:
               self.active_txs.remove(tx)
 
          dur = max(0, tx.t_end - tx.tx_start)
+         # Rashed-Step pre_20.A-10-08-2026-start
+         self.tx_airtime_total_us[tx.tech] = self.tx_airtime_total_us.get(tx.tech, 0.0) + dur
+         self.tx_count[tx.tech] = self.tx_count.get(tx.tech, 0) + 1
+         if not success:
+             self.tx_failed[tx.tech] = self.tx_failed.get(tx.tech, 0) + 1
+         # Rashed-Step pre_20.A-10-08-2026-end
 
          if success:
              if tx.tech == "WiFi":
@@ -313,7 +332,8 @@ class Channel:
     # node tuned to a non-overlapping channel shouldn't defer to energy
     # it can't actually hear.
     def sensed_energy_dbm(self, sense_pos: Pos, exclude_tx_id: Optional[str] = None,
-                           sense_f_hz: Optional[float] = None, sense_bw_mhz: Optional[float] = None) -> float:
+                           sense_f_hz: Optional[float] = None, sense_bw_mhz: Optional[float] = None,
+                           tx_filter=None) -> float:  # pre_20.A: tx_filter (None = every transmission)
     # Rashed-Step 5.E-02-06-2026-end
         total_mw = 0.0
         now = self.env.now
@@ -330,6 +350,10 @@ class Channel:
         for tx in self.active_txs:
              if exclude_tx_id is not None and tx.tx_id == exclude_tx_id:
                   continue
+             # Rashed-Step pre_20.A-10-08-2026-start
+             if tx_filter is not None and not tx_filter(tx):
+                  continue
+             # Rashed-Step pre_20.A-10-08-2026-end
              # Rashed-Step 5.E-02-06-2026-start
              if sense_f_hz is not None:
                  overlap = spectral_overlap_fraction(sense_f_hz, sense_bw_mhz, tx.f_hz, tx.bandwidth_mhz)
@@ -354,6 +378,23 @@ class Channel:
 
 
     # Rashed-Step 5.E-02-06-2026-start
+    # Rashed-Step pre_20.A-10-08-2026-start
+    def is_busy_wifi(self, sense_pos: Pos, ed_threshold_dbm: float, preamble_detect_dbm: float,
+                     exclude_tx_id: Optional[str] = None, sense_f_hz: Optional[float] = None,
+                     sense_bw_mhz: Optional[float] = None) -> bool:
+        """802.11 clear channel assessment with preamble detection: busy
+        when the energy of Wi-Fi-decodable transmissions (Wi-Fi, or another
+        technology sending a Wi-Fi preamble, tx.wifi_preamble) reaches
+        preamble_detect_dbm (-82 dBm), or the total energy reaches
+        ed_threshold_dbm (-62 dBm, energy detection). Simplification: a
+        frame counts as detected for its whole duration."""
+        if self.is_busy(sense_pos, ed_threshold_dbm, exclude_tx_id, sense_f_hz, sense_bw_mhz):
+            return True
+        wifi_like = lambda t: t.tech == "WiFi" or getattr(t, "wifi_preamble", False)
+        return self.sensed_energy_dbm(sense_pos, exclude_tx_id, sense_f_hz, sense_bw_mhz,
+                                      tx_filter=wifi_like) >= preamble_detect_dbm
+    
+    # Rashed-Step pre_20.A-10-08-2026-end
     def is_busy(self, sense_pos: Pos, ed_threshold_dbm: float, exclude_tx_id: Optional[str] = None,
                 sense_f_hz: Optional[float] = None, sense_bw_mhz: Optional[float] = None) -> bool:
         return self.sensed_energy_dbm(sense_pos, exclude_tx_id, sense_f_hz, sense_bw_mhz) >= ed_threshold_dbm

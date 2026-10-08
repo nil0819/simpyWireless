@@ -230,6 +230,14 @@ def run_simulation(
         # NR-U as a secondary cell for the licensed UEs (ran/protocol/scell.py):
         # needs co-located licensed cells with buffered downlink and NR-U slots.
         nru_scell: bool = False,
+        # Rashed-Step pre_20.A-10-08-2026-start
+        # Fairness study (pre_20.A): per-AP traffic (AP i gets
+        # wifi_ap_traffic_configs[i-1] when given, else wifi_traffic_config)
+        # so two Wi-Fi networks can carry different loads, and an opt-in
+        # "Coexistence Fairness" stdout block. Defaults change nothing.
+        wifi_ap_traffic_configs: Optional[list] = None,
+        fairness_report: bool = False,
+        # Rashed-Step pre_20.A-10-08-2026-end
         # Rashed-Step 19.F-10-07-2026-end
 ):
     random.seed(seed)
@@ -370,7 +378,9 @@ def run_simulation(
                 mobility=ap_mobility,
                 # Rashed-Step 5.G-02-06-2026-end
                 # Rashed-Step 8.B-08-06-2026-start
-                traffic_config=wifi_traffic_config
+                traffic_config=(wifi_ap_traffic_configs[i - 1]  # pre_20.A: per-AP load
+                                if wifi_ap_traffic_configs is not None and i - 1 < len(wifi_ap_traffic_configs)
+                                else wifi_traffic_config)
                 # Rashed-Step 8.B-08-06-2026-end
             )
         # Rashed-Step pre_5.D-02-06-2026-end
@@ -846,6 +856,26 @@ def run_simulation(
         # Rashed-Step 19.F-10-07-2026-end
     
     # Rashed-Step 19.E.2-10-07-2026-end
+    # Rashed-Step pre_20.A-10-08-2026-start
+    fairness_stats = None  # (not "fairness": a legacy occupancy metric below uses that name)
+    if fairness_report:
+        from common.fairness import compute_fairness, print_fairness
+        fairness_stats = compute_fairness(channel, simulation_time,
+                                          {"WiFi": (wifi_throughput_mbps, wifi_pkt_stats),
+                                           "NRU": (nru_throughput_mbps, nru_pkt_stats)})
+        print_fairness(fairness_stats)
+        # Per network (AP / gNB): what the 3GPP replacement test compares.
+        fairness_stats["nodes"] = {}
+        node_logs = ([(ap.name, getattr(ap, "packet_log", [])) for ap in wifi_aps]
+                     + [(g.name, g.packet_log) for g in gnbs])
+        for node, log_ in node_logs:
+            st = compute_packet_stats(log_)
+            dl_bytes = sum(p.total_bytes() for p in log_ if p.status == "DELIVERED")
+            fairness_stats["nodes"][node] = {"throughput_mbps": dl_bytes * 8 / (simulation_time * 1e6),
+                                             "avg_latency_us": st["avg_latency_us"],
+                                             "p95_latency_us": st.get("p95_latency_us"),
+                                             "delivered": st["delivered"], "dropped": st["dropped"]}
+    # Rashed-Step pre_20.A-10-08-2026-end
     # Rashed-Step 18.A-10-06-2026-start
     print_error_model_stats(error_model)
     # Rashed-Step 18.A-10-06-2026-end
@@ -1085,5 +1115,6 @@ def run_simulation(
     #          normalized_channel_occupancy_time_NR, normalized_channel_efficiency_NR, p_coll_NR,
     #          normalized_channel_occupancy_time_all, normalized_channel_efficiency_all])
     # Rashed-Step pre_11.E-08-18-2026-end
-
-
+    # Rashed-Step pre_20.A-10-08-2026-start
+    return fairness_stats
+    # Rashed-Step pre_20.A-10-08-2026-end

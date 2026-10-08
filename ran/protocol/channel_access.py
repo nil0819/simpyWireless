@@ -244,6 +244,12 @@ class DcfChannelAccess:
     @staticmethod
     def _busy(node: Any) -> bool:
         cfg = node.config
+        # Rashed-Step pre_20.A-10-08-2026-start
+        pd = getattr(cfg, "preamble_detect_dbm", None)
+        if pd is not None:
+            return node.channel.is_busy_wifi(node.current_pos(), cfg.ed_threshold_dbm, pd, exclude_tx_id=node.name,
+                                             sense_f_hz=cfg.f_ghz, sense_bw_mhz=cfg.bandwidth_mhz)
+        # Rashed-Step pre_20.A-10-08-2026-end
         return node.channel.is_busy(node.current_pos(), cfg.ed_threshold_dbm, exclude_tx_id=node.name,
                                     sense_f_hz=cfg.f_ghz, sense_bw_mhz=cfg.bandwidth_mhz)
 
