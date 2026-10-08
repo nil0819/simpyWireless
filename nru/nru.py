@@ -401,6 +401,17 @@ class Config_NR:
     #                   whose NAV covers the whole COT incl. its uplink.
     # None (default) = neither, byte-identical.
     wifi_reservation: Optional[str] = None
+    # Rashed-Step pre_20.D.4-10-08-2026-start
+    # Reference-slot feedback (pre_20.D.4, "slots" only). TS 37.213:
+    # the contention window grows when at least Z of the reference
+    # slot's transport blocks fail; Z = 0.8 (80%) as before. A smaller
+    # Z reacts to any loss. adaptive_cot: a COT whose reference slot
+    # failed halves the cap on the next COT's length (down to one slot);
+    # a good one doubles it back up to mcot. False (default) = every COT
+    # may use the full mcot, byte-identical.
+    ref_slot_nack_threshold: float = 0.8
+    adaptive_cot: bool = False
+    # Rashed-Step pre_20.D.4-10-08-2026-end
     # Rashed-Step pre_20.D.3-10-08-2026-end
     # Rashed-Step pre_20.D.2-10-08-2026-end
     # Rashed-Step pre_20.D.1-10-08-2026-end
@@ -457,6 +468,12 @@ class Config_NR:
             if self.wifi_reservation == "cts_to_self" and self.cot_model != "slots":
                 raise ValueError("Config_NR.wifi_reservation=\"cts_to_self\" needs cot_model=\"slots\".")
         # Rashed-Step pre_20.D.3-10-08-2026-end
+        # Rashed-Step pre_20.D.4-10-08-2026-start
+        if not (0.0 < self.ref_slot_nack_threshold <= 1.0):
+            raise ValueError(f"Config_NR.ref_slot_nack_threshold must be in (0, 1] (got {self.ref_slot_nack_threshold})")
+        if self.adaptive_cot and self.cot_model != "slots":
+            raise ValueError("Config_NR.adaptive_cot needs cot_model=\"slots\".")
+        # Rashed-Step pre_20.D.4-10-08-2026-end
         if not (0.0 < self.ul_cot_fraction < 1.0):
             raise ValueError(
                 f"Config_NR.ul_cot_fraction must be strictly between 0 and 1 "
@@ -879,6 +896,10 @@ class Gnb:
         # Rashed-Step pre_20.D.3-10-08-2026-start
         self.slot_stats["cts_to_self"] = 0
         # Rashed-Step pre_20.D.3-10-08-2026-end
+        # Rashed-Step pre_20.D.4-10-08-2026-start
+        self.slot_stats["cot_cap_us_sum"] = 0.0   # adaptive_cot: mean cap = sum / cots
+        self._cot_cap_us = None
+        # Rashed-Step pre_20.D.4-10-08-2026-end
         self.dl_buffers = {}
         saturated = self.traffic_config.mode == "saturated"
         for ue in self.ue_list:
@@ -1091,6 +1112,13 @@ class Gnb:
         # Rashed-Step pre_20.D.3-10-08-2026-end
         tx_start = self.env.now
         total_us = cfg.mcot * 1000
+        # Rashed-Step pre_20.D.4-10-08-2026-start
+        if cfg.adaptive_cot:
+            if self._cot_cap_us is None:
+                self._cot_cap_us = float(total_us)
+            total_us = min(total_us, self._cot_cap_us)
+            self.slot_stats["cot_cap_us_sum"] += total_us
+        # Rashed-Step pre_20.D.4-10-08-2026-end
         rs_time = 0 if gap else (self.next_sync_slot_boundry - self.env.now)
         # Rashed-Step pre_20.D.3-10-08-2026-start
         if cts_us:  # the CTS + SIFS took the start of the COT (and of its reservation signal)
@@ -1161,7 +1189,9 @@ class Gnb:
                     # TS 37.213: the contention window doubles when at least
                     # 80% of the reference slot's transport blocks fail.
                     n = n_ok + n_fail
-                    ref_ok = n == 0 or n_fail < 0.8 * n
+                    # Rashed-Step pre_20.D.4-10-08-2026-start
+                    ref_ok = n == 0 or n_fail < cfg.ref_slot_nack_threshold * n   # Z = 0.8 by default
+                    # Rashed-Step pre_20.D.4-10-08-2026-end
             was_sent = bool(ref_ok)
             # Same zero-duration tick before unregistering as the burst model.
             yield self.env.timeout(0)
@@ -1181,6 +1211,12 @@ class Gnb:
             self.failed_transmissions_in_row += 1
             if self.failed_transmissions_in_row > cfg.r_limit:
                 self.failed_transmissions_in_row = 0
+        # Rashed-Step pre_20.D.4-10-08-2026-start
+        if cfg.adaptive_cot:
+            full = cfg.mcot * 1000.0
+            self._cot_cap_us = (min(full, 2.0 * self._cot_cap_us) if was_sent
+                                else max(float(self.slot_us), self._cot_cap_us / 2.0))
+        # Rashed-Step pre_20.D.4-10-08-2026-end
 
         # Rashed-Step 19.A-10-07-2026-start
         if was_sent and (cfg.ul_access_mode is NruUplinkAccessMode.COT_SHARING or self._rrc_ul_waiters > 0):
