@@ -22,6 +22,9 @@ from Times import WIFI_MCS_SINR_THRESHOLDS_DB
 from typing import Optional
 # Rashed-Step 18.A-10-06-2026-start
 from common.error_model import decode_ok
+# Rashed-Step 20.A-10-08-2026-start
+from wifi import mac as wifi_mac
+# Rashed-Step 20.A-10-08-2026-end
 # Rashed-Step 18.A-10-06-2026-end
 # Rashed-Step 5.D-02-06-2026-end
 # Rashed-Step 5.G-02-06-2026-start
@@ -71,6 +74,16 @@ class Config:
     ampdu_max_mpdus: int = 1
     ampdu_max_ppdu_us: float = 5484.0
     # Rashed-Step pre_20.B-10-08-2026-end
+    # Rashed-Step 20.A-10-08-2026-start
+    # 802.11 frame exchange on the air (Step 20.A, wifi/mac.py): ACK /
+    # Block Ack transmitted after SIFS by the receiver, NAV from every
+    # decoded frame, EIFS after an undecoded one. rts_threshold_bytes:
+    # RTS/CTS before data whose payload exceeds it (None = never; needs
+    # mac_exchange). False (default) = ACK time only waited out, as in
+    # every earlier run.
+    mac_exchange: bool = False
+    rts_threshold_bytes: Optional[int] = None
+    # Rashed-Step 20.A-10-08-2026-end
     # Rashed-Step pre_20.A-10-08-2026-end
     # Rashed-Step 3.A-01-12-2026-end
 
@@ -323,6 +336,9 @@ class WiFi:
         self.packet_log = []
         # Rashed-Step pre_20.B-10-08-2026-start
         self.ampdu_stats = {"ppdus": 0, "mpdus": 0, "mpdus_ok": 0, "header_lost": 0}
+        # Rashed-Step 20.A-10-08-2026-start
+        self.mac_stats = wifi_mac.new_stats()
+        # Rashed-Step 20.A-10-08-2026-end
         # Rashed-Step pre_20.B-10-08-2026-end
         # Rashed-Step 8.G-08-06-2026-end
 
@@ -623,6 +639,11 @@ class WiFi:
         already-verified legacy path's code is never touched by this
         change at all - see class docstring.
         """
+        # Rashed-Step 20.A-10-08-2026-start
+        if self.config.mac_exchange and self.sta_list:
+            return (yield from self._send_frame_mac(self.ac_frame_to_send[ac], lambda: self.sent_completed_edca(ac),
+                                                    lambda: self.sent_failed_edca(ac)))
+        # Rashed-Step 20.A-10-08-2026-end
         frame = self.ac_frame_to_send[ac]
         log(self, f'Starting sending frame (EDCA {ac}): {frame.frame_time}')
         tx_start = self.env.now
@@ -1000,6 +1021,10 @@ class WiFi:
         # (unchanged) then decides who, if anyone, survives, exactly like
         # it already does for cross-technology WiFi/NR-U interference.
         # Rashed-Step 6.A-07-31-2026-end
+        # Rashed-Step 20.A-10-08-2026-start
+        if self.config.mac_exchange and self.sta_list:
+            return (yield from self._send_frame_mac(self.frame_to_send, self.sent_completed, self.sent_failed))
+        # Rashed-Step 20.A-10-08-2026-end
         log(self, f'Starting sending frame: {self.frame_to_send.frame_time}')
         # Rashed-Step 4.D_2-01-28-2026-end
         # Rashed-Step 5.G-02-06-2026-start
@@ -1527,10 +1552,13 @@ class WiFi:
                 used += per_mpdu(nxt.payload_bytes)
             if not mpdus:  # a single MPDU longer than the PPDU budget: send it alone
                 mpdus = pending[:1]
-            ok = yield self.env.process(self._send_ampdu(mpdus, header_us, per_mpdu))
+            # Rashed-Step 20.A-10-08-2026-start
+            send = self._send_ampdu_mac if (self.config.mac_exchange and self.sta_list) else self._send_ampdu
+            # Rashed-Step 20.A-10-08-2026-end
+            ok = yield self.env.process(send(mpdus, header_us, per_mpdu))
             carried = {id(p) for p in mpdus}
             pending = [p for p in pending if id(p) not in carried] + \
-                      [p for p in mpdus if p.status == "PENDING"]
+                      [p for p in mpdus if p.status == "PENDING" or getattr(p, "_dup", False)]  # 20.A: _dup
 
     def _send_ampdu(self, mpdus, header_us, per_mpdu):
         """One PPDU: the PHY header has to survive (else nothing decodes and
@@ -1599,6 +1627,102 @@ class WiFi:
         return n_ok > 0
     # Rashed-Step pre_20.B-10-08-2026-end
 
+    # Rashed-Step 20.A-10-08-2026-start
+    # ------------------------------------------------------------------
+    # 802.11 frame exchange on the air (Config.mac_exchange) - see
+    # wifi/mac.py. The receiver is sta_list[0], the same STA the data
+    # frame's SINR has always been evaluated at.
+    # ------------------------------------------------------------------
+    def _send_frame_mac(self, frame, on_ok, on_fail):
+        rx = self.sta_list[0]
+        now = self.env.now
+        tx = ActiveTx(tx_id=self.name, tx_pos=self.current_pos(), rx_pos=rx.current_pos(), tx_start=now,
+                      tx_power_dbm=self.config.tx_power_dbm, f_hz=self.config.f_ghz, pl_exp=self.config.pl_exp,
+                      t_end=now + frame.frame_time, tech="WiFi", bandwidth_mhz=self.config.bandwidth_mhz,
+                      noise_figure_db=self.config.noise_figure_db, packet=frame.packet)
+        em = getattr(self.config, "error_model", None)
+
+        def decide(t):
+            sinr = self.channel.sinr_db(t)
+            frame.packet.measured_sinr_db = sinr
+            ok = decode_ok(em, sinr, self.required_sinr_db())
+            self.rate_adapt_record_result(self.rate_adapt_link_key(), ok, measured_sinr_db=sinr)
+            return ok
+        res, data_end = yield from wifi_mac.data_exchange(self, tx, frame.frame_time, frame.packet.payload_bytes,
+                                                          rx.name, tx.rx_pos, decide)
+        return wifi_mac.finish(self, frame, res, data_end, on_ok, on_fail)
+
+    def _send_ampdu_mac(self, mpdus, header_us, per_mpdu):
+        """_send_ampdu with the Block Ack on the air (and RTS/CTS when the
+        PPDU's payload exceeds the threshold). An MPDU is delivered when it
+        is decoded; a lost Block Ack makes the sender retry every MPDU of
+        the PPDU - the ones the receiver already has go again as duplicates
+        (p._dup) until a Block Ack confirms them."""
+        start = self.env.now
+        dur = header_us + sum(per_mpdu(p.payload_bytes) for p in mpdus)
+        rx = self.sta_list[0]
+        tx = ActiveTx(tx_id=self.name, tx_pos=self.current_pos(), rx_pos=rx.current_pos(), tx_start=start,
+                      tx_power_dbm=self.config.tx_power_dbm, f_hz=self.config.f_ghz, pl_exp=self.config.pl_exp,
+                      t_end=start + dur, tech="WiFi", bandwidth_mhz=self.config.bandwidth_mhz,
+                      noise_figure_db=self.config.noise_figure_db, packet=mpdus[0])
+        required = self.required_sinr_db()
+        em = getattr(self.config, "error_model", None)
+        st = {"header_ok": False, "decoded": []}
+
+        def decide(t):
+            s0 = t.tx_start
+            sinr_h = self.channel.sinr_db(t, window=(s0, s0 + header_us))
+            st["header_ok"] = decode_ok(em, sinr_h, required)
+            t0 = s0 + header_us
+            for p in mpdus:
+                t1 = t0 + per_mpdu(p.payload_bytes)
+                sinr = self.channel.sinr_db(t, window=(t0, t1))
+                if st["header_ok"] and decode_ok(em, sinr, required):
+                    st["decoded"].append(p)
+                    if p.status == "DELIVERED":
+                        self.mac_stats["duplicates"] += 1
+                    else:
+                        p.measured_sinr_db = sinr
+                        p.status = "DELIVERED"
+                        p.delivered_at = self.env.now
+                        self.channel.bytes_sent += p.payload_bytes
+                        self.packet_log.append(p)
+                elif p.status != "DELIVERED":
+                    p.measured_sinr_db = sinr
+                t0 = t1
+            self.rate_adapt_record_result(self.rate_adapt_link_key(), bool(st["decoded"]), measured_sinr_db=sinr_h)
+            return bool(st["decoded"])
+        res, _ = yield from wifi_mac.data_exchange(self, tx, dur, sum(p.payload_bytes for p in mpdus), rx.name,
+                                                   tx.rx_pos, decide, response_bytes=wifi_mac.BA_BYTES)
+        self.ampdu_stats["ppdus"] += 1
+        self.ampdu_stats["mpdus"] += len(mpdus)
+        self.ampdu_stats["mpdus_ok"] += len(st["decoded"])
+        acked = {id(p) for p in st["decoded"]} if res == "ok" else set()
+        if res == "ok":
+            self.channel.succeeded_transmissions += 1
+            self.succeeded_transmissions += 1
+            self.failed_transmissions_in_row = 0
+        else:
+            self.channel.failed_transmissions += 1
+            self.failed_transmissions += 1
+            self.failed_transmissions_in_row += 1
+            if res == "data_fail" and not st["header_ok"]:
+                self.ampdu_stats["header_lost"] += 1
+        for p in mpdus:
+            if id(p) in acked:
+                p._dup = False
+                continue
+            p.retry_count += 1
+            if p.status == "DELIVERED":
+                p._dup = p.retry_count <= self.config.r_limit   # retry until a Block Ack confirms it
+            elif p.retry_count > self.config.r_limit:
+                p.status = "DROPPED"
+                self.packet_log.append(p)
+        if self.failed_transmissions_in_row > self.config.r_limit:
+            self.failed_transmissions_in_row = 0
+        return res == "ok"
+
+    # Rashed-Step 20.A-10-08-2026-end
     def sent_completed(self):
         log(self, f"Successfully sent frame, waiting ack: {self.times.get_ack_frame_time()}")
         self.frame_to_send.t_end = self.env.now

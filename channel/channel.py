@@ -438,7 +438,8 @@ class Channel:
                 return True
         return False
 
-    def unregister_control_tx(self, tx: ActiveTx, control_airtime: Dict[str, float]):
+    def unregister_control_tx(self, tx: ActiveTx, control_airtime: Dict[str, float],
+                              account_to: Optional[str] = None):  # 20.A: account_to
         """End a control frame (e.g. NR-U's CTS-to-self): its airtime counts
         toward its technology's total and the node's control airtime, not as
         a data transmission."""
@@ -446,9 +447,32 @@ class Channel:
             self.active_txs.remove(tx)
         dur = max(0, tx.t_end - tx.tx_start)
         self.tx_airtime_total_us[tx.tech] = self.tx_airtime_total_us.get(tx.tech, 0.0) + dur
-        control_airtime[tx.tx_id] = control_airtime.get(tx.tx_id, 0) + dur
+        key = tx.tx_id if account_to is None else account_to
+        control_airtime[key] = control_airtime.get(key, 0) + dur
         self._pulse_state_changed()
     # Rashed-Step pre_20.D.3-10-08-2026-end
+
+    # Rashed-Step 20.A-10-08-2026-start
+    # EIFS bookkeeping (Step 20.A, wifi/mac.py): the last Wi-Fi frame that
+    # was not decoded at its receiver, and when the last one that was
+    # ended. Only written when Config.mac_exchange is on.
+    def note_wifi_frame(self, tx: ActiveTx, ok: bool):
+        if ok:
+            self._wifi_ok_end = tx.t_end
+        else:
+            self._wifi_error = tx
+
+    def eifs_applies(self, sense_pos: Pos, detect_dbm: float, exclude_tx_id: Optional[str] = None) -> bool:
+        """True if the most recent Wi-Fi frame to end was not decoded (no
+        decoded frame ended after it) and it reached sense_pos at
+        detect_dbm or more - 802.11 then defers EIFS instead of DIFS."""
+        err = getattr(self, "_wifi_error", None)
+        if err is None or err.tx_id == exclude_tx_id or err.t_end <= getattr(self, "_wifi_ok_end", -1.0):
+            return False
+        pr = rx_power_dbm(err.tx_power_dbm, dist(err.tx_pos, sense_pos), err.f_hz, n=err.pl_exp,
+                          shadow_db=self.shadow_db(err.tx_id, sense_pos))
+        return pr >= detect_dbm
+    # Rashed-Step 20.A-10-08-2026-end
     
     # Rashed-Step pre_20.A-10-08-2026-end
     def is_busy(self, sense_pos: Pos, ed_threshold_dbm: float, exclude_tx_id: Optional[str] = None,

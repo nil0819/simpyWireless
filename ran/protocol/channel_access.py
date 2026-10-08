@@ -291,6 +291,13 @@ class DcfChannelAccess:
             return node.channel.is_busy_wifi(node.current_pos(), cfg.ed_threshold_dbm, pd, exclude_tx_id=node.name,
                                              sense_f_hz=cfg.f_ghz, sense_bw_mhz=cfg.bandwidth_mhz)
         # Rashed-Step pre_20.A-10-08-2026-end
+        # Rashed-Step 20.A-10-08-2026-start
+        # MAC exchange without preamble detection: still honour NAVs
+        # (decodable from -82 dBm).
+        if getattr(cfg, "mac_exchange", False) and node.channel.nav_busy(
+                node.current_pos(), -82.0, node.name, cfg.f_ghz, cfg.bandwidth_mhz):
+            return True
+        # Rashed-Step 20.A-10-08-2026-end
         return node.channel.is_busy(node.current_pos(), cfg.ed_threshold_dbm, exclude_tx_id=node.name,
                                     sense_f_hz=cfg.f_ghz, sense_bw_mhz=cfg.bandwidth_mhz)
 
@@ -304,7 +311,16 @@ class DcfChannelAccess:
         while True:
             while self._busy(node):
                 yield node.channel.state_changed
-            if not (yield from self._idle_for(node, self.t_difs_us)):
+            # Rashed-Step 20.A-10-08-2026-start
+            ifs = self.t_difs_us
+            if getattr(node.config, "mac_exchange", False):
+                from wifi.mac import EIFS_US
+                pd = getattr(node.config, "preamble_detect_dbm", None)
+                if node.channel.eifs_applies(node.current_pos(), -82.0 if pd is None else pd, node.name):
+                    ifs = EIFS_US
+                    node.mac_stats["eifs"] += 1
+            # Rashed-Step 20.A-10-08-2026-end
+            if not (yield from self._idle_for(node, ifs)):  # 20.A: EIFS or DIFS
                 continue
             to_grid = (self.t_slot_us - env.now % self.t_slot_us) % self.t_slot_us
             if not (yield from self._idle_for(node, to_grid)):

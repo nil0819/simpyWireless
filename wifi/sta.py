@@ -16,6 +16,9 @@ from ran.protocol.channel_access import DcfChannelAccess
 # Rashed-Step 18.A-10-06-2026-start
 from common.error_model import decode_ok
 # Rashed-Step 18.A-10-06-2026-end
+# Rashed-Step 20.A-10-08-2026-start
+from wifi import mac as wifi_mac
+# Rashed-Step 20.A-10-08-2026-end
 _DCF_ACCESS = DcfChannelAccess(Times.t_slot, Times.t_difs)
 # Rashed-Step pre_18.D-10-05-2026-end
 from common.common_phy import dist, rx_power_dbm, mcs_sinr_threshold_db
@@ -150,6 +153,9 @@ class WiFiSTA:
         self._ack_seq = 0
         self.packet_log = []
         self.process = None
+        # Rashed-Step 20.A-10-08-2026-start
+        self.mac_stats = wifi_mac.new_stats()
+        # Rashed-Step 20.A-10-08-2026-end
         # Same "cheap, .get()-safe downstream" registration WiFi.__init__
         # does for the AP - see channel.unregister_tx()'s .get(tx.tx_id,
         # 0) fallback for why this isn't strictly required, but matching
@@ -228,6 +234,10 @@ class WiFiSTA:
         return
 
     def send_frame(self):
+        # Rashed-Step 20.A-10-08-2026-start
+        if getattr(self.config, "mac_exchange", False):
+            return (yield from self._send_frame_mac())
+        # Rashed-Step 20.A-10-08-2026-end
         log(self, f'Starting sending frame (uplink): {self.frame_to_send.frame_time}')
         tx_start = self.env.now
         tx_pos = self.current_pos()
@@ -284,6 +294,25 @@ class WiFiSTA:
             yield self.env.timeout(self.times.ack_timeout)
             return False
 
+    # Rashed-Step 20.A-10-08-2026-start
+    def _send_frame_mac(self):
+        """Uplink data exchange on the air (wifi/mac.py); the AP sends the ACK."""
+        frame = self.frame_to_send
+        now = self.env.now
+        tx = ActiveTx(tx_id=self.name, tx_pos=self.current_pos(), rx_pos=self.ap.current_pos(), tx_start=now,
+                      tx_power_dbm=self.config.tx_power_dbm, f_hz=self.config.f_ghz, pl_exp=self.config.pl_exp,
+                      t_end=now + frame.frame_time, tech="WiFi", bandwidth_mhz=self.config.bandwidth_mhz,
+                      noise_figure_db=self.config.noise_figure_db, packet=frame.packet)
+
+        def decide(t):
+            sinr = self.channel.sinr_db(t)
+            frame.packet.measured_sinr_db = sinr
+            return decode_ok(getattr(self.config, "error_model", None), sinr, self.required_sinr_db())
+        res, data_end = yield from wifi_mac.data_exchange(self, tx, frame.frame_time, frame.packet.payload_bytes,
+                                                          self.ap.name, tx.rx_pos, decide)
+        return wifi_mac.finish(self, frame, res, data_end, self.sent_completed, self.sent_failed)
+
+    # Rashed-Step 20.A-10-08-2026-end
     def sent_completed(self):
         log(self, f"Uplink: successfully sent frame, waiting ack: {self.times.get_ack_frame_time()}")
         self.frame_to_send.t_end = self.env.now

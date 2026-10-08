@@ -305,6 +305,10 @@ def parse_traffic_class_mix(raw_values, label: str):
 @click.option("--wifi-ampdu", "wifi_ampdu", type=int, default=1, help="Wi-Fi A-MPDU aggregation (Step pre_20.B, AP downlink): up to this many MPDUs per channel access in one PPDU of at most --wifi-max-ppdu-us, each MPDU decoded on its own, Block Ack, failed MPDUs retried. Default 1 = one frame per access, byte-identical. Prints a Wi-Fi A-MPDU block.")
 @click.option("--wifi-max-ppdu-us", "wifi_max_ppdu_us", type=float, default=5484.0, help="Longest A-MPDU PPDU (us; default 5484 = 802.11 aPPDUMaxTime).")
 # Rashed-Step pre_20.B-10-08-2026-end
+# Rashed-Step 20.A-10-08-2026-start
+@click.option("--wifi-mac-exchange", "wifi_mac_exchange", is_flag=True, default=False, help="802.11 frame exchange on the air (Step 20.A): the receiver transmits the ACK (or Block Ack) after SIFS, every decoded frame sets a NAV for the rest of its exchange, and a node that heard an undecoded frame defers EIFS (94 us) instead of DIFS. Prints a Wi-Fi MAC block. Default (unset) = the ACK time is only waited out, byte-identical.")
+@click.option("--wifi-rts-threshold", "wifi_rts_threshold", type=click.IntRange(0, None), default=None, help="RTS/CTS before any Wi-Fi data frame (or A-MPDU) whose payload exceeds this many bytes (Step 20.A; 0 = always). Needs --wifi-mac-exchange. Default (unset) = never.")
+# Rashed-Step 20.A-10-08-2026-end
 @click.option("--wifi-preamble-detect", "wifi_preamble_detect", is_flag=True, default=False, help="802.11 preamble detection (Step pre_20.A): Wi-Fi defers to Wi-Fi frames from -82 dBm and to other signals (NR-U, licensed NR) from its -62 dBm energy-detection threshold - the asymmetry behind LAA coexistence. Default (unset) = one -62 dBm rule for everything, byte-identical.")
 @click.option("--fairness-report", "fairness_report", is_flag=True, default=False, help="Print a Coexistence Fairness block (Step pre_20.A): per technology the share of airtime it occupied (failed transmissions included), transmissions and their failure ratio, throughput and latency, and Jain's index over the airtime shares. Default (unset) = not printed.")
 # Rashed-Step pre_20.A-10-08-2026-end
@@ -479,6 +483,7 @@ def single_run(
         nru_ed_threshold_dbm: Optional[float] = None, nru_ed_mode: Optional[str] = None,  # pre_20.D.2
         nru_wifi_reservation: Optional[str] = None,  # pre_20.D.3
         nru_ref_nack_threshold: float = 0.8, nru_adaptive_cot: bool = False,  # pre_20.D.4
+        wifi_mac_exchange: bool = False, wifi_rts_threshold: Optional[int] = None,  # 20.A
         # Rashed-Step pre_20.A-10-08-2026-end
         # Rashed-Step 19.F-10-07-2026-end
         # Rashed-Step 19.E.2-10-07-2026-end
@@ -643,6 +648,10 @@ def single_run(
     if nru_wifi_reservation is not None and not wifi_preamble_detect:
         raise click.BadParameter("--nru-wifi-reservation needs --wifi-preamble-detect (Wi-Fi only decodes the preamble / CTS with it).")
     # Rashed-Step pre_20.D.4-10-08-2026-start
+    # Rashed-Step 20.A-10-08-2026-start
+    if wifi_rts_threshold is not None and not wifi_mac_exchange:
+        raise click.BadParameter("--wifi-rts-threshold needs --wifi-mac-exchange.")
+    # Rashed-Step 20.A-10-08-2026-end
     if nru_adaptive_cot and nru_cot_model != "slots":
         raise click.BadParameter("--nru-adaptive-cot needs --nru-cot-model slots.")
     # Rashed-Step pre_20.D.4-10-08-2026-end
@@ -824,6 +833,7 @@ def single_run(
                               bandwidth_mhz=wifi_bandwidth_mhz, noise_figure_db=wifi_noise_figure_db,
                               preamble_detect_dbm=-82.0 if wifi_preamble_detect else None,  # pre_20.A
                               ampdu_max_mpdus=wifi_ampdu, ampdu_max_ppdu_us=wifi_max_ppdu_us,  # pre_20.B
+                              mac_exchange=wifi_mac_exchange, rts_threshold_bytes=wifi_rts_threshold,  # 20.A
                               # Rashed-Step 5.D-02-06-2026-start
                               wifi_sinr_thr_db_override=wifi_sinr_thr_db_override,
                               # Rashed-Step 5.D-02-06-2026-end

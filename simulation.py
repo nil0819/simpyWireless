@@ -875,6 +875,15 @@ def run_simulation(
         print(f'Wifi A-MPDU mean MPDUs per PPDU: {(a["mpdus"] / a["ppdus"]) if a["ppdus"] else None}')
         print(f'Wifi A-MPDU MPDU success ratio: {(a["mpdus_ok"] / a["mpdus"]) if a["mpdus"] else None}')
     # Rashed-Step pre_20.B-10-08-2026-end
+    # Rashed-Step 20.A-10-08-2026-start
+    if getattr(config, "mac_exchange", False) and wifi_aps:
+        nodes = list(wifi_aps) + [s for s in wifi_stas if hasattr(s, "mac_stats")]
+        m = {k: sum(n.mac_stats[k] for n in nodes) for k in nodes[0].mac_stats}
+        print("=== Wi-Fi MAC ===")
+        print(f'Wifi MAC exchanges: {m["exchanges"]} (RTS/CTS: {m["rts"]}, no CTS: {m["rts_failed"]}, CTS lost: {m["cts_failed"]})')
+        print(f'Wifi MAC ACK/Block Acks sent: {m["acks"]}, lost: {m["acks_lost"]}, duplicate retransmissions: {m["duplicates"]}')
+        print(f'Wifi MAC EIFS deferrals: {m["eifs"]}')
+    # Rashed-Step 20.A-10-08-2026-end
     fairness_stats = None  # (not "fairness": a legacy occupancy metric below uses that name)
     if fairness_report:
         from common.fairness import compute_fairness, print_fairness
