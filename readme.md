@@ -284,7 +284,30 @@ python singleRunNR.py --gnb-number 2 --ues-per-gnb 4 --gnb-pos 300,500 --gnb-pos
 python singleRun.py --ap-number 1 --gnb-number 1 --seed 1 -t 1 -r 1 --nru-cot-model slots --nru-traffic-model poisson --nru-arrival-rate-pps 20 --nr-gnb-number 1 --nr-colocated --nr-bandwidth-mhz 20 --nr-dl-traffic poisson --nr-dl-arrival-rate-pps 4000 --nru-scell --harq
 ```
 
-The second one is the LAA case: an overloaded 20 MHz licensed cell (193 Mbps offered) delivers 108 Mbps on its own and about 133 Mbps with the NR-U SCell (19% carried in unlicensed spectrum) - while the Wi-Fi neighbor drops from about 30 to 3 Mbps, because the SCell's deep queue keeps NR-U on the channel most of the time even with LBT. Not modeled yet: NR-U handover, cross-UE QoS scheduling, GBR enforcement, 2-step / contention-free RACH, SCell uplink.
+The second one is the LAA case: an overloaded 20 MHz licensed cell (193 Mbps offered) delivers 108 Mbps on its own and about 133 Mbps with the NR-U SCell (19% carried in unlicensed spectrum) - while the Wi-Fi neighbor drops from about 30 to 3 Mbps, because the SCell's deep queue keeps NR-U on the channel most of the time even with LBT (studied in Step pre_20, below). Not modeled yet: NR-U handover, cross-UE QoS scheduling, GBR enforcement, 2-step / contention-free RACH, SCell uplink.
+
+### LAA / NR-U fairness study (Step pre_20)
+
+Is NR-U fair to Wi-Fi, and what fixes it? Scored with the 3GPP replacement test (NR-U must not hurt a Wi-Fi network more than another Wi-Fi network would). Full write-up with figures: [`docs/laa_fairness_study.md`](docs/laa_fairness_study.md). All flags opt-in; every default run is unchanged.
+
+| Feature | Flags | What it does |
+|---|---|---|
+| Fairness report | `--fairness-report` | per-technology airtime share (failed transmissions included), successful airtime, failure ratio, throughput, latency, Jain's index, per-AP / per-gNB results |
+| 802.11 preamble detection | `--wifi-preamble-detect` | Wi-Fi defers to Wi-Fi frames from -82 dBm and to other signals from -62 dBm (energy detection) |
+| Wi-Fi A-MPDU | `--wifi-ampdu N` (+ `--wifi-max-ppdu-us`) | AP downlink: up to N MPDUs per channel access in one PPDU (max 5.484 ms), per-MPDU decoding, Block Ack, per-MPDU retries |
+| Priority classes | `--nru-priority-class 1-4` | TS 37.213 channel access priority class: defer slots, CW_min/CW_max and MCOT (gNB downlink table; UEs' own Type 1 LBT use the uplink table) |
+| ED threshold | `--nru-ed-mode ts37213`, `--nru-ed-threshold-dbm` | NR-U energy-detection threshold from TS 37.213 clause 4.1.5 (from tx power and bandwidth; -72 dBm at 23 dBm / 20 MHz), or any value |
+| COTs visible to Wi-Fi | `--nru-wifi-reservation preamble\|cts_to_self` (needs `--wifi-preamble-detect`) | NR-U transmissions carry an 802.11 preamble, or the gNB sends a CTS-to-self (44 us + SIFS) whose NAV covers the COT |
+| Reference-slot feedback | `--nru-ref-nack-threshold`, `--nru-adaptive-cot` | contention window grows when this share of the reference slot's blocks fail (TS 37.213 Z, default 0.8); adaptive COT halves the next COT after a failed reference slot |
+
+Findings in short: the unfairness is a sensing problem - between about 32 and 45 m neither side hears the other by energy detection while NR-U still breaks Wi-Fi frames (network A latency 75.6 vs 7.5 ms next to Wi-Fi). Priority classes, the standard 37.213 threshold and reference-slot feedback don't fix it (feedback can't see it at all: NR-U's own reference slots never fail there). A lower NR-U threshold (-82 dBm, non-standard) plus CTS-to-self passes the replacement test at every distance up to 60 m with ~0 Wi-Fi frame failures.
+
+```bash
+python singleRun.py --ap-number 1 --gnb-number 1 --seed 1 -t 1 -r 1 --nru-cot-model slots --wifi-preamble-detect --fairness-report --nru-ed-threshold-dbm -82 --nru-wifi-reservation cts_to_self
+python -m analysis.laa_fairness_sweeps          # distance / load / A-MPDU sweeps
+python -m analysis.laa_fairness_mitigations     # priority classes, ED threshold, preamble / CTS-to-self
+python -m analysis.laa_scell_mitigations        # the Step 19.F LAA scenario per mitigation
+```
 
 ## Testing
 
@@ -293,7 +316,7 @@ Assert-based regression suite (no print-and-eyeball scripts for anything added s
 pip install pytest
 pytest test/
 ```
-519 tests passing as of Step 19. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
+553 tests passing as of Step pre_20. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
 
 ## Current Work Status
 
@@ -328,6 +351,7 @@ pytest test/
 ----> Step 19 (19.A-19.F) — 5G control plane, mobility and the unified run, all opt-in: random access (`--rach`); RRC Type 1 fallback, radio link failure + re-establishment (`--rlm`), RRC_INACTIVE (`--rrc-inactive`), reconfiguration (`--rrc-reconfig`); QoS flows / 5QI (`--qos-flows`); handover (`--handover`); Core failure modes (`--core-*`); Wi-Fi + NR-U + licensed NR in one run with one Core (`--nr-gnb-number`); NR-U as an LAA secondary cell (`--nru-scell`). Step pre_19.F: NR-U HARQ retransmissions no longer starve when several UEs share a COT
 ----> Step 18 (18.A-18.F) — 5G user plane, all opt-in: BLER error model (`--error-model bler`), per-UE byte buffers and traffic for licensed NR, NR-U COTs made of slots with transport blocks and several UEs per COT (`--nru-cot-model slots`, uplink on interlaces), HARQ with chase combining (`--harq`), PDCP + RLC UM/AM (`--rlc-mode`). Step pre_18.F: licensed NR uplink UEs of one cell on separate RBs no longer interfere with each other, and uplink results are now printed
 ----> Step pre_18 (A-E) — channel-model fixes found while validating Step 17: (A-B) SINR counts every transmission that overlapped the target at any point - Wi-Fi frames (one decode unit) at full power, NR-U/NR bursts weighted by the fraction covered - instead of only what was still on the air when the target ended (results used to depend on timing and processing order); (D) Wi-Fi DCF counts backoff on a shared 9 us slot grid with event-driven sensing and a fresh DIFS after every busy period; (E) NR-U LBT is 3GPP TS 37.213 Type 1 - a full 43 us defer period after every busy period. (C) Paper figures regenerated: the DTMC validation now matches the model within 0.8-2.7 points for Wi-Fi and 0.4-1.4 for NR-U
+----> Step pre_20 (A-E) - LAA / NR-U fairness study with the 3GPP replacement test: fairness report and 802.11 preamble detection (`--fairness-report`, `--wifi-preamble-detect`), Wi-Fi A-MPDU (`--wifi-ampdu`), diagnosis sweeps, and four mitigations - TS 37.213 priority classes (`--nru-priority-class`), ED threshold (`--nru-ed-mode`, `--nru-ed-threshold-dbm`), preamble / CTS-to-self with a Wi-Fi NAV (`--nru-wifi-reservation`), reference-slot feedback (`--nru-ref-nack-threshold`, `--nru-adaptive-cot`). Report: `docs/laa_fairness_study.md`. Step pre_20.D.3a: Wi-Fi's SINR no longer counts one interferer's back-to-back frames twice
 
 Full detail (design rationale, exact verified numbers, what was deliberately left out) for every sub-step above is in `Project details/Step N.txt`; `Project details/STATUS - resume context.txt` is the current single-file "start here" summary.
 

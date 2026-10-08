@@ -24,7 +24,7 @@ pip install pytest
 pytest test/
 ```
 
-You should see `519 passed` (as of Step 19). If that's clean, you're ready to run simulations.
+You should see `553 passed` (as of Step pre_20). If that's clean, you're ready to run simulations.
 
 ## 2. Scenario 1 - Wi-Fi + NR-U coexistence
 
@@ -179,6 +179,34 @@ python singleRun.py --ap-number 1 --gnb-number 1 --seed 1 -t 1 -r 1 --nru-cot-mo
 The "NR-U SCell (LAA)" block splits the licensed UEs' downlink between
 the licensed PCell and the NR-U SCell - and the Wi-Fi line shows what
 that extra unlicensed traffic costs the neighbor.
+
+## 9. Is NR-U fair to Wi-Fi? (Step pre_20)
+
+The same coexistence run with the fairness report and 802.11 preamble
+detection on:
+
+```bash
+python singleRun.py --ap-number 1 --gnb-number 1 --seed 1 -t 1 -r 1 --nru-cot-model slots --wifi-preamble-detect --fairness-report
+```
+
+The "Coexistence Fairness" block shows each technology's airtime share,
+how much of it succeeded, its failure ratio, throughput and latency. Add
+the two mitigations that work together - a lower NR-U energy-detection
+threshold and a CTS-to-self before every COT - and compare:
+
+```bash
+python singleRun.py --ap-number 1 --gnb-number 1 --seed 1 -t 1 -r 1 --nru-cot-model slots --wifi-preamble-detect --fairness-report --nru-ed-threshold-dbm -82 --nru-wifi-reservation cts_to_self
+```
+
+Wi-Fi goes from about 2.8 to 6.5 Mbps (no more frames lost to COTs it
+couldn't hear) while NR-U keeps about 84 Mbps; what is left is airtime
+per channel access - one short Wi-Fi frame against a 6 ms COT.
+
+The full study (the 3GPP replacement test over distance and load, and
+four mitigations) is in `docs/laa_fairness_study.md`; its figures come
+from `python -m analysis.laa_fairness_sweeps`,
+`python -m analysis.laa_fairness_mitigations` and
+`python -m analysis.laa_scell_mitigations`.
 
 ## Where to go next
 
