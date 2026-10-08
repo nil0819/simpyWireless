@@ -25,6 +25,9 @@ from common.packet import pick_traffic_class
 
 # Rashed-Step 15.A-09-18-2026-start
 from ran.protocol.channel_access import LbtChannelAccess, generate_backoff_slots as _lbt_generate_backoff_slots
+# Rashed-Step pre_20.D.1-10-08-2026-start
+from ran.protocol.channel_access import CAPC_DL
+# Rashed-Step pre_20.D.1-10-08-2026-end
 # Rashed-Step 15.A-09-18-2026-end
 # Rashed-Step 15.F-09-18-2026-start
 from ran.protocol.rrc import RrcLayer
@@ -360,6 +363,15 @@ class Config_NR:
     # = one buffer per UE and direction.
     qos_flows: bool = False
     # Rashed-Step 19.C-10-07-2026-end
+    # Rashed-Step pre_20.D.1-10-08-2026-start
+    # TS 37.213 channel access priority class (pre_20.D.1): 1-4 sets
+    # M, cw_min, cw_max and mcot from CAPC_DL (ran/protocol/
+    # channel_access.py), overriding whatever was passed for them; UEs
+    # running their own Type 1 LBT take the uplink table (CAPC_UL).
+    # None (default) = the fields as given (M=3, CW 15-63 = class 3 with
+    # the ETSI 6 ms MCOT), byte-identical to every earlier run.
+    priority_class: Optional[int] = None
+    # Rashed-Step pre_20.D.1-10-08-2026-end
     # Rashed-Step 19.B.4-10-07-2026-end
     # Rashed-Step 19.B.3-10-07-2026-end
     # Rashed-Step 19.B.2-10-07-2026-end
@@ -394,6 +406,12 @@ class Config_NR:
         # Rashed-Step 18.F-10-06-2026-end
         # Rashed-Step 18.E-10-06-2026-end
         # Rashed-Step 18.C-10-06-2026-end
+        # Rashed-Step pre_20.D.1-10-08-2026-start
+        if self.priority_class is not None:
+            if self.priority_class not in CAPC_DL:
+                raise ValueError(f"Config_NR.priority_class must be 1-4 (got {self.priority_class})")
+            self.M, self.cw_min, self.cw_max, self.mcot = CAPC_DL[self.priority_class]
+        # Rashed-Step pre_20.D.1-10-08-2026-end
         if not (0.0 < self.ul_cot_fraction < 1.0):
             raise ValueError(
                 f"Config_NR.ul_cot_fraction must be strictly between 0 and 1 "

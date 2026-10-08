@@ -12,6 +12,9 @@ from common.packet import Packet, TrafficConfig
 from channel.channel import ActiveTx
 from common.common_phy import dist, rx_power_dbm, mcs_sinr_threshold_db
 from ran.protocol.channel_access import LbtChannelAccess
+# Rashed-Step pre_20.D.1-10-08-2026-start
+from ran.protocol.channel_access import CAPC_UL
+# Rashed-Step pre_20.D.1-10-08-2026-end
 # Rashed-Step 18.A-10-06-2026-start
 from common.error_model import decode_ok
 # Rashed-Step 18.A-10-06-2026-end
@@ -172,6 +175,13 @@ class NrUE:
         self.col = random.choice(colors)
         self.cw_min = self.config_nr.cw_min
         self.cw_max = self.config_nr.cw_max
+        # Rashed-Step pre_20.D.1-10-08-2026-start
+        # CAPC: a UE's own Type 1 LBT uses the uplink table (m_p, CW, MCOT).
+        self.lbt_m = None
+        self.ul_mcot_ms = self.config_nr.mcot
+        if self.config_nr.priority_class is not None:
+            self.lbt_m, self.cw_min, self.cw_max, self.ul_mcot_ms = CAPC_UL[self.config_nr.priority_class]
+        # Rashed-Step pre_20.D.1-10-08-2026-end
         self.failed_transmissions_in_row = 0
         self.succeeded_transmissions = 0
         self.failed_transmissions = 0
@@ -259,7 +269,9 @@ class NrUE:
         re-read current_pos() from, fresh, at actual transmission
         time").
         """
-        transmission_time = self.config_nr.mcot * 1000
+        # Rashed-Step pre_20.D.1-10-08-2026-start
+        transmission_time = self.ul_mcot_ms * 1000   # = config_nr.mcot unless a CAPC is set
+        # Rashed-Step pre_20.D.1-10-08-2026-end
         rs_time = 0
         airtime = transmission_time - rs_time
 

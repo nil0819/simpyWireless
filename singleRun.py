@@ -287,6 +287,9 @@ def parse_traffic_class_mix(raw_values, label: str):
 @click.option("--nru-scell", "nru_scell", is_flag=True, default=False, help="NR-U as a secondary cell (Step 19.F, LAA-anchored carrier aggregation): every licensed UE also gets an NR-U SCell on the co-located NR-U gNB - one downlink queue served by both carriers, RRC/Core/uplink on the licensed PCell, SCell active only while the UE is connected to that anchor. Needs --nr-colocated, --nr-dl-traffic poisson/cbr, --nru-cot-model slots and no --nru-ue-uplink-enabled (LAA's uplink is licensed). Prints an 'NR-U SCell (LAA)' block.")
 # Rashed-Step 19.F-10-07-2026-end
 # Rashed-Step pre_20.A-10-08-2026-start
+# Rashed-Step pre_20.D.1-10-08-2026-start
+@click.option("--nru-priority-class", "nru_priority_class", type=click.IntRange(1, 4), default=None, help="NR-U channel access priority class (Step pre_20.D.1, 3GPP TS 37.213): sets the defer slots m_p, CW_min/CW_max and MCOT from Table 4.1.1-1 (gNB downlink: p1 1/3/7/2ms, p2 1/7/15/3ms, p3 3/15/63/8ms, p4 7/15/1023/8ms) and Table 4.2.1-1 for UEs' own Type 1 LBT; overrides --nru_cw_min/--nru_cw_max/--mcot. Default (unset) = those flags as given, byte-identical.")
+# Rashed-Step pre_20.D.1-10-08-2026-end
 # Rashed-Step pre_20.B-10-08-2026-start
 @click.option("--wifi-ampdu", "wifi_ampdu", type=int, default=1, help="Wi-Fi A-MPDU aggregation (Step pre_20.B, AP downlink): up to this many MPDUs per channel access in one PPDU of at most --wifi-max-ppdu-us, each MPDU decoded on its own, Block Ack, failed MPDUs retried. Default 1 = one frame per access, byte-identical. Prints a Wi-Fi A-MPDU block.")
 @click.option("--wifi-max-ppdu-us", "wifi_max_ppdu_us", type=float, default=5484.0, help="Longest A-MPDU PPDU (us; default 5484 = 802.11 aPPDUMaxTime).")
@@ -461,6 +464,7 @@ def single_run(
         fairness_report: bool = False,
         wifi_preamble_detect: bool = False,  # pre_20.A
         wifi_ampdu: int = 1, wifi_max_ppdu_us: float = 5484.0,  # pre_20.B
+        nru_priority_class: Optional[int] = None,  # pre_20.D.1
         # Rashed-Step pre_20.A-10-08-2026-end
         # Rashed-Step 19.F-10-07-2026-end
         # Rashed-Step 19.E.2-10-07-2026-end
@@ -840,6 +844,7 @@ def single_run(
                                  ul_cot_fraction=nru_ul_cot_fraction,
                                  # Rashed-Step 18.C-10-06-2026-start
                                  cot_model=nru_cot_model,
+                                 priority_class=nru_priority_class,  # pre_20.D.1
                                  numerology=1 if nru_numerology is None else nru_numerology,
                                  buffer_limit_bytes=nru_buffer_limit_bytes,
                                  # Rashed-Step 18.D-10-06-2026-start

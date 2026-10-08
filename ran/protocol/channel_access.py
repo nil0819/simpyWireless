@@ -58,6 +58,18 @@ from typing import Any, Dict
 from common.common import log
 
 
+# Rashed-Step pre_20.D.1-10-08-2026-start
+# 3GPP TS 37.213 channel access priority classes (CAPC) p -> (m_p,
+# CW_min,p, CW_max,p, T_mcot,p in ms). Defer Td = 16us + m_p x 9us; the
+# backoff N is drawn from [0, CW_p], CW_p stepping (CW_min+1) x 2^k - 1
+# up to CW_max (generate_backoff_slots below). Downlink: Table 4.1.1-1
+# (T_mcot 8 ms for p = 3, 4 - 10 ms only if no other technology can
+# share the carrier). Uplink: Table 4.2.1-1 (6 ms for p = 3, 4).
+CAPC_DL = {1: (1, 3, 7, 2), 2: (1, 7, 15, 3), 3: (3, 15, 63, 8), 4: (7, 15, 1023, 8)}
+CAPC_UL = {1: (2, 3, 7, 2), 2: (2, 7, 15, 4), 3: (3, 15, 1023, 6), 4: (7, 15, 1023, 6)}
+
+# Rashed-Step pre_20.D.1-10-08-2026-end
+
 def generate_backoff_slots(failed_transmissions_in_row: int, cw_min: int, cw_max: int) -> int:
     """
     Pure Cat-4 LBT backoff-slot draw (3GPP-style binary-exponential
@@ -156,7 +168,13 @@ class LbtChannelAccess:
             return node.channel.is_busy(node.current_pos(), config.ed_threshold_dbm, exclude_tx_id=node.name,
                                         sense_f_hz=config.f_ghz, sense_bw_mhz=config.bandwidth_mhz)
 
-        defer_us = config.deter_period + config.M * config.observation_slot_duration
+        # Rashed-Step pre_20.D.1-10-08-2026-start
+        # A node with its own m_p (a UE on the uplink CAPC table) sets lbt_m;
+        # everyone else uses config.M as before.
+        m_p = getattr(node, "lbt_m", None)
+        m_p = config.M if m_p is None else m_p
+        # Rashed-Step pre_20.D.1-10-08-2026-end
+        defer_us = config.deter_period + m_p * config.observation_slot_duration
         backoff_slots = generate_backoff_slots(node.failed_transmissions_in_row, node.cw_min, node.cw_max)
         while True:
             while busy():
