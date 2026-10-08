@@ -857,6 +857,15 @@ def run_simulation(
     
     # Rashed-Step 19.E.2-10-07-2026-end
     # Rashed-Step pre_20.A-10-08-2026-start
+    # Rashed-Step pre_20.B-10-08-2026-start
+    if getattr(config, "ampdu_max_mpdus", 1) > 1 and wifi_aps:
+        a = {k: sum(getattr(ap, "ampdu_stats", {}).get(k, 0) for ap in wifi_aps)
+             for k in ("ppdus", "mpdus", "mpdus_ok", "header_lost")}
+        print("=== Wi-Fi A-MPDU ===")
+        print(f'Wifi A-MPDU PPDUs: {a["ppdus"]} (PHY header lost: {a["header_lost"]})')
+        print(f'Wifi A-MPDU mean MPDUs per PPDU: {(a["mpdus"] / a["ppdus"]) if a["ppdus"] else None}')
+        print(f'Wifi A-MPDU MPDU success ratio: {(a["mpdus_ok"] / a["mpdus"]) if a["mpdus"] else None}')
+    # Rashed-Step pre_20.B-10-08-2026-end
     fairness_stats = None  # (not "fairness": a legacy occupancy metric below uses that name)
     if fairness_report:
         from common.fairness import compute_fairness, print_fairness

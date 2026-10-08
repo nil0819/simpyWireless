@@ -63,6 +63,14 @@ class Config:
     # ed_threshold_dbm. None (default) = the single ed_threshold_dbm
     # rule for everything, as in every earlier run.
     preamble_detect_dbm: Optional[float] = None
+    # Rashed-Step pre_20.B-10-08-2026-start
+    # A-MPDU aggregation (pre_20.B, AP downlink, DCF path): up to this many
+    # MPDUs per channel access, in one PPDU of at most ampdu_max_ppdu_us
+    # (802.11 aPPDUMaxTime, 5.484 ms); per-MPDU decoding + Block Ack.
+    # 1 (default) = one frame per access, as in every earlier run.
+    ampdu_max_mpdus: int = 1
+    ampdu_max_ppdu_us: float = 5484.0
+    # Rashed-Step pre_20.B-10-08-2026-end
     # Rashed-Step pre_20.A-10-08-2026-end
     # Rashed-Step 3.A-01-12-2026-end
 
@@ -313,6 +321,9 @@ class WiFi:
         # scale; a future step could cap/roll this off if it ever
         # matters.
         self.packet_log = []
+        # Rashed-Step pre_20.B-10-08-2026-start
+        self.ampdu_stats = {"ppdus": 0, "mpdus": 0, "mpdus_ok": 0, "header_lost": 0}
+        # Rashed-Step pre_20.B-10-08-2026-end
         # Rashed-Step 8.G-08-06-2026-end
 
         # Rashed-Step 10.B-08-07-2026-start
@@ -749,6 +760,11 @@ class WiFi:
     # Rashed-Step 10.B-08-07-2026-end
 
     def start(self):
+        # Rashed-Step pre_20.B-10-08-2026-start
+        if self.config.ampdu_max_mpdus > 1:
+            yield from self._start_ampdu()
+            return
+        # Rashed-Step pre_20.B-10-08-2026-end
         # Rashed-Step 3.F-12-26-2025-start
         #print(self.env.now, self.name, "START LOOP")
         # Rashed-Step 3.F-12-26-2025-end
@@ -1459,6 +1475,129 @@ class WiFi:
                 self._need_new_packet = True
             # Rashed-Step 8.E-08-06-2026-end
             self.failed_transmissions_in_row = 0
+
+    # Rashed-Step pre_20.B-10-08-2026-start
+    # ------------------------------------------------------------------
+    # A-MPDU aggregation (Config.ampdu_max_mpdus > 1), AP downlink on the
+    # DCF path. One channel access carries one PPDU of several MPDUs.
+    # ------------------------------------------------------------------
+    AMPDU_DELIMITER_BITS = 32
+
+    def _ampdu_times(self):
+        """(PHY header us, us per MPDU of payload_bytes) at the current MCS."""
+        t = self.times
+        if self.config.rate_adapt_enabled:
+            t = Times(self.config.data_size, self.current_mcs_for_link(self.rate_adapt_link_key()))
+        header_us = t.ofdm_preamble + t.ofdm_signal
+        per_mpdu = lambda payload: (Times.mac_overhead + payload * 8 + self.AMPDU_DELIMITER_BITS) / t.data_rate
+        return header_us, per_mpdu
+
+    def _take_queued_packet(self):
+        """A packet for the A-MPDU without waiting: a new one in saturated
+        mode, else the next queued one, or None."""
+        if self.traffic_config.mode == "saturated":
+            return self._make_packet()
+        if self.packet_queue.items:
+            return self.packet_queue.items.pop(0)
+        return None
+
+    def _start_ampdu(self):
+        pending = []  # MPDUs waiting for a retransmission (Block Ack said failed)
+        while True:
+            if not pending:
+                pending = [(yield from self._next_packet())]
+            self.process = self.env.process(self.wait_back_off())
+            yield self.process
+            header_us, per_mpdu = self._ampdu_times()
+            budget = self.config.ampdu_max_ppdu_us - header_us
+            mpdus, used = [], 0.0
+            for pkt in pending:
+                if len(mpdus) < self.config.ampdu_max_mpdus and used + per_mpdu(pkt.payload_bytes) <= budget:
+                    mpdus.append(pkt)
+                    used += per_mpdu(pkt.payload_bytes)
+            while len(mpdus) < self.config.ampdu_max_mpdus:
+                nxt = self._take_queued_packet()
+                if nxt is None:
+                    break
+                if used + per_mpdu(nxt.payload_bytes) > budget:
+                    if self.traffic_config.mode != "saturated":
+                        self.packet_queue.items.insert(0, nxt)
+                    break
+                mpdus.append(nxt)
+                used += per_mpdu(nxt.payload_bytes)
+            if not mpdus:  # a single MPDU longer than the PPDU budget: send it alone
+                mpdus = pending[:1]
+            ok = yield self.env.process(self._send_ampdu(mpdus, header_us, per_mpdu))
+            carried = {id(p) for p in mpdus}
+            pending = [p for p in pending if id(p) not in carried] + \
+                      [p for p in mpdus if p.status == "PENDING"]
+
+    def _send_ampdu(self, mpdus, header_us, per_mpdu):
+        """One PPDU: the PHY header has to survive (else nothing decodes and
+        no Block Ack comes back), then each MPDU is decoded on its own time
+        window; the Block Ack reports which ones got through. Returns True
+        if at least one MPDU was delivered."""
+        start = self.env.now
+        dur = header_us + sum(per_mpdu(p.payload_bytes) for p in mpdus)
+        tx_pos = self.current_pos()
+        rx_pos = self.sta_list[0].current_pos() if self.sta_list else tx_pos
+        tx = ActiveTx(tx_id=self.name, tx_pos=tx_pos, rx_pos=rx_pos, tx_start=start,
+                      tx_power_dbm=self.config.tx_power_dbm, f_hz=self.config.f_ghz, pl_exp=self.config.pl_exp,
+                      t_end=start + dur, tech="WiFi", bandwidth_mhz=self.config.bandwidth_mhz,
+                      noise_figure_db=self.config.noise_figure_db, packet=mpdus[0])
+        self.channel.register_tx(tx)
+        required = self.required_sinr_db()
+        em = getattr(self.config, "error_model", None)
+        n_ok = 0
+        try:
+            yield self.env.timeout(dur)
+            sinr_h = self.channel.sinr_db(tx, window=(start, start + header_us))
+            header_ok = decode_ok(em, sinr_h, required)
+            t0 = start + header_us
+            for p in mpdus:
+                t1 = t0 + per_mpdu(p.payload_bytes)
+                sinr = self.channel.sinr_db(tx, window=(t0, t1))
+                p.measured_sinr_db = sinr
+                if header_ok and decode_ok(em, sinr, required):
+                    p.status = "DELIVERED"
+                    n_ok += 1
+                t0 = t1
+            self.rate_adapt_record_result(self.rate_adapt_link_key(), n_ok > 0, measured_sinr_db=sinr_h)
+            yield self.env.timeout(0)
+            self.channel.unregister_tx(tx, success=n_ok > 0)
+        except BaseException:
+            self.channel.unregister_tx(tx, success=n_ok > 0)
+            raise
+        self.ampdu_stats["ppdus"] += 1
+        self.ampdu_stats["mpdus"] += len(mpdus)
+        self.ampdu_stats["mpdus_ok"] += n_ok
+        if n_ok > 0:
+            self.channel.succeeded_transmissions += 1
+            self.succeeded_transmissions += 1
+            self.failed_transmissions_in_row = 0
+            self.channel.airtime_control[self.name] += self.times.get_ack_frame_time()
+            yield self.env.timeout(self.times.get_ack_frame_time())   # SIFS + Block Ack
+        else:
+            self.channel.failed_transmissions += 1
+            self.failed_transmissions += 1
+            self.failed_transmissions_in_row += 1
+            if not header_ok:
+                self.ampdu_stats["header_lost"] += 1
+            yield self.env.timeout(self.times.ack_timeout)              # no Block Ack
+        for p in mpdus:
+            if p.status == "DELIVERED":
+                p.delivered_at = self.env.now
+                self.channel.bytes_sent += p.payload_bytes
+                self.packet_log.append(p)
+            else:
+                p.retry_count += 1
+                if p.retry_count > self.config.r_limit:
+                    p.status = "DROPPED"
+                    self.packet_log.append(p)
+        if self.failed_transmissions_in_row > self.config.r_limit:
+            self.failed_transmissions_in_row = 0
+        return n_ok > 0
+    # Rashed-Step pre_20.B-10-08-2026-end
 
     def sent_completed(self):
         log(self, f"Successfully sent frame, waiting ack: {self.times.get_ack_frame_time()}")

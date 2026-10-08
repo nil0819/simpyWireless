@@ -287,6 +287,10 @@ def parse_traffic_class_mix(raw_values, label: str):
 @click.option("--nru-scell", "nru_scell", is_flag=True, default=False, help="NR-U as a secondary cell (Step 19.F, LAA-anchored carrier aggregation): every licensed UE also gets an NR-U SCell on the co-located NR-U gNB - one downlink queue served by both carriers, RRC/Core/uplink on the licensed PCell, SCell active only while the UE is connected to that anchor. Needs --nr-colocated, --nr-dl-traffic poisson/cbr, --nru-cot-model slots and no --nru-ue-uplink-enabled (LAA's uplink is licensed). Prints an 'NR-U SCell (LAA)' block.")
 # Rashed-Step 19.F-10-07-2026-end
 # Rashed-Step pre_20.A-10-08-2026-start
+# Rashed-Step pre_20.B-10-08-2026-start
+@click.option("--wifi-ampdu", "wifi_ampdu", type=int, default=1, help="Wi-Fi A-MPDU aggregation (Step pre_20.B, AP downlink): up to this many MPDUs per channel access in one PPDU of at most --wifi-max-ppdu-us, each MPDU decoded on its own, Block Ack, failed MPDUs retried. Default 1 = one frame per access, byte-identical. Prints a Wi-Fi A-MPDU block.")
+@click.option("--wifi-max-ppdu-us", "wifi_max_ppdu_us", type=float, default=5484.0, help="Longest A-MPDU PPDU (us; default 5484 = 802.11 aPPDUMaxTime).")
+# Rashed-Step pre_20.B-10-08-2026-end
 @click.option("--wifi-preamble-detect", "wifi_preamble_detect", is_flag=True, default=False, help="802.11 preamble detection (Step pre_20.A): Wi-Fi defers to Wi-Fi frames from -82 dBm and to other signals (NR-U, licensed NR) from its -62 dBm energy-detection threshold - the asymmetry behind LAA coexistence. Default (unset) = one -62 dBm rule for everything, byte-identical.")
 @click.option("--fairness-report", "fairness_report", is_flag=True, default=False, help="Print a Coexistence Fairness block (Step pre_20.A): per technology the share of airtime it occupied (failed transmissions included), transmissions and their failure ratio, throughput and latency, and Jain's index over the airtime shares. Default (unset) = not printed.")
 # Rashed-Step pre_20.A-10-08-2026-end
@@ -456,6 +460,7 @@ def single_run(
         # Rashed-Step pre_20.A-10-08-2026-start
         fairness_report: bool = False,
         wifi_preamble_detect: bool = False,  # pre_20.A
+        wifi_ampdu: int = 1, wifi_max_ppdu_us: float = 5484.0,  # pre_20.B
         # Rashed-Step pre_20.A-10-08-2026-end
         # Rashed-Step 19.F-10-07-2026-end
         # Rashed-Step 19.E.2-10-07-2026-end
@@ -790,6 +795,7 @@ def single_run(
                        Config(1472, wifi_cw_min, wifi_cw_max, wifi_r_limit, mcs_value,
                               bandwidth_mhz=wifi_bandwidth_mhz, noise_figure_db=wifi_noise_figure_db,
                               preamble_detect_dbm=-82.0 if wifi_preamble_detect else None,  # pre_20.A
+                              ampdu_max_mpdus=wifi_ampdu, ampdu_max_ppdu_us=wifi_max_ppdu_us,  # pre_20.B
                               # Rashed-Step 5.D-02-06-2026-start
                               wifi_sinr_thr_db_override=wifi_sinr_thr_db_override,
                               # Rashed-Step 5.D-02-06-2026-end
