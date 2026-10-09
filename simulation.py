@@ -892,6 +892,20 @@ def run_simulation(
     # Rashed-Step 20.A-10-08-2026-start
     # Rashed-Step 20.C-10-08-2026-start
     # Rashed-Step 20.D-10-08-2026-start
+    # Rashed-Step 20.E-10-09-2026-start
+    if getattr(config, "ofdma", False) and wifi_aps:
+        o = {k: sum(ap.ofdma_stats[k] for ap in wifi_aps) for k in wifi_aps[0].ofdma_stats if k != "ru_tones"}
+        ru = {}
+        for ap in wifi_aps:
+            for t, c in ap.ofdma_stats["ru_tones"].items():
+                ru[t] = ru.get(t, 0) + c
+        print("=== Wi-Fi OFDMA ===")
+        print(f'Wifi OFDMA DL MU PPDUs: {o["dl_ppdus"]}, mean users per PPDU: {(o["dl_users"] / o["dl_ppdus"]) if o["dl_ppdus"] else None}, '
+              f'MPDU success ratio: {(o["dl_mpdus_ok"] / o["dl_mpdus"]) if o["dl_mpdus"] else None}')
+        print(f'Wifi OFDMA UL trigger rounds: {o["ul_rounds"]}, mean users per round: {(o["ul_users"] / o["ul_rounds"]) if o["ul_rounds"] else None}, '
+              f'MPDU success ratio: {(o["ul_mpdus_ok"] / o["ul_mpdus"]) if o["ul_mpdus"] else None}')
+        print(f'Wifi OFDMA RU sizes used (tones: count): {dict(sorted(ru.items()))}')
+    # Rashed-Step 20.E-10-09-2026-end
     if wifi_mgmt is not None:
         m = wifi_mgmt.summary(simulation_time * 1e6)
         print("=== Wi-Fi Management ===")

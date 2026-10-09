@@ -168,6 +168,10 @@ class WiFiSTA:
         self._need_new_packet = False
         if self.traffic_config.mode != "saturated":
             self.env.process(self._traffic_generator())
+        # Rashed-Step 20.E-10-09-2026-start
+        self.ofdma_ul_pending = []        # MPDUs waiting for a retry (trigger-based uplink)
+        self._ul_notify = None            # set by the AP: wakes its OFDMA scheduler
+        # Rashed-Step 20.E-10-09-2026-end
         # Rashed-Step 20.B-10-08-2026-end
         # Rashed-Step 20.A-10-08-2026-end
         # Same "cheap, .get()-safe downstream" registration WiFi.__init__
@@ -177,6 +181,10 @@ class WiFiSTA:
         # any diagnostic code that iterates its keys.
         self.channel.airtime_data.setdefault(self.name, 0)
         self.channel.airtime_control.setdefault(self.name, 0)
+        # Rashed-Step 20.E-10-09-2026-start
+        if getattr(self.config, "ul_ofdma", False):
+            return                          # 20.E: uplink only when the AP triggers it (wifi/ofdma.py)
+        # Rashed-Step 20.E-10-09-2026-end
         self.env.process(self.start_uplink())
 
     def _make_packet(self) -> Packet:
@@ -223,6 +231,10 @@ class WiFiSTA:
             interval_us = random.expovariate(rate / 1e6) if self.traffic_config.mode == "poisson" else 1e6 / rate
             yield self.env.timeout(interval_us)
             yield self.packet_queue.put(self._make_packet())
+            # Rashed-Step 20.E-10-09-2026-start
+            if self._ul_notify is not None and getattr(self.config, "ul_ofdma", False):
+                self._ul_notify()
+            # Rashed-Step 20.E-10-09-2026-end
 
     def _take_queued_packet(self):
         if self.traffic_config.mode == "saturated":

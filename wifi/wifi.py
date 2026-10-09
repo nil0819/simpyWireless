@@ -28,6 +28,10 @@ from wifi import mac as wifi_mac
 from wifi import ampdu as wifi_ampdu
 # Rashed-Step 20.C-10-08-2026-start
 from wifi import phy as wifi_phy
+# Rashed-Step 20.E-10-09-2026-start
+from wifi import ofdma as wifi_ofdma
+from collections import defaultdict
+# Rashed-Step 20.E-10-09-2026-end
 # Rashed-Step 20.C-10-08-2026-end
 # Rashed-Step 20.B-10-08-2026-end
 # Rashed-Step 20.A-10-08-2026-end
@@ -104,12 +108,31 @@ class Config:
     # then flows only to/from associated STAs. None (default) = every STA
     # is implicitly associated, as in every earlier run.
     management: Any = None
+    # Rashed-Step 20.E-10-09-2026-start
+    # 802.11ax OFDMA (Step 20.E, wifi/ofdma.py; needs phy="he"): downlink
+    # HE MU PPDUs to up to ofdma_max_users STAs on resource units;
+    # ul_ofdma adds trigger-based uplink (STAs then send only when
+    # triggered). False (default) = single-user, as before.
+    ofdma: bool = False
+    ofdma_max_users: int = 8
+    ul_ofdma: bool = False
+    # Rashed-Step 20.E-10-09-2026-end
     # Rashed-Step 20.D-10-08-2026-end
 
     def __post_init__(self):
         if self.phy != "legacy":
             wifi_phy.validate(self.phy, self.channel_width_mhz, self.mcs, self.guard_interval_ns)
             self.bandwidth_mhz = float(self.channel_width_mhz)
+        # Rashed-Step 20.E-10-09-2026-start
+        if self.ofdma and self.phy != "he":
+            raise ValueError("Config.ofdma needs phy='he' (802.11ax).")
+        if self.ul_ofdma and not self.ofdma:
+            raise ValueError("Config.ul_ofdma needs ofdma=True.")
+        if self.ofdma and self.qos_enabled:
+            raise ValueError("Config.ofdma is not combined with EDCA (qos_enabled) in this model.")
+        if self.ofdma and not 1 <= self.ofdma_max_users <= 74:
+            raise ValueError("Config.ofdma_max_users must be 1-74.")
+        # Rashed-Step 20.E-10-09-2026-end
     # Rashed-Step 20.C-10-08-2026-end
     # Rashed-Step 20.A-10-08-2026-end
     # Rashed-Step pre_20.A-10-08-2026-end
@@ -399,7 +422,16 @@ class WiFi:
         # Rashed-Step 20.B-10-08-2026-end
         # Rashed-Step 10.B-08-07-2026-end
 
-        if config.qos_enabled:
+        # Rashed-Step 20.E-10-09-2026-start
+        self.ofdma_dl = defaultdict(list)          # per-STA downlink queues (OFDMA)
+        self.ofdma_dl_pending = defaultdict(list)  # per-STA MPDUs waiting for a retry
+        self.ofdma_stats = wifi_ofdma.new_stats()
+        self._ofdma_rr = 0
+        self._data_event = env.event()
+        # Rashed-Step 20.E-10-09-2026-end
+        if config.ofdma:
+            env.process(self.start_ofdma())  # 20.E
+        elif config.qos_enabled:
             # Rashed-Step 10.B-08-07-2026-start
             env.process(self.start_edca())
             # Rashed-Step 10.B-08-07-2026-end
@@ -430,6 +462,9 @@ class WiFi:
         # identical to every pre-15.B run.
         for sta in self.sta_list:
             sta.ap = self
+            # Rashed-Step 20.E-10-09-2026-start
+            sta._ul_notify = self._notify_data   # 20.E: uplink arrivals wake the OFDMA scheduler
+            # Rashed-Step 20.E-10-09-2026-end
         # Rashed-Step 15.B-09-18-2026-end
         # Rashed-Step 5.G-02-06-2026-start
         self.mobility = mobility
@@ -562,6 +597,16 @@ class WiFi:
                 interval_us = 1e6 / self.traffic_config.arrival_rate_pps
             yield self.env.timeout(interval_us)
             # Rashed-Step 20.B-10-08-2026-start
+            # Rashed-Step 20.E-10-09-2026-start
+            if self.config.ofdma:
+                pkt = self._make_packet()
+                if self.sta_list:
+                    dest = self.sta_list[self._packet_seq % len(self.sta_list)]
+                    pkt.destination = dest.name
+                    self.ofdma_dl[dest.name].append(pkt)
+                    self._notify_data()
+                continue
+            # Rashed-Step 20.E-10-09-2026-end
             if self.config.qos_enabled:
                 pkt = self._make_packet()
                 self.ac_queue[pkt.traffic_class].append(pkt)
@@ -850,6 +895,77 @@ class WiFi:
     # Rashed-Step 10.B-08-07-2026-end
 
     # Rashed-Step 20.B-10-08-2026-start
+    # Rashed-Step 20.E-10-09-2026-start
+    # ------------------------------------------------------------------
+    # 802.11ax OFDMA scheduler (Config.ofdma) - see wifi/ofdma.py
+    # ------------------------------------------------------------------
+    def _notify_data(self):
+        ev, self._data_event = self._data_event, self.env.event()
+        ev.succeed()
+
+    def _ofdma_eligible(self):
+        return list(self.associated) if self._mgmt is not None else list(self.sta_list)
+
+    def _ofdma_take_dl(self, sta):
+        if self.traffic_config.mode == "saturated":
+            p = self._make_packet()
+            p.destination = sta.name
+            return p
+        q = self.ofdma_dl[sta.name]
+        return q.pop(0) if q else None
+
+    def _ofdma_has_dl(self, sta):
+        return (self.traffic_config.mode == "saturated" or bool(self.ofdma_dl[sta.name])
+                or bool(self.ofdma_dl_pending[sta.name]))
+
+    def _ofdma_has_ul(self, sta):
+        if not (self.config.ul_ofdma and getattr(sta, "uplink_enabled", False)):
+            return False
+        return (sta.traffic_config.mode == "saturated" or bool(sta.packet_queue.items)
+                or bool(sta.ofdma_ul_pending))
+
+    def start_ofdma(self):
+        """OFDMA loop: contend (DCF), then a downlink MU round or an uplink
+        trigger round (alternating when both have data), up to
+        ofdma_max_users STAs in round-robin order."""
+        up_next = False
+        while True:
+            while True:
+                sts = self._ofdma_eligible()
+                if any(self._ofdma_has_dl(s) or self._ofdma_has_ul(s) for s in sts):
+                    break
+                yield self._data_event | self.env.timeout(1000.0)
+            self.process = self.env.process(self.wait_back_off())
+            yield self.process
+            sts = self._ofdma_eligible()
+            if not sts:
+                continue
+            k = self._ofdma_rr % len(sts)
+            order = sts[k:] + sts[:k]
+            self._ofdma_rr += 1
+            dl = [s for s in order if self._ofdma_has_dl(s)][:self.config.ofdma_max_users]
+            ul = [s for s in order if self._ofdma_has_ul(s)][:self.config.ofdma_max_users]
+            if not dl and not ul:
+                continue
+            if ul and (up_next or not dl):
+                ok = yield self.env.process(wifi_ofdma.uplink_round(self, ul))
+                up_next = False
+            else:
+                ok = yield self.env.process(wifi_ofdma.downlink_round(self, dl))
+                up_next = True
+            if ok:
+                self.channel.succeeded_transmissions += 1
+                self.succeeded_transmissions += 1
+                self.failed_transmissions_in_row = 0
+            else:
+                self.channel.failed_transmissions += 1
+                self.failed_transmissions += 1
+                self.failed_transmissions_in_row += 1
+                if self.failed_transmissions_in_row > self.config.r_limit:
+                    self.failed_transmissions_in_row = 0
+                yield self.env.timeout(Times.ack_timeout)
+
+    # Rashed-Step 20.E-10-09-2026-end
     def _edca_head(self, ac):
         """Next packet for AC ac without waiting: a new one (saturated) or
         the queue's head, or None."""

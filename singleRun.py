@@ -335,6 +335,11 @@ def _mgmt_config(on, beacon_ms, scan_ms, roam_dbm, hyst_db):
 @click.option("--wifi-roam-threshold-dbm", "wifi_roam_threshold_dbm", type=float, default=-75.0, help="Roam when the AP's beacon RSSI falls below this (dBm), --wifi-management.")
 @click.option("--wifi-roam-hysteresis-db", "wifi_roam_hysteresis_db", type=float, default=6.0, help="Roam only to an AP this much stronger (dB), --wifi-management.")
 # Rashed-Step 20.D-10-08-2026-end
+# Rashed-Step 20.E-10-09-2026-start
+@click.option("--wifi-ofdma", "wifi_ofdma", is_flag=True, default=False, help="802.11ax downlink OFDMA (Step 20.E; needs --wifi-phy he): each channel access carries an HE MU PPDU to up to --wifi-ofdma-max-users STAs on equal resource units (26/52/106/242/484/996 tones), each with an A-MPDU (up to --wifi-ampdu MPDUs). Prints a Wi-Fi OFDMA block. Default (unset) = single-user, byte-identical.")
+@click.option("--wifi-ofdma-max-users", "wifi_ofdma_max_users", type=click.IntRange(1, 74), default=8, help="Users per OFDMA PPDU / trigger round (Step 20.E).")
+@click.option("--wifi-ul-ofdma", "wifi_ul_ofdma", is_flag=True, default=False, help="Trigger-based uplink OFDMA (Step 20.E; needs --wifi-ofdma and --wifi-sta-uplink-enabled): the AP sends Trigger frames, STAs answer together on their resource units and then send only when triggered.")
+# Rashed-Step 20.E-10-09-2026-end
 @click.option("--wifi-preamble-detect", "wifi_preamble_detect", is_flag=True, default=False, help="802.11 preamble detection (Step pre_20.A): Wi-Fi defers to Wi-Fi frames from -82 dBm and to other signals (NR-U, licensed NR) from its -62 dBm energy-detection threshold - the asymmetry behind LAA coexistence. Default (unset) = one -62 dBm rule for everything, byte-identical.")
 @click.option("--fairness-report", "fairness_report", is_flag=True, default=False, help="Print a Coexistence Fairness block (Step pre_20.A): per technology the share of airtime it occupied (failed transmissions included), transmissions and their failure ratio, throughput and latency, and Jain's index over the airtime shares. Default (unset) = not printed.")
 # Rashed-Step pre_20.A-10-08-2026-end
@@ -513,6 +518,7 @@ def single_run(
         wifi_phy: str = "legacy", wifi_channel_width: str = "20", wifi_gi: str = "800",  # 20.C
         wifi_management: bool = False, wifi_beacon_interval_ms: float = 102.4, wifi_scan_ms: float = 120.0,
         wifi_roam_threshold_dbm: float = -75.0, wifi_roam_hysteresis_db: float = 6.0,  # 20.D
+        wifi_ofdma: bool = False, wifi_ofdma_max_users: int = 8, wifi_ul_ofdma: bool = False,  # 20.E
         wifi_sta_traffic_model: str = "saturated", wifi_sta_arrival_rate_pps: float = 100.0,  # 20.B
         # Rashed-Step pre_20.A-10-08-2026-end
         # Rashed-Step 19.F-10-07-2026-end
@@ -689,6 +695,14 @@ def single_run(
     elif wifi_channel_width != "20" or wifi_gi != "800":
         raise click.BadParameter("--wifi-channel-width / --wifi-gi need --wifi-phy ht, vht or he.")
     # Rashed-Step 20.C-10-08-2026-end
+    # Rashed-Step 20.E-10-09-2026-start
+    if wifi_ofdma and wifi_phy != "he":
+        raise click.BadParameter("--wifi-ofdma needs --wifi-phy he.")
+    if wifi_ofdma and wifi_edca:
+        raise click.BadParameter("--wifi-ofdma is not combined with --wifi-edca in this model.")
+    if wifi_ul_ofdma and not (wifi_ofdma and wifi_sta_uplink_enabled):
+        raise click.BadParameter("--wifi-ul-ofdma needs --wifi-ofdma and --wifi-sta-uplink-enabled.")
+    # Rashed-Step 20.E-10-09-2026-end
     if wifi_rts_threshold is not None and not wifi_mac_exchange:
         raise click.BadParameter("--wifi-rts-threshold needs --wifi-mac-exchange.")
     # Rashed-Step 20.A-10-08-2026-end
@@ -877,6 +891,7 @@ def single_run(
                               phy=wifi_phy, channel_width_mhz=int(wifi_channel_width), guard_interval_ns=int(wifi_gi),  # 20.C
                               management=_mgmt_config(wifi_management, wifi_beacon_interval_ms, wifi_scan_ms,
                                                       wifi_roam_threshold_dbm, wifi_roam_hysteresis_db),  # 20.D
+                              ofdma=wifi_ofdma, ofdma_max_users=wifi_ofdma_max_users, ul_ofdma=wifi_ul_ofdma,  # 20.E
                               # Rashed-Step 5.D-02-06-2026-start
                               wifi_sinr_thr_db_override=wifi_sinr_thr_db_override,
                               # Rashed-Step 5.D-02-06-2026-end
