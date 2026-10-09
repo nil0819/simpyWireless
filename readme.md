@@ -42,6 +42,9 @@ common/error_model.py   - link error model: hard SINR threshold (default)
                           or a BLER curve per MCS (Step 18.A)
 channel/channel.py      - Channel: tx queues, ActiveTx, CCA/ED sensing, SINR
 wifi/wifi.py, wifi/sta.py       - Wi-Fi AP + STA (CSMA/CA)
+wifi/mac.py, ampdu.py, phy.py,  - Step 20: frame exchange (ACK/NAV/RTS/EIFS),
+wifi/mgmt.py, ofdma.py            A-MPDU, HT/VHT/HE rates, beacons /
+                                   association / roaming, OFDMA
 nru/nru.py, nru/ue.py           - NR-U gNB + UE (Type 1 / Cat-4 LBT,
                                    unlicensed; UE uplink inside the
                                    gNB's channel occupancy time)
@@ -309,6 +312,31 @@ python -m analysis.laa_fairness_mitigations     # priority classes, ED threshold
 python -m analysis.laa_scell_mitigations        # the Step 19.F LAA scenario per mitigation
 ```
 
+### Full-stack Wi-Fi (Step 20)
+
+The Wi-Fi side brought up to the 5G side's depth. All opt-in; every default run is unchanged.
+
+| Feature | Flags | What it does |
+|---|---|---|
+| Frame exchange on the air | `--wifi-mac-exchange` (+ `--wifi-rts-threshold BYTES`) | ACK / Block Ack transmitted by the receiver after SIFS (they can collide, are sensed, NR-U sees them); NAV from every decoded frame; EIFS after an undecoded one; RTS/CTS above the threshold. With it the collision probability of co-located APs matches Bianchi's model (it was ~0.05 low) |
+| STA uplink traffic | `--wifi-sta-traffic-model poisson\|cbr`, `--wifi-sta-arrival-rate-pps` | per-STA queues; a STA contends only while backlogged |
+| EDCA with queues | `--wifi-edca` with `--wifi-traffic-model poisson\|cbr` | one queue per access category; an AC contends only while backlogged |
+| A-MPDU everywhere | `--wifi-ampdu N` | now also on EDCA (per AC, capped by its TXOP limit: voice 1.504 ms, video 3.008 ms) and STA uplink |
+| 802.11n/ac/ax PHY | `--wifi-phy ht\|vht\|he`, `--wifi-channel-width 20\|40\|80\|160`, `--wifi-gi`, `-m` | standard rates (one stream; e.g. VHT80 MCS 9 433 Mbps, HE80 MCS 11 600 Mbps), HT/VHT/HE preambles, SINR thresholds to 1024-QAM, wider channel = more noise; control responses stay non-HT |
+| Management plane | `--wifi-management` (+ `--wifi-beacon-interval-ms`, `--wifi-scan-ms`, `--wifi-roam-threshold-dbm`, `--wifi-roam-hysteresis-db`) | beacons (PIFS, 6 Mbps); STAs scan, authenticate and associate with the strongest AP; data only to/from associated STAs; roaming with the interruption measured |
+| OFDMA (802.11ax) | `--wifi-ofdma` (+ `--wifi-ofdma-max-users`), `--wifi-ul-ofdma` (needs `--wifi-phy he`) | downlink HE MU PPDUs on resource units (26-996 tones, each its own transmission); trigger-based uplink - STAs then send only when triggered |
+
+Two channel-model fixes came with it: a Wi-Fi frame's SINR now counts one interferer's back-to-back frames once (pre_20.D.3a), and interference / sensed energy use the share of the transmitter's power in the receiver's band, which matters as soon as bandwidths differ (pre_20.C0).
+
+```bash
+python singleRun.py --ap-number 3 --gnb-number 1 --seed 1 -t 0.5 -r 1 --wifi-mac-exchange --wifi-preamble-detect --wifi-rts-threshold 1000 --wifi-edca --wifi-traffic-model poisson --wifi-arrival-rate-pps 2000 --wifi-ampdu 16
+python singleRun.py --ap-number 1 --gnb-number 0 --seed 1 -t 0.3 -r 1 --wifi-phy he --wifi-channel-width 80 -m 11 --wifi-ampdu 64 --wifi-mac-exchange
+python singleRun.py --ap-number 2 --gnb-number 0 --seed 1 -t 5 -r 1 --ap-pos 0,10 --ap-pos 60,10 --area-w 60 --area-h 20 --sta-mobility-speed-mps 10 --wifi-management --wifi-traffic-model poisson --wifi-arrival-rate-pps 500 --wifi-mac-exchange --wifi-preamble-detect
+python singleRun.py --ap-number 1 --gnb-number 1 --seed 1 -t 0.5 -r 1 --wifi-phy he --wifi-ofdma --wifi-ampdu 16 --wifi-sta-uplink-enabled --wifi-ul-ofdma --wifi-mac-exchange --wifi-preamble-detect
+```
+
+Some numbers: HE80 MCS 11 delivers 518.7 of its 600.5 Mbps with 64-MPDU A-MPDUs and ACKs on the air, but VHT80 MCS 9 without aggregation only 54.7 of 433 Mbps (per-access overhead); roaming between two APs 60 m apart costs 2.5-3.4 ms; with 9 STAs at high uplink load, trigger-based OFDMA halves the latency of contended uplink (7.4 -> 3.7 ms, no collisions). Not modeled yet: MU-MIMO / several spatial streams, active scanning, WPA2 handshakes, power save, OFDMA with EDCA. Single-user downlink still addresses every packet to the AP's first STA (an old simplification).
+
 ## Testing
 
 Assert-based regression suite (no print-and-eyeball scripts for anything added since Step 5.H) - covers PHY primitives, the packet system, `GenericWirelessDevice`, `PacketAttacker`, the analytical models, uplink for all three technologies, RRC, and the 5G Core (including CLI-level tests):
@@ -316,7 +344,7 @@ Assert-based regression suite (no print-and-eyeball scripts for anything added s
 pip install pytest
 pytest test/
 ```
-553 tests passing as of Step pre_20. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
+597 tests passing as of Step 20. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
 
 ## Current Work Status
 
@@ -352,6 +380,7 @@ pytest test/
 ----> Step 18 (18.A-18.F) — 5G user plane, all opt-in: BLER error model (`--error-model bler`), per-UE byte buffers and traffic for licensed NR, NR-U COTs made of slots with transport blocks and several UEs per COT (`--nru-cot-model slots`, uplink on interlaces), HARQ with chase combining (`--harq`), PDCP + RLC UM/AM (`--rlc-mode`). Step pre_18.F: licensed NR uplink UEs of one cell on separate RBs no longer interfere with each other, and uplink results are now printed
 ----> Step pre_18 (A-E) — channel-model fixes found while validating Step 17: (A-B) SINR counts every transmission that overlapped the target at any point - Wi-Fi frames (one decode unit) at full power, NR-U/NR bursts weighted by the fraction covered - instead of only what was still on the air when the target ended (results used to depend on timing and processing order); (D) Wi-Fi DCF counts backoff on a shared 9 us slot grid with event-driven sensing and a fresh DIFS after every busy period; (E) NR-U LBT is 3GPP TS 37.213 Type 1 - a full 43 us defer period after every busy period. (C) Paper figures regenerated: the DTMC validation now matches the model within 0.8-2.7 points for Wi-Fi and 0.4-1.4 for NR-U
 ----> Step pre_20 (A-E) - LAA / NR-U fairness study with the 3GPP replacement test: fairness report and 802.11 preamble detection (`--fairness-report`, `--wifi-preamble-detect`), Wi-Fi A-MPDU (`--wifi-ampdu`), diagnosis sweeps, and four mitigations - TS 37.213 priority classes (`--nru-priority-class`), ED threshold (`--nru-ed-mode`, `--nru-ed-threshold-dbm`), preamble / CTS-to-self with a Wi-Fi NAV (`--nru-wifi-reservation`), reference-slot feedback (`--nru-ref-nack-threshold`, `--nru-adaptive-cot`). Report: `docs/laa_fairness_study.md`. Step pre_20.D.3a: Wi-Fi's SINR no longer counts one interferer's back-to-back frames twice
+----> Step 20 (20.A-20.E) - full-stack Wi-Fi, all opt-in: 802.11 frame exchange on the air (`--wifi-mac-exchange`, `--wifi-rts-threshold`: ACK/Block Ack, NAV, RTS/CTS, EIFS - collision probability now matches Bianchi); STA uplink and EDCA with poisson/cbr queues, A-MPDU on every path (`--wifi-sta-traffic-model`); 802.11n/ac/ax PHY (`--wifi-phy`, `--wifi-channel-width`, `--wifi-gi`); management plane - beacons, association, roaming (`--wifi-management`); 802.11ax OFDMA downlink and trigger-based uplink (`--wifi-ofdma`, `--wifi-ul-ofdma`). Fix pre_20.C0: interference uses the transmitter's in-band power share (unequal bandwidths)
 
 Full detail (design rationale, exact verified numbers, what was deliberately left out) for every sub-step above is in `Project details/Step N.txt`; `Project details/STATUS - resume context.txt` is the current single-file "start here" summary.
 

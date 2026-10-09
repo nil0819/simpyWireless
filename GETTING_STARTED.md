@@ -24,7 +24,7 @@ pip install pytest
 pytest test/
 ```
 
-You should see `553 passed` (as of Step pre_20). If that's clean, you're ready to run simulations.
+You should see `597 passed` (as of Step 20). If that's clean, you're ready to run simulations.
 
 ## 2. Scenario 1 - Wi-Fi + NR-U coexistence
 
@@ -207,6 +207,30 @@ four mitigations) is in `docs/laa_fairness_study.md`; its figures come
 from `python -m analysis.laa_fairness_sweeps`,
 `python -m analysis.laa_fairness_mitigations` and
 `python -m analysis.laa_scell_mitigations`.
+
+## 10. Full-stack Wi-Fi (Step 20)
+
+Wi-Fi 6 with real frame exchanges - ACKs on the air, an 80 MHz HE
+channel and aggregation:
+
+```bash
+python singleRun.py --ap-number 1 --gnb-number 0 --seed 1 -t 0.3 -r 1 --wifi-phy he --wifi-channel-width 80 -m 11 --wifi-ampdu 64 --wifi-mac-exchange
+```
+
+The "Wi-Fi PHY" block shows the 600.5 Mbps PHY rate and the throughput
+line about 519 Mbps; drop `--wifi-ampdu 64` and it falls to well under
+100 - one short frame per channel access wastes the fast PHY. STAs that
+have to find and join their AP, and roam while walking:
+
+```bash
+python singleRun.py --ap-number 2 --gnb-number 0 --seed 1 -t 5 -r 1 --ap-pos 0,10 --ap-pos 60,10 --area-w 60 --area-h 20 --sta-mobility-speed-mps 10 --wifi-management --wifi-traffic-model poisson --wifi-arrival-rate-pps 500 --wifi-mac-exchange --wifi-preamble-detect
+```
+
+The "Wi-Fi Management" block reports beacons, the time to associate
+(~121 ms: a 120 ms passive scan plus four frames) and the roams with
+their interruption (a few ms). Add `--wifi-ofdma` (with `--wifi-phy he`)
+for 802.11ax multi-user transmissions, and `--wifi-ul-ofdma
+--wifi-sta-uplink-enabled` for trigger-based uplink.
 
 ## Where to go next
 
