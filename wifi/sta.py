@@ -279,6 +279,10 @@ class WiFiSTA:
         return fr
 
     def wait_back_off(self):
+        # Rashed-Step 20.D-10-08-2026-start
+        if getattr(self, "_mgmt", None) is not None:   # uplink only while associated (to self.ap)
+            yield from self._mgmt.wait_sta_associated(self)
+        # Rashed-Step 20.D-10-08-2026-end
         backoff_slots = self.generate_new_back_off_slots(self.failed_transmissions_in_row)
         # Rashed-Step pre_18.D-10-05-2026-start
         # Same shared-slot-grid DCF wait as the AP (wifi.WiFi.wait_back_off,

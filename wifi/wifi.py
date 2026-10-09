@@ -98,6 +98,13 @@ class Config:
     phy: str = "legacy"
     channel_width_mhz: int = 20
     guard_interval_ns: int = 800
+    # Rashed-Step 20.D-10-08-2026-start
+    # 802.11 management plane (Step 20.D, wifi/mgmt.py): a MgmtConfig turns
+    # on beacons, scanning, authentication/association and roaming; data
+    # then flows only to/from associated STAs. None (default) = every STA
+    # is implicitly associated, as in every earlier run.
+    management: Any = None
+    # Rashed-Step 20.D-10-08-2026-end
 
     def __post_init__(self):
         if self.phy != "legacy":
@@ -364,6 +371,9 @@ class WiFi:
         self.packet_log = []
         # Rashed-Step pre_20.B-10-08-2026-start
         self.ampdu_stats = {"ppdus": 0, "mpdus": 0, "mpdus_ok": 0, "header_lost": 0}  # = wifi_ampdu.new_stats()
+        # Rashed-Step 20.D-10-08-2026-start
+        self._mgmt = None          # wifi.mgmt.WifiManagement when Config.management is set
+        # Rashed-Step 20.D-10-08-2026-end
         # Rashed-Step 20.A-10-08-2026-start
         self.mac_stats = wifi_mac.new_stats()
         # Rashed-Step 20.A-10-08-2026-end
@@ -632,6 +642,10 @@ class WiFi:
         returns - the caller only needs to actually transmit for the
         winner.
         """
+        # Rashed-Step 20.D-10-08-2026-start
+        if self._mgmt is not None:
+            yield from self._mgmt.wait_ap_has_stas(self)
+        # Rashed-Step 20.D-10-08-2026-end
         remaining_us = {}
         for ac, frame in self.ac_frame_to_send.items():
             if frame is None:
@@ -693,7 +707,7 @@ class WiFi:
         log(self, f'Starting sending frame (EDCA {ac}): {frame.frame_time}')
         tx_start = self.env.now
         tx_pos = self.current_pos()
-        rx_pos = self.sta_list[0].current_pos() if self.sta_list else tx_pos
+        rx_pos = self._dl_rx().current_pos() if self._dl_rx() is not None else tx_pos  # 20.D: = sta_list[0] unless management
         tx = ActiveTx(
             tx_id=self.name,
             tx_pos=tx_pos,
@@ -996,6 +1010,10 @@ class WiFi:
 
         
     def wait_back_off(self):
+        # Rashed-Step 20.D-10-08-2026-start
+        if self._mgmt is not None:                 # only with an associated STA
+            yield from self._mgmt.wait_ap_has_stas(self)
+        # Rashed-Step 20.D-10-08-2026-end
         backoff_slots = self.generate_new_back_off_slots(self.failed_transmissions_in_row)
         # Rashed-Step pre_18.D-10-05-2026-start
         # DIFS + backoff now on the shared slot grid (ran/protocol/
@@ -1145,7 +1163,7 @@ class WiFi:
         # was first called, so a moving STA's position is always "now".
         tx_start = self.env.now
         tx_pos = self.current_pos()
-        rx_pos = self.sta_list[0].current_pos() if self.sta_list else tx_pos
+        rx_pos = self._dl_rx().current_pos() if self._dl_rx() is not None else tx_pos  # 20.D: = sta_list[0] unless management
         # Rashed-Step 5.G-02-06-2026-end
         tx = ActiveTx(
             tx_id=self.name,
@@ -1444,8 +1462,19 @@ class WiFi:
         method's own comment). None when there's no associated STA at
         all (rate adaptation has nothing to track).
         """
-        return self.sta_list[0].name if self.sta_list else None
+        rx = self._dl_rx()  # 20.D: = sta_list[0] unless management
+        return rx.name if rx is not None else None
 
+    # Rashed-Step 20.D-10-08-2026-start
+    def _dl_rx(self):
+        """The STA this AP's downlink goes to: sta_list[0] (every run
+        without management - the STA the data SINR has always used), or
+        with management the associated STA picked for this access."""
+        if self._mgmt is not None:
+            return self._mgmt.current_rx(self)
+        return self.sta_list[0] if self.sta_list else None
+
+    # Rashed-Step 20.D-10-08-2026-end
     def current_mcs_for_link(self, link_key: Optional[str]) -> int:
         """
         The MCS to use RIGHT NOW for `link_key`. Returns config.mcs
@@ -1642,7 +1671,7 @@ class WiFi:
             self.packet_queue.items.insert(0, pkt)
 
     def _ampdu_rx(self):
-        rx = self.sta_list[0] if self.sta_list else None
+        rx = self._dl_rx()  # 20.D
         return (rx.name, rx.current_pos()) if rx is not None else (self.name, self.current_pos())
 
     def _start_ampdu(self):
@@ -1671,7 +1700,7 @@ class WiFi:
     # frame's SINR has always been evaluated at.
     # ------------------------------------------------------------------
     def _send_frame_mac(self, frame, on_ok, on_fail):
-        rx = self.sta_list[0]
+        rx = self._dl_rx()  # 20.D
         now = self.env.now
         tx = ActiveTx(tx_id=self.name, tx_pos=self.current_pos(), rx_pos=rx.current_pos(), tx_start=now,
                       tx_power_dbm=self.config.tx_power_dbm, f_hz=self.config.f_ghz, pl_exp=self.config.pl_exp,

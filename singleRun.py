@@ -79,6 +79,16 @@ def parse_traffic_class_mix(raw_values, label: str):
 # Rashed-Step 10.A-08-07-2026-end
 
 
+# Rashed-Step 20.D-10-08-2026-start
+def _mgmt_config(on, beacon_ms, scan_ms, roam_dbm, hyst_db):
+    if not on:
+        return None
+    from wifi.mgmt import MgmtConfig
+    return MgmtConfig(beacon_interval_us=beacon_ms * 1000.0, scan_us=scan_ms * 1000.0,
+                      roam_threshold_dbm=roam_dbm, roam_hysteresis_db=hyst_db)
+
+
+# Rashed-Step 20.D-10-08-2026-end
 @click.command()
 @click.option("-r", "--runs", "runs", default=10, help="Number of simulation runs")
 @click.option("--seed", "seed", default=1, help="Seed for simulation")
@@ -318,6 +328,13 @@ def parse_traffic_class_mix(raw_values, label: str):
 @click.option("--wifi-channel-width", "wifi_channel_width", type=click.Choice(["20", "40", "80", "160"]), default="20", help="Wi-Fi channel width in MHz for --wifi-phy ht/vht/he (Step 20.C); sets the noise bandwidth too.")
 @click.option("--wifi-gi", "wifi_gi", type=click.Choice(["400", "800", "1600", "3200"]), default="800", help="Guard interval in ns for --wifi-phy ht/vht (400/800) or he (800/1600/3200) (Step 20.C).")
 # Rashed-Step 20.C-10-08-2026-end
+# Rashed-Step 20.D-10-08-2026-start
+@click.option("--wifi-management", "wifi_management", is_flag=True, default=False, help="802.11 management plane (Step 20.D): APs send beacons (every --wifi-beacon-interval-ms, PIFS priority, 6 Mbps); STAs start unassociated, passive-scan (--wifi-scan-ms), then authenticate and associate with the strongest AP (4 management frames, DCF, ACKed, retried); data flows only to/from associated STAs; STAs roam when their AP's beacons drop below --wifi-roam-threshold-dbm and another AP is --wifi-roam-hysteresis-db stronger. Prints a Wi-Fi Management block. Default (unset) = every STA implicitly associated, byte-identical.")
+@click.option("--wifi-beacon-interval-ms", "wifi_beacon_interval_ms", type=float, default=102.4, help="Beacon interval (ms) for --wifi-management (default 102.4 = 100 TU).")
+@click.option("--wifi-scan-ms", "wifi_scan_ms", type=float, default=120.0, help="Passive-scan dwell (ms) for --wifi-management.")
+@click.option("--wifi-roam-threshold-dbm", "wifi_roam_threshold_dbm", type=float, default=-75.0, help="Roam when the AP's beacon RSSI falls below this (dBm), --wifi-management.")
+@click.option("--wifi-roam-hysteresis-db", "wifi_roam_hysteresis_db", type=float, default=6.0, help="Roam only to an AP this much stronger (dB), --wifi-management.")
+# Rashed-Step 20.D-10-08-2026-end
 @click.option("--wifi-preamble-detect", "wifi_preamble_detect", is_flag=True, default=False, help="802.11 preamble detection (Step pre_20.A): Wi-Fi defers to Wi-Fi frames from -82 dBm and to other signals (NR-U, licensed NR) from its -62 dBm energy-detection threshold - the asymmetry behind LAA coexistence. Default (unset) = one -62 dBm rule for everything, byte-identical.")
 @click.option("--fairness-report", "fairness_report", is_flag=True, default=False, help="Print a Coexistence Fairness block (Step pre_20.A): per technology the share of airtime it occupied (failed transmissions included), transmissions and their failure ratio, throughput and latency, and Jain's index over the airtime shares. Default (unset) = not printed.")
 # Rashed-Step pre_20.A-10-08-2026-end
@@ -494,6 +511,8 @@ def single_run(
         nru_ref_nack_threshold: float = 0.8, nru_adaptive_cot: bool = False,  # pre_20.D.4
         wifi_mac_exchange: bool = False, wifi_rts_threshold: Optional[int] = None,  # 20.A
         wifi_phy: str = "legacy", wifi_channel_width: str = "20", wifi_gi: str = "800",  # 20.C
+        wifi_management: bool = False, wifi_beacon_interval_ms: float = 102.4, wifi_scan_ms: float = 120.0,
+        wifi_roam_threshold_dbm: float = -75.0, wifi_roam_hysteresis_db: float = 6.0,  # 20.D
         wifi_sta_traffic_model: str = "saturated", wifi_sta_arrival_rate_pps: float = 100.0,  # 20.B
         # Rashed-Step pre_20.A-10-08-2026-end
         # Rashed-Step 19.F-10-07-2026-end
@@ -856,6 +875,8 @@ def single_run(
                               ampdu_max_mpdus=wifi_ampdu, ampdu_max_ppdu_us=wifi_max_ppdu_us,  # pre_20.B
                               mac_exchange=wifi_mac_exchange, rts_threshold_bytes=wifi_rts_threshold,  # 20.A
                               phy=wifi_phy, channel_width_mhz=int(wifi_channel_width), guard_interval_ns=int(wifi_gi),  # 20.C
+                              management=_mgmt_config(wifi_management, wifi_beacon_interval_ms, wifi_scan_ms,
+                                                      wifi_roam_threshold_dbm, wifi_roam_hysteresis_db),  # 20.D
                               # Rashed-Step 5.D-02-06-2026-start
                               wifi_sinr_thr_db_override=wifi_sinr_thr_db_override,
                               # Rashed-Step 5.D-02-06-2026-end

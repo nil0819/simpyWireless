@@ -610,6 +610,12 @@ def run_simulation(
         # Rashed-Step 19.E.2-10-07-2026-end
     # Rashed-Step 16.F-10-02-2026-end
 
+    # Rashed-Step 20.D-10-08-2026-start
+    wifi_mgmt = None
+    if getattr(wifi_config, "management", None) is not None and wifi_aps:
+        from wifi.mgmt import WifiManagement
+        wifi_mgmt = WifiManagement(environment, channel, wifi_aps, wifi_stas, wifi_config)
+    # Rashed-Step 20.D-10-08-2026-end
     # environment.run(until=simulation_time * 1000000) 10^6 milisekundy
     environment.run(until=simulation_time * 1000000)
     # Rashed-Step 18.C-10-06-2026-start
@@ -885,6 +891,15 @@ def run_simulation(
     # Rashed-Step pre_20.B-10-08-2026-end
     # Rashed-Step 20.A-10-08-2026-start
     # Rashed-Step 20.C-10-08-2026-start
+    # Rashed-Step 20.D-10-08-2026-start
+    if wifi_mgmt is not None:
+        m = wifi_mgmt.summary(simulation_time * 1e6)
+        print("=== Wi-Fi Management ===")
+        print(f'Wifi beacons: {m["beacons"]} (airtime share {m["beacon_airtime_share"]:.4f})')
+        print(f'Wifi STAs associated at end: {m["associated"]}/{m["stas"]}, mean time to associate (ms): {m["mean_assoc_ms"]}')
+        print(f'Wifi management frames: {m["mgmt_frames"]} (retries {m["mgmt_retries"]}), failed joins: {m["joins_failed"]}')
+        print(f'Wifi roams: {m["roams"]}, mean interruption (ms): {m["mean_interruption_ms"]}')
+    # Rashed-Step 20.D-10-08-2026-end
     if getattr(config, "phy", "legacy") != "legacy" and wifi_aps:
         from wifi.phy import rate_mbps
         print("=== Wi-Fi PHY ===")
