@@ -320,6 +320,9 @@ def _mgmt_config(on, beacon_ms, scan_ms, roam_dbm, hyst_db):
 @click.option("--wifi-rts-threshold", "wifi_rts_threshold", type=click.IntRange(0, None), default=None, help="RTS/CTS before any Wi-Fi data frame (or A-MPDU) whose payload exceeds this many bytes (Step 20.A; 0 = always). Needs --wifi-mac-exchange. Default (unset) = never.")
 # Rashed-Step 20.A-10-08-2026-end
 # Rashed-Step 20.B-10-08-2026-start
+# Rashed-Step 21.A-10-11-2026-start
+@click.option("--wifi-stas-per-ap", "wifi_stas_per_ap", type=click.IntRange(1, 200), default=1, help="Wi-Fi STAs per AP (Step 21.A; default 1, as before). Downlink packets go to them in round robin; each frame's SINR, ACK and rate adaptation are at its own STA.")
+# Rashed-Step 21.A-10-11-2026-end
 @click.option("--wifi-sta-traffic-model", "wifi_sta_traffic_model", type=click.Choice(["saturated", "poisson", "cbr"]), default="saturated", help="Wi-Fi STA uplink traffic (Step 20.B; with --wifi-sta-uplink-enabled): saturated (default, as before) or poisson/cbr arrivals into a per-STA queue at --wifi-sta-arrival-rate-pps.")
 @click.option("--wifi-sta-arrival-rate-pps", "wifi_sta_arrival_rate_pps", type=float, default=100.0, help="Per-STA uplink arrival rate (packets/s) for --wifi-sta-traffic-model poisson/cbr (Step 20.B).")
 # Rashed-Step 20.B-10-08-2026-end
@@ -520,6 +523,7 @@ def single_run(
         wifi_roam_threshold_dbm: float = -75.0, wifi_roam_hysteresis_db: float = 6.0,  # 20.D
         wifi_ofdma: bool = False, wifi_ofdma_max_users: int = 8, wifi_ul_ofdma: bool = False,  # 20.E
         wifi_sta_traffic_model: str = "saturated", wifi_sta_arrival_rate_pps: float = 100.0,  # 20.B
+        wifi_stas_per_ap: int = 1,  # 21.A
         # Rashed-Step pre_20.A-10-08-2026-end
         # Rashed-Step 19.F-10-07-2026-end
         # Rashed-Step 19.E.2-10-07-2026-end
@@ -1015,6 +1019,7 @@ def single_run(
                        core_config=core_config,
                        # Rashed-Step pre_17.B-10-04-2026-start
                        wifi_sta_uplink_enabled=wifi_sta_uplink_enabled,
+                       wifi_stas_per_ap=wifi_stas_per_ap,  # 21.A
                        wifi_sta_traffic_config=(None if wifi_sta_traffic_model == "saturated" else
                            TrafficConfig(mode=wifi_sta_traffic_model, arrival_rate_pps=wifi_sta_arrival_rate_pps,
                                          packet_size_bytes=wifi_packet_size_bytes)),  # 20.B

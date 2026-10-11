@@ -396,6 +396,9 @@ class WiFi:
         self.ampdu_stats = {"ppdus": 0, "mpdus": 0, "mpdus_ok": 0, "header_lost": 0}  # = wifi_ampdu.new_stats()
         # Rashed-Step 20.D-10-08-2026-start
         self._mgmt = None          # wifi.mgmt.WifiManagement when Config.management is set
+        # Rashed-Step 21.A-10-11-2026-start
+        self._cur_dest = None      # destination STA name of the frame being prepared / sent
+        # Rashed-Step 21.A-10-11-2026-end
         # Rashed-Step 20.D-10-08-2026-end
         # Rashed-Step 20.A-10-08-2026-start
         self.mac_stats = wifi_mac.new_stats()
@@ -507,7 +510,9 @@ class WiFi:
         """
         self._packet_seq += 1
         payload = self.traffic_config.packet_size_bytes if self.traffic_config.packet_size_bytes is not None else self.config.data_size
-        destination = self.sta_list[0].name if self.sta_list else self.name
+        # 21.A: round robin over the AP's STAs (was always sta_list[0]; the
+        # same STA whenever there is one, i.e. every CLI run).
+        destination = self.sta_list[(self._packet_seq - 1) % len(self.sta_list)].name if self.sta_list else self.name
         # Rashed-Step 10.A-08-07-2026-start
         # None (default) = no random draw at all, plain "best_effort" -
         # see TrafficConfig.traffic_class_mix's docstring for why this
@@ -633,7 +638,9 @@ class WiFi:
         """
         self._packet_seq += 1
         payload = self.traffic_config.packet_size_bytes if self.traffic_config.packet_size_bytes is not None else self.config.data_size
-        destination = self.sta_list[0].name if self.sta_list else self.name
+        # 21.A: round robin over the AP's STAs (was always sta_list[0]; the
+        # same STA whenever there is one, i.e. every CLI run).
+        destination = self.sta_list[(self._packet_seq - 1) % len(self.sta_list)].name if self.sta_list else self.name
         return Packet(
             packet_id=f"{self.name}-{ac}-{self._packet_seq:06d}",
             source=self.name,
@@ -743,6 +750,10 @@ class WiFi:
         already-verified legacy path's code is never touched by this
         change at all - see class docstring.
         """
+        # Rashed-Step 21.A-10-11-2026-start
+        if self.ac_frame_to_send[ac].packet is not None:
+            self._cur_dest = self.ac_frame_to_send[ac].packet.destination
+        # Rashed-Step 21.A-10-11-2026-end
         # Rashed-Step 20.A-10-08-2026-start
         if self.config.mac_exchange and self.sta_list:
             return (yield from self._send_frame_mac(self.ac_frame_to_send[ac], lambda: self.sent_completed_edca(ac),
@@ -1005,10 +1016,15 @@ class WiFi:
                 continue
             winner = yield from self.wait_back_off_edca()
             if agg:
+                # Rashed-Step 21.A-10-11-2026-start
+                self._cur_dest = self.ac_pending[winner][0].destination
+                same = self._per_ra(self.ac_pending[winner])
+                # Rashed-Step 21.A-10-11-2026-end
                 header_us, per_mpdu = self._ampdu_times()
                 put_back = (lambda p: None) if self.traffic_config.mode == "saturated" else \
                     (lambda p: self.ac_queue[winner].insert(0, p))
-                mpdus = wifi_ampdu.build(self.ac_pending[winner], lambda: self._edca_head(winner), put_back,
+                mpdus = wifi_ampdu.build(same, self._take_for_ra(lambda: self._edca_head(winner),
+                                                                 self.ac_queue[winner]), put_back,  # 21.A
                                          header_us, per_mpdu, self.config.ampdu_max_mpdus,
                                          wifi_ampdu.ppdu_budget_us(self, winner))
                 rx_name, rx_pos = self._ampdu_rx()
@@ -1267,6 +1283,10 @@ class WiFi:
         # (unchanged) then decides who, if anyone, survives, exactly like
         # it already does for cross-technology WiFi/NR-U interference.
         # Rashed-Step 6.A-07-31-2026-end
+        # Rashed-Step 21.A-10-11-2026-start
+        if self.frame_to_send.packet is not None:
+            self._cur_dest = self.frame_to_send.packet.destination
+        # Rashed-Step 21.A-10-11-2026-end
         # Rashed-Step 20.A-10-08-2026-start
         if self.config.mac_exchange and self.sta_list:
             return (yield from self._send_frame_mac(self.frame_to_send, self.sent_completed, self.sent_failed))
@@ -1471,6 +1491,10 @@ class WiFi:
     # Rashed-Step 3.D-12-26-2025-end
 
     def generate_new_frame(self, packet: Optional[Packet] = None):
+        # Rashed-Step 21.A-10-11-2026-start
+        if packet is not None:
+            self._cur_dest = packet.destination      # rate adaptation / receiver follow this frame
+        # Rashed-Step 21.A-10-11-2026-end
         # Rashed-Step pre_5.C-02-06-2026-start
         # BUGFIX: frame duration was hardcoded to 5400us, so config.mcs had
         # zero effect on airtime or on the SINR window used for capture.
@@ -1588,6 +1612,12 @@ class WiFi:
         with management the associated STA picked for this access."""
         if self._mgmt is not None:
             return self._mgmt.current_rx(self)
+        # Rashed-Step 21.A-10-11-2026-start
+        if self.sta_list and self._cur_dest is not None:     # the current frame's destination STA
+            for sta in self.sta_list:
+                if sta.name == self._cur_dest:
+                    return sta
+        # Rashed-Step 21.A-10-11-2026-end
         return self.sta_list[0] if self.sta_list else None
 
     # Rashed-Step 20.D-10-08-2026-end
@@ -1786,6 +1816,33 @@ class WiFi:
         if self.traffic_config.mode != "saturated":
             self.packet_queue.items.insert(0, pkt)
 
+    # Rashed-Step 21.A-10-11-2026-start
+    def _per_ra(self, pending):
+        """Pending retransmissions for the current receiver only."""
+        if self._mgmt is not None:
+            return pending                       # management picks the receiver per access
+        return [p for p in pending if p.destination == self._cur_dest]
+
+    def _take_for_ra(self, take, queue_items):
+        """take() limited to the current receiver: in saturated mode a new
+        packet for it; from a queue the oldest packet addressed to it."""
+        if self._mgmt is not None:
+            return take
+        dest = self._cur_dest
+
+        def _take():
+            if self.traffic_config.mode == "saturated":
+                p = take()
+                if p is not None:
+                    p.destination = dest
+                return p
+            for i, p in enumerate(queue_items):
+                if p.destination == dest:
+                    return queue_items.pop(i)
+            return None
+        return _take
+
+    # Rashed-Step 21.A-10-11-2026-end
     def _ampdu_rx(self):
         rx = self._dl_rx()  # 20.D
         return (rx.name, rx.current_pos()) if rx is not None else (self.name, self.current_pos())
@@ -1797,9 +1854,16 @@ class WiFi:
                 pending = [(yield from self._next_packet())]
             self.process = self.env.process(self.wait_back_off())
             yield self.process
+            # Rashed-Step 21.A-10-11-2026-start
+            # One receiver per PPDU (per-RA A-MPDU): the oldest pending packet's
+            # STA; only its packets are aggregated (with one STA: all of them).
+            self._cur_dest = pending[0].destination
+            same = self._per_ra(pending)
+            # Rashed-Step 21.A-10-11-2026-end
             header_us, per_mpdu = self._ampdu_times()
-            mpdus = wifi_ampdu.build(pending, self._take_queued_packet, self._put_back_packet, header_us, per_mpdu,
-                                     self.config.ampdu_max_mpdus, self.config.ampdu_max_ppdu_us)
+            mpdus = wifi_ampdu.build(same, self._take_for_ra(self._take_queued_packet, self.packet_queue.items),
+                                     self._put_back_packet, header_us, per_mpdu,
+                                     self.config.ampdu_max_mpdus, self.config.ampdu_max_ppdu_us)  # 21.A
             rx_name, rx_pos = self._ampdu_rx()
             if self.config.mac_exchange and self.sta_list:
                 ok = yield self.env.process(wifi_ampdu.send_mac(self, mpdus, header_us, per_mpdu, rx_name, rx_pos))
@@ -1816,6 +1880,8 @@ class WiFi:
     # frame's SINR has always been evaluated at.
     # ------------------------------------------------------------------
     def _send_frame_mac(self, frame, on_ok, on_fail):
+        if frame.packet is not None:
+            self._cur_dest = frame.packet.destination  # 21.A
         rx = self._dl_rx()  # 20.D
         now = self.env.now
         tx = ActiveTx(tx_id=self.name, tx_pos=self.current_pos(), rx_pos=rx.current_pos(), tx_start=now,
