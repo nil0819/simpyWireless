@@ -289,12 +289,25 @@ class Channel:
               self.active_txs.remove(tx)
 
          dur = max(0, tx.t_end - tx.tx_start)
+         # Rashed-Step pre_21.E-10-11-2026-start
+         # One OFDMA PPDU = several simultaneous RU transmissions (wifi/
+         # ofdma.py). Channel-level airtime / count / failure: once per PPDU,
+         # on its primary RU (ru_secondary on the others), failed only if no
+         # RU got through (ppdu_ok). Per-node successful airtime: each RU for
+         # its own transmitter, the PPDU's time split over the RUs that got
+         # through (airtime_share) - so it also adds up to the PPDU once.
+         # Plain transmissions have none of these attributes: as before.
+         if not getattr(tx, "ru_secondary", False):
+             ch_ok = getattr(tx, "ppdu_ok", success)
          # Rashed-Step pre_20.A-10-08-2026-start
-         self.tx_airtime_total_us[tx.tech] = self.tx_airtime_total_us.get(tx.tech, 0.0) + dur
-         self.tx_count[tx.tech] = self.tx_count.get(tx.tech, 0) + 1
-         if not success:
-             self.tx_failed[tx.tech] = self.tx_failed.get(tx.tech, 0) + 1
+             self.tx_airtime_total_us[tx.tech] = self.tx_airtime_total_us.get(tx.tech, 0.0) + dur
+             self.tx_count[tx.tech] = self.tx_count.get(tx.tech, 0) + 1
+             if not ch_ok:
+                 self.tx_failed[tx.tech] = self.tx_failed.get(tx.tech, 0) + 1
          # Rashed-Step pre_20.A-10-08-2026-end
+         if getattr(tx, "airtime_share", None) is not None:   # only OFDMA RUs carry a share
+             dur = dur * tx.airtime_share
+         # Rashed-Step pre_21.E-10-11-2026-end
 
          if success:
              if tx.tech == "WiFi":
@@ -450,6 +463,11 @@ class Channel:
         a data transmission."""
         if tx in self.active_txs:
             self.active_txs.remove(tx)
+        # Rashed-Step pre_21.E-10-11-2026-start
+        if getattr(tx, "ru_secondary", False):        # OFDMA: counted once, on the primary RU
+            self._pulse_state_changed()
+            return
+        # Rashed-Step pre_21.E-10-11-2026-end
         dur = max(0, tx.t_end - tx.tx_start)
         self.tx_airtime_total_us[tx.tech] = self.tx_airtime_total_us.get(tx.tech, 0.0) + dur
         key = tx.tx_id if account_to is None else account_to

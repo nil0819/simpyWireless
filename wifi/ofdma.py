@@ -194,6 +194,9 @@ def downlink_round(ap, users, ac=None):  # 21.C: ac = the EDCA access category t
         tx = _ru_tx(cfg, ap.name, ap.current_pos(), sta.current_pos(), p_dbm, cfg.f_ghz + off, bw, start, dur,
                     mpdus[0] if mpdus else None)
         ch.register_tx(tx)
+        # Rashed-Step pre_21.E-10-11-2026-start
+        tx.ru_secondary = bool(txs)             # all but the first RU: not counted again
+        # Rashed-Step pre_21.E-10-11-2026-end
         txs.append(tx)
     results = []
     try:
@@ -203,8 +206,13 @@ def downlink_round(ap, users, ac=None):  # 21.C: ac = the EDCA access category t
             results.append(_decode_user(ch, em, tx, start + pre, mpdus, per, required, header_ok))
         yield env.timeout(0)
     finally:
+        # Rashed-Step pre_21.E-10-11-2026-start
+        n_ok = sum(1 for r in results if r)
         for tx, res in zip(txs, results + [[]] * (len(txs) - len(results))):
+            tx.ppdu_ok = n_ok > 0                     # read on the primary RU only
+            tx.airtime_share = 1.0 / n_ok if n_ok else 1.0
             ch.unregister_tx(tx, success=bool(res))
+        # Rashed-Step pre_21.E-10-11-2026-end
     # per-user Block Acks in HE TB PPDUs on the same RUs
     yield env.timeout(wifi_mac.SIFS_US)
     acks = []
@@ -216,6 +224,9 @@ def downlink_round(ap, users, ac=None):  # 21.C: ac = the EDCA access category t
                 b = _ru_tx(cfg, sta.name, sta.current_pos(), ap.current_pos(), cfg.tx_power_dbm, cfg.f_ghz + off,
                            bw, bstart, TB_BA_US)
                 ch.register_tx(b)
+                # Rashed-Step pre_21.E-10-11-2026-start
+                b.ru_secondary = bool(btxs)
+                # Rashed-Step pre_21.E-10-11-2026-end
                 btxs.append((sta, b))
         try:
             yield env.timeout(TB_BA_US)
@@ -285,6 +296,9 @@ def uplink_round(ap, users):
             tx = _ru_tx(cfg, sta.name, sta.current_pos(), ap.current_pos(), cfg.tx_power_dbm, cfg.f_ghz + off,
                         bw, start, dur, mpdus[0])
             ch.register_tx(tx)
+            # Rashed-Step pre_21.E-10-11-2026-start
+            tx.ru_secondary = any(t is not None for _, t in txs)
+            # Rashed-Step pre_21.E-10-11-2026-end
             txs.append((sta, tx))
             # Rashed-Step 21.C-10-11-2026-start
             sta._in_tb = True                  # its own contention treats this as busy
@@ -304,6 +318,11 @@ def uplink_round(ap, users):
     finally:
         for (sta, tx), res in zip(txs, results + [[]] * (len(txs) - len(results))):
             if tx is not None:
+                # Rashed-Step pre_21.E-10-11-2026-start
+                n_ok = sum(1 for r in results if r)
+                tx.ppdu_ok = n_ok > 0
+                tx.airtime_share = 1.0 / n_ok if n_ok else 1.0
+                # Rashed-Step pre_21.E-10-11-2026-end
                 ch.unregister_tx(tx, success=bool(res))
                 # Rashed-Step 21.C-10-11-2026-start
                 sta._in_tb = False
