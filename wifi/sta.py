@@ -420,7 +420,7 @@ class WiFiSTA:
         self.failed_transmissions_in_row += 1
         if self.frame_to_send.packet is not None:
             self.frame_to_send.packet.retry_count = self.frame_to_send.number_of_retransmissions
-        if self.frame_to_send.number_of_retransmissions > self.config.r_limit:
+        if wifi_mac.retry_exhausted(self.config, self.frame_to_send):  # 21.D: = ... > r_limit by default
             if self.frame_to_send.packet is not None:
                 self.frame_to_send.packet.status = "DROPPED"
                 self.packet_log.append(self.frame_to_send.packet)

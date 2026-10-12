@@ -53,6 +53,12 @@ EIFS_US = SIFS_US + ctrl_frame_us(ACK_BYTES, 6) + Times.t_difs   # 16 + 44 + 34 
 
 def ctrl_rate(node) -> int:
     from wifi.phy import ctrl_rate_mbps        # 20.C: HT/VHT/HE control responses stay non-HT
+    # Rashed-Step 21.D-10-11-2026-start
+    # The control response follows the data frame's rate: with rate
+    # adaptation that is the link's current MCS, not config.mcs.
+    if getattr(node.config, "rate_adapt_enabled", False) and hasattr(node, "current_mcs_for_link"):
+        return ctrl_rate_mbps(node.config, node.current_mcs_for_link(node.rate_adapt_link_key()))
+    # Rashed-Step 21.D-10-11-2026-end
     return ctrl_rate_mbps(node.config)
 
 
@@ -155,6 +161,27 @@ def data_exchange(node, data_tx, data_us, payload_bytes, rx_name, rx_pos, decide
     return "ack_lost", data_end
 
 
+# Rashed-Step 21.D-10-11-2026-start
+def retry_exhausted(cfg, frame) -> bool:
+    """Called by sent_failed after number_of_retransmissions += 1: has the
+    frame run out of retries? Without short/long limits (default): the
+    single r_limit, as before. With Config.short_retry_limit (802.11
+    dot11ShortRetryLimit / LongRetryLimit): a failure is counted on the
+    long counter if the frame went after a successful RTS/CTS (finish()
+    marks it), else on the short counter (RTS failures, frames up to the
+    RTS threshold); the frame is dropped when either exceeds its limit."""
+    short = getattr(cfg, "short_retry_limit", None)
+    if short is None:
+        return frame.number_of_retransmissions > cfg.r_limit
+    if getattr(frame, "_fail_long", False):
+        frame._lrc = getattr(frame, "_lrc", 0) + 1
+    else:
+        frame._src = getattr(frame, "_src", 0) + 1
+    frame._fail_long = False
+    return getattr(frame, "_src", 0) > short or getattr(frame, "_lrc", 0) > cfg.long_retry_limit
+
+
+# Rashed-Step 21.D-10-11-2026-end
 def finish(node, frame, res, data_end, on_ok, on_fail):
     """Sender-side bookkeeping for one single-frame exchange. on_ok /
     on_fail are the node's own sent_completed / sent_failed. A data frame
@@ -175,6 +202,15 @@ def finish(node, frame, res, data_end, on_ok, on_fail):
         return True
     if res == "ack_lost" and first_rx is None:
         frame.rx_delivered_at = data_end
+    # Rashed-Step 21.D-10-11-2026-start
+    cfg = getattr(node, "config", None)
+    if getattr(cfg, "short_retry_limit", None) is not None:
+        thr = cfg.rts_threshold_bytes
+        rts = thr is not None and frame.packet is not None and frame.packet.payload_bytes > thr
+        frame._fail_long = rts and res in ("data_fail", "ack_lost")    # a CTS came back: long counter
+        if frame._fail_long:
+            frame._src = 0                                              # SRC resets on a received CTS
+    # Rashed-Step 21.D-10-11-2026-end
     on_fail()
     p = frame.packet
     if p is not None and p.status == "DROPPED" and getattr(frame, "rx_delivered_at", None) is not None:

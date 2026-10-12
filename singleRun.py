@@ -326,6 +326,10 @@ def _mgmt_config(on, beacon_ms, scan_ms, roam_dbm, hyst_db):
 # Rashed-Step pre_20.B-10-08-2026-end
 # Rashed-Step 20.A-10-08-2026-start
 @click.option("--wifi-mac-exchange", "wifi_mac_exchange", is_flag=True, default=False, help="802.11 frame exchange on the air (Step 20.A): the receiver transmits the ACK (or Block Ack) after SIFS, every decoded frame sets a NAV for the rest of its exchange, and a node that heard an undecoded frame defers EIFS (94 us) instead of DIFS. Prints a Wi-Fi MAC block. Default (unset) = the ACK time is only waited out, byte-identical.")
+# Rashed-Step 21.D-10-11-2026-start
+@click.option("--wifi-short-retry-limit", "wifi_short_retry_limit", type=click.IntRange(0, 255), default=None, help="802.11 short retry limit (Step 21.D; 7 in the standard): RTS failures and frames up to the RTS threshold retry up to this many times, data frames sent after a successful RTS/CTS up to --wifi-long-retry-limit. Default (unset) = one retry limit (--wifi_r_limit) for everything, as before.")
+@click.option("--wifi-long-retry-limit", "wifi_long_retry_limit", type=click.IntRange(0, 255), default=4, help="802.11 long retry limit (Step 21.D), with --wifi-short-retry-limit.")
+# Rashed-Step 21.D-10-11-2026-end
 @click.option("--wifi-rts-threshold", "wifi_rts_threshold", type=click.IntRange(0, None), default=None, help="RTS/CTS before any Wi-Fi data frame (or A-MPDU) whose payload exceeds this many bytes (Step 20.A; 0 = always). Needs --wifi-mac-exchange. Default (unset) = never.")
 # Rashed-Step 20.A-10-08-2026-end
 # Rashed-Step 20.B-10-08-2026-start
@@ -531,6 +535,7 @@ def single_run(
         nru_wifi_reservation: Optional[str] = None,  # pre_20.D.3
         nru_ref_nack_threshold: float = 0.8, nru_adaptive_cot: bool = False,  # pre_20.D.4
         wifi_mac_exchange: bool = False, wifi_rts_threshold: Optional[int] = None,  # 20.A
+        wifi_short_retry_limit: Optional[int] = None, wifi_long_retry_limit: int = 4,  # 21.D
         wifi_phy: str = "legacy", wifi_channel_width: str = "20", wifi_gi: str = "800",  # 20.C
         wifi_management: bool = False, wifi_beacon_interval_ms: float = 102.4, wifi_scan_ms: float = 120.0,
         wifi_roam_threshold_dbm: float = -75.0, wifi_roam_hysteresis_db: float = 6.0,  # 20.D
@@ -909,6 +914,7 @@ def single_run(
                               preamble_detect_dbm=-82.0 if wifi_preamble_detect else None,  # pre_20.A
                               ampdu_max_mpdus=wifi_ampdu, ampdu_max_ppdu_us=wifi_max_ppdu_us,  # pre_20.B
                               mac_exchange=wifi_mac_exchange, rts_threshold_bytes=wifi_rts_threshold,  # 20.A
+                              short_retry_limit=wifi_short_retry_limit, long_retry_limit=wifi_long_retry_limit,  # 21.D
                               phy=wifi_phy, channel_width_mhz=int(wifi_channel_width), guard_interval_ns=int(wifi_gi),  # 20.C
                               management=_mgmt_config(wifi_management, wifi_beacon_interval_ms, wifi_scan_ms,
                                                       wifi_roam_threshold_dbm, wifi_roam_hysteresis_db),  # 20.D

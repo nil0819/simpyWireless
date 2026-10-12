@@ -94,6 +94,15 @@ class Config:
     # every earlier run.
     mac_exchange: bool = False
     rts_threshold_bytes: Optional[int] = None
+    # Rashed-Step 21.D-10-11-2026-start
+    # 802.11 short/long retry limits (Step 21.D, wifi/mac.retry_exhausted):
+    # set short_retry_limit (7 in the standard) to count RTS failures and
+    # frames up to the RTS threshold against it and data frames sent after
+    # a successful RTS/CTS against long_retry_limit (4). None (default) =
+    # the single r_limit, as before.
+    short_retry_limit: Optional[int] = None
+    long_retry_limit: int = 4
+    # Rashed-Step 21.D-10-11-2026-end
     # Rashed-Step 20.C-10-08-2026-start
     # 802.11n/ac/ax PHY (Step 20.C, wifi/phy.py): "legacy" (default) = the
     # 802.11a table in Times.py, every earlier run; "ht" / "vht" / "he" with
@@ -915,7 +924,7 @@ class WiFi:
         self.ac_failed_in_row[ac] += 1
         if frame.packet is not None:
             frame.packet.retry_count = frame.number_of_retransmissions
-        if frame.number_of_retransmissions > self.config.r_limit:
+        if wifi_mac.retry_exhausted(self.config, frame):  # 21.D: = number_of_retransmissions > r_limit by default
             if frame.packet is not None:
                 frame.packet.status = "DROPPED"
                 self.packet_log.append(frame.packet)
@@ -1880,7 +1889,7 @@ class WiFi:
         if self.frame_to_send.packet is not None:
             self.frame_to_send.packet.retry_count = self.frame_to_send.number_of_retransmissions
         # Rashed-Step 8.B-08-06-2026-end
-        if self.frame_to_send.number_of_retransmissions > self.config.r_limit:
+        if wifi_mac.retry_exhausted(self.config, self.frame_to_send):  # 21.D: = ... > r_limit by default
             # Rashed-Step 8.B-08-06-2026-start
             # UPGRADE: the old packet gave up on/exceeded its retry
             # limit here and used to just vanish with no record beyond
