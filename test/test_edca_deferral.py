@@ -134,3 +134,24 @@ def test_edca_with_dcf_parameters_matches_bianchi():
         ps.append(f / (s + f))
     assert abs(statistics.mean(ps) - bianchi.collision_probability(3, 15, 63)) < 0.03
 # Rashed-Step pre_21.B-10-11-2026-end
+
+
+# Rashed-Step 21.B-10-11-2026-start
+def test_eifs_on_the_edca_path_after_an_undecoded_frame():
+    params = {ac: EdcaAcParams(cw_min=0, cw_max=0, aifsn=7) for ac in QOS_TRAFFIC_CLASSES}
+    env = simpy.Environment()
+    ch = Channel(simpy.PriorityResource(env, capacity=1), simpy.Resource(env, capacity=1), 1, 0, {}, {}, {}, {}, {})
+    ap = _Idle(env, "AP 1", ch, (0.0, 0.0), [_Sta()], Config(qos_enabled=True, edca_params=params, mac_exchange=True))
+    ap._refresh_ac_frame("best_effort")
+    tx = _blocker(ch, 0.0, 1000.0)
+
+    def end():
+        yield env.timeout(1000.0)
+        ch.note_wifi_frame(tx, False)            # the blocker was a collision nobody decoded
+        ch.unregister_tx(tx)
+    env.process(end())
+    out = _wait(env, ap)
+    env.run(until=3000)
+    # EIFS - DIFS + AIFS[7] = 94 - 34 + 79 = 139 -> 1139, next 9 us boundary 1143
+    assert out == ["best_effort", 1143.0] and ap.mac_stats["eifs"] == 1
+# Rashed-Step 21.B-10-11-2026-end

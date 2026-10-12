@@ -792,6 +792,16 @@ class WiFi:
     # Rashed-Step pre_21.B-10-11-2026-start
     def _edca_ifs_extra(self) -> float:
         """Extra deferral on top of AIFS for this idle period (0; Step 21.B adds EIFS)."""
+        # Rashed-Step 21.B-10-11-2026-start
+        # EIFS on the EDCA path (802.11: EIFS - DIFS + AIFS[AC]) after an
+        # undecoded Wi-Fi frame this AP heard - with --wifi-mac-exchange,
+        # as on the DCF path (DcfChannelAccess).
+        if self.config.mac_exchange:
+            pd = self.config.preamble_detect_dbm
+            if self.channel.eifs_applies(self.current_pos(), -82.0 if pd is None else pd, self.name):
+                self.mac_stats["eifs"] += 1
+                return wifi_mac.EIFS_US - Times.t_difs
+        # Rashed-Step 21.B-10-11-2026-end
         return 0.0
     # Rashed-Step pre_21.B-10-11-2026-end
 
