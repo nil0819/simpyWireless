@@ -116,6 +116,12 @@ class Config:
     ofdma: bool = False
     ofdma_max_users: int = 8
     ul_ofdma: bool = False
+    # Rashed-Step 21.C-10-11-2026-start
+    # MU EDCA (Step 21.C, wifi.ofdma.MuEdcaParams; needs ul_ofdma): STAs
+    # still contend for uplink, with these parameters for a timer after
+    # each trigger. None (default) = triggered STAs never contend (20.E).
+    mu_edca: Any = None
+    # Rashed-Step 21.C-10-11-2026-end
     # Rashed-Step 20.E-10-09-2026-end
     # Rashed-Step 20.D-10-08-2026-end
 
@@ -128,8 +134,11 @@ class Config:
             raise ValueError("Config.ofdma needs phy='he' (802.11ax).")
         if self.ul_ofdma and not self.ofdma:
             raise ValueError("Config.ul_ofdma needs ofdma=True.")
-        if self.ofdma and self.qos_enabled:
-            raise ValueError("Config.ofdma is not combined with EDCA (qos_enabled) in this model.")
+        # Rashed-Step 21.C-10-11-2026-start
+        # (OFDMA + EDCA allowed since Step 21.C)
+        if self.mu_edca is not None and not self.ul_ofdma:
+            raise ValueError("Config.mu_edca needs ul_ofdma=True.")
+        # Rashed-Step 21.C-10-11-2026-end
         if self.ofdma and not 1 <= self.ofdma_max_users <= 74:
             raise ValueError("Config.ofdma_max_users must be 1-74.")
         # Rashed-Step 20.E-10-09-2026-end
@@ -982,13 +991,79 @@ class WiFi:
     def _ofdma_eligible(self):
         return list(self.associated) if self._mgmt is not None else list(self.sta_list)
 
-    def _ofdma_take_dl(self, sta):
+    def _ofdma_take_dl(self, sta, ac=None):  # 21.C: ac = only that access category's packets
         if self.traffic_config.mode == "saturated":
-            p = self._make_packet()
+            p = self._make_packet() if ac is None else self._make_packet_for_ac(ac)
             p.destination = sta.name
             return p
         q = self.ofdma_dl[sta.name]
-        return q.pop(0) if q else None
+        if ac is None:
+            return q.pop(0) if q else None
+        # Rashed-Step 21.C-10-11-2026-start
+        for i, p in enumerate(q):
+            if p.traffic_class == ac:
+                return q.pop(i)
+        return None
+
+        # Rashed-Step 21.C-10-11-2026-end
+
+    # Rashed-Step 21.C-10-11-2026-start
+    def _ofdma_ac_has_dl(self, sta, ac):
+        if self.traffic_config.mode == "saturated":
+            return True
+        return (any(p.traffic_class == ac for p in self.ofdma_dl[sta.name])
+                or any(p.traffic_class == ac for p in self.ofdma_dl_pending[sta.name]))
+
+    def _start_ofdma_edca(self):
+        """OFDMA with EDCA access: the ACs with downlink data for any STA
+        contend (wait_back_off_edca, per-AC AIFS/CW, virtual collisions);
+        the winner's packets fill the RUs, capped by its TXOP limit. Uplink
+        trigger rounds contend as best effort. DL and UL alternate when the
+        best-effort AC wins with both."""
+        token = object()                       # stands for "this AC has something to send"
+        up_next = False
+        while True:
+            while True:
+                sts = self._ofdma_eligible()
+                act = {ac: any(self._ofdma_ac_has_dl(s, ac) for s in sts) for ac in QOS_TRAFFIC_CLASSES}
+                if any(self._ofdma_has_ul(s) for s in sts):
+                    act["best_effort"] = True
+                if any(act.values()):
+                    break
+                yield self._data_event | self.env.timeout(1000.0)
+            for ac in QOS_TRAFFIC_CLASSES:
+                self.ac_frame_to_send[ac] = token if act[ac] else None
+            winner = yield from self.wait_back_off_edca()
+            sts = self._ofdma_eligible()
+            if not sts:
+                continue
+            k = self._ofdma_rr % len(sts)
+            order = sts[k:] + sts[:k]
+            self._ofdma_rr += 1
+            dl = [s for s in order if self._ofdma_ac_has_dl(s, winner)][:self.config.ofdma_max_users]
+            ul = ([s for s in order if self._ofdma_has_ul(s)][:self.config.ofdma_max_users]
+                  if winner == "best_effort" else [])
+            if ul and (up_next or not dl):
+                ok = yield self.env.process(wifi_ofdma.uplink_round(self, ul))
+                up_next = False
+            elif dl:
+                ok = yield self.env.process(wifi_ofdma.downlink_round(self, dl, ac=winner))
+                up_next = True
+            else:
+                continue
+            if ok:
+                self.channel.succeeded_transmissions += 1
+                self.succeeded_transmissions += 1
+                self.ac_failed_in_row[winner] = 0
+            else:
+                self.channel.failed_transmissions += 1
+                self.failed_transmissions += 1
+                self.ac_failed_in_row[winner] += 1
+                if self.ac_failed_in_row[winner] > self.config.r_limit:
+                    self.ac_failed_in_row[winner] = 0
+                yield self.env.timeout(Times.ack_timeout)
+
+    # Rashed-Step 21.C-10-11-2026-end
 
     def _ofdma_has_dl(self, sta):
         return (self.traffic_config.mode == "saturated" or bool(self.ofdma_dl[sta.name])
@@ -1001,6 +1076,11 @@ class WiFi:
                 or bool(sta.ofdma_ul_pending))
 
     def start_ofdma(self):
+        # Rashed-Step 21.C-10-11-2026-start
+        if self.config.qos_enabled:
+            yield from self._start_ofdma_edca()
+            return
+        # Rashed-Step 21.C-10-11-2026-end
         """OFDMA loop: contend (DCF), then a downlink MU round or an uplink
         trigger round (alternating when both have data), up to
         ofdma_max_users STAs in round-robin order."""

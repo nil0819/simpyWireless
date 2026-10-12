@@ -80,6 +80,15 @@ def parse_traffic_class_mix(raw_values, label: str):
 
 
 # Rashed-Step 20.D-10-08-2026-start
+# Rashed-Step 21.C-10-11-2026-start
+def _mu_edca(on, timer_ms):
+    if not on:
+        return None
+    from wifi.ofdma import MuEdcaParams
+    return MuEdcaParams(timer_us=timer_ms * 1000.0)
+
+
+# Rashed-Step 21.C-10-11-2026-end
 def _mgmt_config(on, beacon_ms, scan_ms, roam_dbm, hyst_db):
     if not on:
         return None
@@ -341,6 +350,10 @@ def _mgmt_config(on, beacon_ms, scan_ms, roam_dbm, hyst_db):
 # Rashed-Step 20.E-10-09-2026-start
 @click.option("--wifi-ofdma", "wifi_ofdma", is_flag=True, default=False, help="802.11ax downlink OFDMA (Step 20.E; needs --wifi-phy he): each channel access carries an HE MU PPDU to up to --wifi-ofdma-max-users STAs on equal resource units (26/52/106/242/484/996 tones), each with an A-MPDU (up to --wifi-ampdu MPDUs). Prints a Wi-Fi OFDMA block. Default (unset) = single-user, byte-identical.")
 @click.option("--wifi-ofdma-max-users", "wifi_ofdma_max_users", type=click.IntRange(1, 74), default=8, help="Users per OFDMA PPDU / trigger round (Step 20.E).")
+# Rashed-Step 21.C-10-11-2026-start
+@click.option("--wifi-mu-edca", "wifi_mu_edca", is_flag=True, default=False, help="MU EDCA (Step 21.C; needs --wifi-ul-ofdma): STAs still contend for uplink themselves, but for --wifi-mu-edca-timer-ms after each trigger with MU EDCA parameters (AIFSN 12, CW 255-1023). Default (unset) = triggered STAs never contend.")
+@click.option("--wifi-mu-edca-timer-ms", "wifi_mu_edca_timer_ms", type=float, default=65.536, help="MU EDCA timer (ms) for --wifi-mu-edca (default 8 x 8 TU).")
+# Rashed-Step 21.C-10-11-2026-end
 @click.option("--wifi-ul-ofdma", "wifi_ul_ofdma", is_flag=True, default=False, help="Trigger-based uplink OFDMA (Step 20.E; needs --wifi-ofdma and --wifi-sta-uplink-enabled): the AP sends Trigger frames, STAs answer together on their resource units and then send only when triggered.")
 # Rashed-Step 20.E-10-09-2026-end
 @click.option("--wifi-preamble-detect", "wifi_preamble_detect", is_flag=True, default=False, help="802.11 preamble detection (Step pre_20.A): Wi-Fi defers to Wi-Fi frames from -82 dBm and to other signals (NR-U, licensed NR) from its -62 dBm energy-detection threshold - the asymmetry behind LAA coexistence. Default (unset) = one -62 dBm rule for everything, byte-identical.")
@@ -522,6 +535,7 @@ def single_run(
         wifi_management: bool = False, wifi_beacon_interval_ms: float = 102.4, wifi_scan_ms: float = 120.0,
         wifi_roam_threshold_dbm: float = -75.0, wifi_roam_hysteresis_db: float = 6.0,  # 20.D
         wifi_ofdma: bool = False, wifi_ofdma_max_users: int = 8, wifi_ul_ofdma: bool = False,  # 20.E
+        wifi_mu_edca: bool = False, wifi_mu_edca_timer_ms: float = 65.536,  # 21.C
         wifi_sta_traffic_model: str = "saturated", wifi_sta_arrival_rate_pps: float = 100.0,  # 20.B
         wifi_stas_per_ap: int = 1,  # 21.A
         # Rashed-Step pre_20.A-10-08-2026-end
@@ -702,8 +716,11 @@ def single_run(
     # Rashed-Step 20.E-10-09-2026-start
     if wifi_ofdma and wifi_phy != "he":
         raise click.BadParameter("--wifi-ofdma needs --wifi-phy he.")
-    if wifi_ofdma and wifi_edca:
-        raise click.BadParameter("--wifi-ofdma is not combined with --wifi-edca in this model.")
+    # Rashed-Step 21.C-10-11-2026-start
+    # --wifi-ofdma with --wifi-edca is supported since Step 21.C.
+    if wifi_mu_edca and not wifi_ul_ofdma:
+        raise click.BadParameter("--wifi-mu-edca needs --wifi-ul-ofdma.")
+    # Rashed-Step 21.C-10-11-2026-end
     if wifi_ul_ofdma and not (wifi_ofdma and wifi_sta_uplink_enabled):
         raise click.BadParameter("--wifi-ul-ofdma needs --wifi-ofdma and --wifi-sta-uplink-enabled.")
     # Rashed-Step 20.E-10-09-2026-end
@@ -896,6 +913,7 @@ def single_run(
                               management=_mgmt_config(wifi_management, wifi_beacon_interval_ms, wifi_scan_ms,
                                                       wifi_roam_threshold_dbm, wifi_roam_hysteresis_db),  # 20.D
                               ofdma=wifi_ofdma, ofdma_max_users=wifi_ofdma_max_users, ul_ofdma=wifi_ul_ofdma,  # 20.E
+                              mu_edca=_mu_edca(wifi_mu_edca, wifi_mu_edca_timer_ms),  # 21.C
                               # Rashed-Step 5.D-02-06-2026-start
                               wifi_sinr_thr_db_override=wifi_sinr_thr_db_override,
                               # Rashed-Step 5.D-02-06-2026-end

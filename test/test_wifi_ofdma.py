@@ -83,8 +83,11 @@ def test_validation():
         Config(ofdma=True)                                  # needs HE
     with pytest.raises(ValueError):
         Config(**HE, ul_ofdma=True)                          # needs ofdma
+    # Rashed-Step 21.C-10-11-2026-start
+    Config(**HE, ofdma=True, qos_enabled=True)                # allowed since 21.C (was rejected)
     with pytest.raises(ValueError):
-        Config(**HE, ofdma=True, qos_enabled=True)
+        Config(**HE, ofdma=True, mu_edca=ofdma.MuEdcaParams())  # MU EDCA needs ul_ofdma
+    # Rashed-Step 21.C-10-11-2026-end
     assert Config().ofdma is False
 
 

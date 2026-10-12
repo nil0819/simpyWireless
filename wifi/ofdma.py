@@ -50,6 +50,23 @@ from common.error_model import decode_ok
 from Times import Times
 from wifi import mac as wifi_mac
 from wifi import phy as wifi_phy
+# Rashed-Step 21.C-10-11-2026-start
+from dataclasses import dataclass
+from wifi import ampdu as wifi_ampdu
+
+
+@dataclass
+class MuEdcaParams:
+    """MU EDCA parameters (802.11ax): for timer_us after a STA has been
+    triggered, its own contention uses this AIFSN / CW instead of the
+    normal ones - so a STA served by triggers mostly leaves the channel
+    to the AP. Representative values (the AP chooses them in practice;
+    the timer is in 8-TU units: 8 x 8.192 ms)."""
+    aifsn: int = 12
+    cw_min: int = 255
+    cw_max: int = 1023
+    timer_us: float = 8 * 8 * 1024.0
+# Rashed-Step 21.C-10-11-2026-end
 
 RU_NSD = {26: 24, 52: 48, 106: 102, 242: 234, 484: 468, 996: 980, 1992: 1960}
 RU_COUNT = {20: {26: 9, 52: 4, 106: 2, 242: 1},
@@ -146,14 +163,14 @@ def _settle(owner, mpdus, decoded, acked, r_limit, log_list, channel, now):
     return retry
 
 
-def downlink_round(ap, users):
+def downlink_round(ap, users, ac=None):  # 21.C: ac = the EDCA access category that won (None = DCF)
     """Generator: one HE MU PPDU to `users` (STAs with downlink data).
     Returns True if at least one user's Block Ack came back."""
     cfg, env, ch = ap.config, ap.env, ap.channel
     width, gi, mcs = cfg.channel_width_mhz, cfg.guard_interval_ns, cfg.mcs
     plan = ru_plan(width, len(users))
     pre = mu_preamble_us(len(users))
-    budget = cfg.ampdu_max_ppdu_us - pre
+    budget = wifi_ampdu.ppdu_budget_us(ap, ac) - pre   # 21.C: TXOP limit of the AC (= aPPDUMaxTime without EDCA)
     em = getattr(cfg, "error_model", None)
     required = ap.required_sinr_db()
     per_user = []
@@ -161,8 +178,11 @@ def downlink_round(ap, users):
         rate = ru_rate_mbps(tones, mcs, gi)
         per = (lambda r: (lambda payload: (Times.mac_overhead + payload * 8 + 32) / r))(rate)
         q = ap.ofdma_dl[sta.name]
-        mpdus, used = _fill(lambda q=q, s=sta: ap._ofdma_take_dl(s), lambda p, q=q: q.insert(0, p), per, budget,
-                            cfg.ampdu_max_mpdus, ap.ofdma_dl_pending[sta.name])
+        # Rashed-Step 21.C-10-11-2026-start
+        pend = [p for p in ap.ofdma_dl_pending[sta.name] if ac is None or p.traffic_class == ac]
+        # Rashed-Step 21.C-10-11-2026-end
+        mpdus, used = _fill(lambda q=q, s=sta: ap._ofdma_take_dl(s, ac), lambda p, q=q: q.insert(0, p), per, budget,
+                            cfg.ampdu_max_mpdus, pend)
         per_user.append((sta, tones, off, bw, per, mpdus, used))
         ap.ofdma_stats["ru_tones"][tones] = ap.ofdma_stats["ru_tones"].get(tones, 0) + 1
     data_us = max(u[6] for u in per_user)
@@ -216,7 +236,10 @@ def downlink_round(ap, users):
     for (sta, tones, off, bw, per, mpdus, used), dec, ack in zip(per_user, results, acks):
         st["dl_mpdus"] += len(mpdus)
         st["dl_mpdus_ok"] += len(dec)
-        ap.ofdma_dl_pending[sta.name] = _settle(ap, mpdus, dec, ack, cfg.r_limit, ap.packet_log, ch, now)
+        # Rashed-Step 21.C-10-11-2026-start
+        other = [p for p in ap.ofdma_dl_pending[sta.name] if not (ac is None or p.traffic_class == ac)]
+        # Rashed-Step 21.C-10-11-2026-end
+        ap.ofdma_dl_pending[sta.name] = other + _settle(ap, mpdus, dec, ack, cfg.r_limit, ap.packet_log, ch, now)
     return any(acks)
 
 
@@ -258,11 +281,14 @@ def uplink_round(ap, users):
     dur = TB_PREAMBLE_US + data_us
     txs = []
     for (sta, tones, off, bw, per, mpdus, used), h in zip(per_user, heard):
-        if h and mpdus:                       # a STA that missed the trigger stays silent
+        if h and mpdus and not getattr(sta, "_tx_active", False):   # 21.C: a STA busy with its own exchange can't answer
             tx = _ru_tx(cfg, sta.name, sta.current_pos(), ap.current_pos(), cfg.tx_power_dbm, cfg.f_ghz + off,
                         bw, start, dur, mpdus[0])
             ch.register_tx(tx)
             txs.append((sta, tx))
+            # Rashed-Step 21.C-10-11-2026-start
+            sta._in_tb = True                  # its own contention treats this as busy
+            # Rashed-Step 21.C-10-11-2026-end
         else:
             txs.append((sta, None))
     results = []
@@ -279,6 +305,11 @@ def uplink_round(ap, users):
         for (sta, tx), res in zip(txs, results + [[]] * (len(txs) - len(results))):
             if tx is not None:
                 ch.unregister_tx(tx, success=bool(res))
+                # Rashed-Step 21.C-10-11-2026-start
+                sta._in_tb = False
+                if getattr(cfg, "mu_edca", None) is not None:   # MU EDCA timer starts with the trigger-based PPDU
+                    sta._mu_until = env.now + cfg.mu_edca.timer_us
+                # Rashed-Step 21.C-10-11-2026-end
     # multi-STA Block Ack (non-HT) from the AP
     yield env.timeout(wifi_mac.SIFS_US)
     ba_us = wifi_mac.ctrl_frame_us(22 + 10 * n, ctrl)

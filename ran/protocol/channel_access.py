@@ -285,6 +285,10 @@ class DcfChannelAccess:
     @staticmethod
     def _busy(node: Any) -> bool:
         cfg = node.config
+        # Rashed-Step 21.C-10-11-2026-start
+        if getattr(node, "_in_tb", False):   # sending its trigger-based PPDU (OFDMA)
+            return True
+        # Rashed-Step 21.C-10-11-2026-end
         # Rashed-Step pre_20.A-10-08-2026-start
         pd = getattr(cfg, "preamble_detect_dbm", None)
         if pd is not None:
@@ -313,6 +317,10 @@ class DcfChannelAccess:
                 yield node.channel.state_changed
             # Rashed-Step 20.A-10-08-2026-start
             ifs = self.t_difs_us
+            # Rashed-Step 21.C-10-11-2026-start
+            if getattr(node, "_ifs_override_us", None) is not None:   # MU EDCA AIFS
+                ifs = node._ifs_override_us
+            # Rashed-Step 21.C-10-11-2026-end
             if getattr(node.config, "mac_exchange", False):
                 from wifi.mac import EIFS_US
                 pd = getattr(node.config, "preamble_detect_dbm", None)

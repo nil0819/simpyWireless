@@ -905,6 +905,12 @@ def run_simulation(
         print(f'Wifi OFDMA UL trigger rounds: {o["ul_rounds"]}, mean users per round: {(o["ul_users"] / o["ul_rounds"]) if o["ul_rounds"] else None}, '
               f'MPDU success ratio: {(o["ul_mpdus_ok"] / o["ul_mpdus"]) if o["ul_mpdus"] else None}')
         print(f'Wifi OFDMA RU sizes used (tones: count): {dict(sorted(ru.items()))}')
+        # Rashed-Step 21.C-10-11-2026-start
+        if getattr(config, "mu_edca", None) is not None:
+            own = sum(getattr(s, "succeeded_transmissions", 0) + getattr(s, "failed_transmissions", 0) for s in wifi_stas)
+            mu = sum(getattr(s, "mu_edca_accesses", 0) for s in wifi_stas)
+            print(f'Wifi MU EDCA: STA own-contention frames {own} (under MU EDCA parameters: {mu})')
+        # Rashed-Step 21.C-10-11-2026-end
     # Rashed-Step 20.E-10-09-2026-end
     if wifi_mgmt is not None:
         m = wifi_mgmt.summary(simulation_time * 1e6)

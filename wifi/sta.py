@@ -182,7 +182,7 @@ class WiFiSTA:
         self.channel.airtime_data.setdefault(self.name, 0)
         self.channel.airtime_control.setdefault(self.name, 0)
         # Rashed-Step 20.E-10-09-2026-start
-        if getattr(self.config, "ul_ofdma", False):
+        if getattr(self.config, "ul_ofdma", False) and getattr(self.config, "mu_edca", None) is None:
             return                          # 20.E: uplink only when the AP triggers it (wifi/ofdma.py)
         # Rashed-Step 20.E-10-09-2026-end
         self.env.process(self.start_uplink())
@@ -295,6 +295,18 @@ class WiFiSTA:
         if getattr(self, "_mgmt", None) is not None:   # uplink only while associated (to self.ap)
             yield from self._mgmt.wait_sta_associated(self)
         # Rashed-Step 20.D-10-08-2026-end
+        # Rashed-Step 21.C-10-11-2026-start
+        mu = getattr(self.config, "mu_edca", None)
+        if mu is not None and self.env.now < getattr(self, "_mu_until", -1.0):
+            # MU EDCA timer running (triggered recently): MU EDCA AIFS and CW
+            self._ifs_override_us = Times.get_aifs_us(mu.aifsn)
+            upper = min((mu.cw_min + 1) * 2 ** self.failed_transmissions_in_row - 1, mu.cw_max)
+            backoff_slots = random.randint(0, upper)
+            self.mu_edca_accesses = getattr(self, "mu_edca_accesses", 0) + 1
+            yield from _DCF_ACCESS.wait(self, backoff_slots)
+            self._ifs_override_us = None
+            return
+        # Rashed-Step 21.C-10-11-2026-end
         backoff_slots = self.generate_new_back_off_slots(self.failed_transmissions_in_row)
         # Rashed-Step pre_18.D-10-05-2026-start
         # Same shared-slot-grid DCF wait as the AP (wifi.WiFi.wait_back_off,
@@ -453,7 +465,13 @@ class WiFiSTA:
                 # Rashed-Step 20.B-10-08-2026-end
                 self.process = self.env.process(self.wait_back_off())
                 yield self.process
+                # Rashed-Step 21.C-10-11-2026-start
+                self._tx_active = True                  # 21.C: busy - can't answer a trigger now
+                # Rashed-Step 21.C-10-11-2026-end
                 was_sent = yield self.env.process(self.send_frame())
+                # Rashed-Step 21.C-10-11-2026-start
+                self._tx_active = False
+                # Rashed-Step 21.C-10-11-2026-end
     # Rashed-Step 15.B-09-18-2026-end
 
 
