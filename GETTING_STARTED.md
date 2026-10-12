@@ -24,7 +24,7 @@ pip install pytest
 pytest test/
 ```
 
-You should see `597 passed` (as of Step 20). If that's clean, you're ready to run simulations.
+You should see `619 passed` (as of Step 21). If that's clean, you're ready to run simulations.
 
 ## 2. Scenario 1 - Wi-Fi + NR-U coexistence
 
@@ -231,6 +231,12 @@ The "Wi-Fi Management" block reports beacons, the time to associate
 their interruption (a few ms). Add `--wifi-ofdma` (with `--wifi-phy he`)
 for 802.11ax multi-user transmissions, and `--wifi-ul-ofdma
 --wifi-sta-uplink-enabled` for trigger-based uplink.
+
+Step 21 filled the remaining gaps: `--wifi-stas-per-ap N` gives an AP several
+STAs, each served at its own SINR and rate; `--wifi-edca` now defers the
+way 802.11 does (and works with `--wifi-ofdma`, plus `--wifi-mu-edca` for
+STAs that still contend between triggers); `--wifi-short-retry-limit 7`
+adds the standard's short/long retry counters.
 
 ## Where to go next
 

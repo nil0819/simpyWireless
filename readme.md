@@ -335,7 +335,24 @@ python singleRun.py --ap-number 2 --gnb-number 0 --seed 1 -t 5 -r 1 --ap-pos 0,1
 python singleRun.py --ap-number 1 --gnb-number 1 --seed 1 -t 0.5 -r 1 --wifi-phy he --wifi-ofdma --wifi-ampdu 16 --wifi-sta-uplink-enabled --wifi-ul-ofdma --wifi-mac-exchange --wifi-preamble-detect
 ```
 
-Some numbers: HE80 MCS 11 delivers 518.7 of its 600.5 Mbps with 64-MPDU A-MPDUs and ACKs on the air, but VHT80 MCS 9 without aggregation only 54.7 of 433 Mbps (per-access overhead); roaming between two APs 60 m apart costs 2.5-3.4 ms; with 9 STAs at high uplink load, trigger-based OFDMA halves the latency of contended uplink (7.4 -> 3.7 ms, no collisions). Not modeled yet: MU-MIMO / several spatial streams, active scanning, WPA2 handshakes, power save, OFDMA with EDCA. Single-user downlink still addresses every packet to the AP's first STA (an old simplification).
+Some numbers: HE80 MCS 11 delivers 518.7 of its 600.5 Mbps with 64-MPDU A-MPDUs and ACKs on the air, but VHT80 MCS 9 without aggregation only 54.7 of 433 Mbps (per-access overhead); roaming between two APs 60 m apart costs 2.5-3.4 ms; with 9 STAs at high uplink load, trigger-based OFDMA halves the latency of contended uplink (7.4 -> 3.7 ms, no collisions). Not modeled yet: MU-MIMO / several spatial streams, active scanning, WPA2 handshakes, power save, OFDMA with EDCA (all closed in Step 21, below).
+
+### Closing the Wi-Fi gaps (Step 21)
+
+| Change | Flags | What it does |
+|---|---|---|
+| Per-STA downlink (default-on fix) | `--wifi-stas-per-ap N` | downlink packets go round robin to the AP's STAs; each frame's SINR, ACK and rate adaptation are at its own STA; A-MPDUs carry one receiver's packets (before: everything addressed to and decoded at the first STA - unchanged with one STA per AP) |
+| EDCA deferral (default-on fix) | `--wifi-edca` | a fresh AIFS after every busy period, backoff counted per slot on the DCF slot grid, residual backoff kept. With DCF parameters EDCA now matches Bianchi (3 APs: collision probability 0.182, model 0.182 - before 0.044) |
+| EIFS on EDCA | `--wifi-edca --wifi-mac-exchange` | EIFS - DIFS + AIFS[AC] after an undecoded frame, as on the DCF path |
+| OFDMA + EDCA | `--wifi-ofdma --wifi-edca` | the access categories contend with EDCA; the winner's packets fill the resource units within its TXOP limit (voice ahead of best effort) |
+| MU EDCA | `--wifi-mu-edca` (+ `--wifi-mu-edca-timer-ms`), needs `--wifi-ul-ofdma` | triggered STAs still contend themselves, with MU EDCA parameters (AIFSN 12, CW 255-1023) for a timer after each trigger |
+| Retry counters | `--wifi-short-retry-limit` (+ `--wifi-long-retry-limit`) | 802.11 short/long retry limits: RTS failures and short frames on the short counter, data after a successful RTS/CTS on the long one |
+| Control rate | (with `--wifi-rate-adapt`) | ACK / CTS / Block Ack at the basic rate of the link's current rate-adapted MCS |
+| OFDMA airtime (fix) | `--wifi-ofdma` | an OFDMA PPDU's airtime counts once in the fairness report / occupancy (it was counted once per resource unit) |
+
+```bash
+python singleRun.py --ap-number 1 --gnb-number 0 --seed 1 -t 0.5 -r 1 --wifi-phy he --wifi-stas-per-ap 8 --sta-radius 10 --wifi-ofdma --wifi-ampdu 16 --wifi-edca --wifi-traffic-model poisson --wifi-arrival-rate-pps 4000 --wifi-traffic-class-mix voice=0.2 --wifi-traffic-class-mix best_effort=0.8 --wifi-sta-uplink-enabled --wifi-ul-ofdma --wifi-mu-edca --wifi-mac-exchange
+```
 
 ## Testing
 
@@ -344,7 +361,7 @@ Assert-based regression suite (no print-and-eyeball scripts for anything added s
 pip install pytest
 pytest test/
 ```
-597 tests passing as of Step 20. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
+619 tests passing as of Step 21. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
 
 ## Current Work Status
 
@@ -381,6 +398,7 @@ pytest test/
 ----> Step pre_18 (A-E) — channel-model fixes found while validating Step 17: (A-B) SINR counts every transmission that overlapped the target at any point - Wi-Fi frames (one decode unit) at full power, NR-U/NR bursts weighted by the fraction covered - instead of only what was still on the air when the target ended (results used to depend on timing and processing order); (D) Wi-Fi DCF counts backoff on a shared 9 us slot grid with event-driven sensing and a fresh DIFS after every busy period; (E) NR-U LBT is 3GPP TS 37.213 Type 1 - a full 43 us defer period after every busy period. (C) Paper figures regenerated: the DTMC validation now matches the model within 0.8-2.7 points for Wi-Fi and 0.4-1.4 for NR-U
 ----> Step pre_20 (A-E) - LAA / NR-U fairness study with the 3GPP replacement test: fairness report and 802.11 preamble detection (`--fairness-report`, `--wifi-preamble-detect`), Wi-Fi A-MPDU (`--wifi-ampdu`), diagnosis sweeps, and four mitigations - TS 37.213 priority classes (`--nru-priority-class`), ED threshold (`--nru-ed-mode`, `--nru-ed-threshold-dbm`), preamble / CTS-to-self with a Wi-Fi NAV (`--nru-wifi-reservation`), reference-slot feedback (`--nru-ref-nack-threshold`, `--nru-adaptive-cot`). Report: `docs/laa_fairness_study.md`. Step pre_20.D.3a: Wi-Fi's SINR no longer counts one interferer's back-to-back frames twice
 ----> Step 20 (20.A-20.E) - full-stack Wi-Fi, all opt-in: 802.11 frame exchange on the air (`--wifi-mac-exchange`, `--wifi-rts-threshold`: ACK/Block Ack, NAV, RTS/CTS, EIFS - collision probability now matches Bianchi); STA uplink and EDCA with poisson/cbr queues, A-MPDU on every path (`--wifi-sta-traffic-model`); 802.11n/ac/ax PHY (`--wifi-phy`, `--wifi-channel-width`, `--wifi-gi`); management plane - beacons, association, roaming (`--wifi-management`); 802.11ax OFDMA downlink and trigger-based uplink (`--wifi-ofdma`, `--wifi-ul-ofdma`). Fix pre_20.C0: interference uses the transmitter's in-band power share (unequal bandwidths)
+----> Step 21 (21.A-21.E) - closing the Wi-Fi gaps: per-STA single-user downlink (`--wifi-stas-per-ap`), EDCA deferral fixed (fresh AIFS after busy, slot grid, residual backoff - EDCA now matches Bianchi; it under-counted collisions 4-8x), EIFS on EDCA, OFDMA with EDCA + MU EDCA (`--wifi-mu-edca`), short/long retry counters (`--wifi-short-retry-limit`), control responses at the rate-adapted MCS, OFDMA airtime counted once
 
 Full detail (design rationale, exact verified numbers, what was deliberately left out) for every sub-step above is in `Project details/Step N.txt`; `Project details/STATUS - resume context.txt` is the current single-file "start here" summary.
 
