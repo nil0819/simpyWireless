@@ -414,6 +414,9 @@ class WiFi:
         self.edca_params = config.edca_params if config.edca_params is not None else DEFAULT_EDCA_PARAMS
         self.ac_frame_to_send: Dict[str, Optional[Frame]] = {ac: None for ac in QOS_TRAFFIC_CLASSES}
         self.ac_failed_in_row: Dict[str, int] = {ac: 0 for ac in QOS_TRAFFIC_CLASSES}
+        # Rashed-Step pre_21.B-10-11-2026-start
+        self._edca_bo: Dict[str, Optional[int]] = {}   # residual backoff slots per AC
+        # Rashed-Step pre_21.B-10-11-2026-end
         # Rashed-Step 20.B-10-08-2026-start
         # EDCA with poisson/cbr traffic (Step 20.B): arrivals go into one queue
         # per access category (by the packet's traffic class); an AC contends
@@ -698,47 +701,99 @@ class WiFi:
         if self._mgmt is not None:
             yield from self._mgmt.wait_ap_has_stas(self)
         # Rashed-Step 20.D-10-08-2026-end
-        remaining_us = {}
+        # Rashed-Step pre_21.B-10-11-2026-start
+        # 802.11 EDCA deferral (Step pre_21.B; the DCF equivalent was
+        # pre_18.D). Before: one merged "AIFS + backoff" countdown per AC
+        # that simply resumed after a busy period - no fresh AIFS, part of
+        # an interrupted AIFS still counted - and every AC redrew its
+        # backoff at each contention. Now, after every busy period, each AC
+        # waits a fresh AIFS[AC] of idle channel, then counts its backoff
+        # one slot at a time on the global 9 us slot grid (the same grid as
+        # DcfChannelAccess); a busy period freezes the count; residual
+        # backoff is kept across other transmissions - only the winner and
+        # virtual-collision losers draw a new one. Event-driven sensing.
+        slot = Times.t_slot
+        bo = self._edca_bo
+        queued = self.traffic_config.mode != "saturated"
+
+        def busy():
+            return _DCF_ACCESS._busy(self)
+
+        def ensure(ac):
+            if bo.get(ac) is None:
+                bo[ac] = self.generate_new_back_off_slots_edca(ac)
+
         for ac, frame in self.ac_frame_to_send.items():
-            if frame is None:
-                continue
-            params = self.edca_params[ac]
-            aifs_us = Times.get_aifs_us(params.aifsn)
-            backoff_slots = self.generate_new_back_off_slots_edca(ac)
-            remaining_us[ac] = aifs_us + backoff_slots * Times.t_slot
+            if frame is not None:
+                ensure(ac)
+            else:
+                bo[ac] = None
 
         while True:
-            # Rashed-Step 20.B-10-08-2026-start
-            if self.traffic_config.mode != "saturated":
-                for ac in QOS_TRAFFIC_CLASSES:          # newly non-empty ACs start their AIFS + backoff
-                    if ac not in remaining_us:
+            if queued:                                  # 20.B: ACs that got a packet join
+                for ac in QOS_TRAFFIC_CLASSES:
+                    if self.ac_frame_to_send[ac] is None:
                         self._edca_refresh(ac)
                         if self.ac_frame_to_send[ac] is not None:
-                            remaining_us[ac] = (Times.get_aifs_us(self.edca_params[ac].aifsn)
-                                                + self.generate_new_back_off_slots_edca(ac) * Times.t_slot)
-            # Rashed-Step 20.B-10-08-2026-end
-            if _DCF_ACCESS._busy(self):  # pre_20.A: same CCA as DCF (incl. preamble detection)
+                            ensure(ac)
+            while busy():
                 log(self, "Channel busy during EDCA AIFS/backoff, waiting...")
                 yield self.channel.state_changed
+            t0 = self.env.now
+            extra = self._edca_ifs_extra()              # 21.B: EIFS instead of DIFS-equivalent
+            start, finish = {}, {}
+            active = [ac for ac in QOS_TRAFFIC_CLASSES if self.ac_frame_to_send[ac] is not None]
+            if not active:
+                yield self._ac_arrival
                 continue
-            step = 1
-            yield self.env.timeout(step)
-            finished = []
-            for ac in remaining_us:
-                remaining_us[ac] -= step
-                if remaining_us[ac] <= 0:
-                    finished.append(ac)
-            if finished:
-                winner = min(finished, key=traffic_class_priority_rank)
-                for ac in finished:
-                    if ac != winner:
-                        # Virtual collision - CW grows exactly like a
-                        # real one, but the packet itself is untouched
-                        # (retry_count NOT incremented - no real
-                        # transmission attempt happened). See class
-                        # docstring.
-                        self.ac_failed_in_row[ac] += 1
-                return winner
+            for ac in active:
+                ready = t0 + Times.get_aifs_us(self.edca_params[ac].aifsn) + extra
+                start[ac] = math.ceil(ready / slot - 1e-9) * slot      # next global slot boundary
+                finish[ac] = start[ac] + bo[ac] * slot
+            end = min(finish.values())
+            interrupted = False
+            while self.env.now < end:
+                evs = [self.env.timeout(end - self.env.now), self.channel.state_changed]
+                if queued:
+                    evs.append(self._ac_arrival)
+                yield self.env.any_of(evs)
+                if self.env.now < end and busy():
+                    interrupted = True
+                    break
+                if queued and self.env.now < end:       # a newly backlogged AC joins this idle period
+                    for ac in QOS_TRAFFIC_CLASSES:
+                        if self.ac_frame_to_send[ac] is None:
+                            self._edca_refresh(ac)
+                            if self.ac_frame_to_send[ac] is not None:
+                                ensure(ac)
+                                ready = max(self.env.now, t0 + Times.get_aifs_us(self.edca_params[ac].aifsn) + extra)
+                                start[ac] = math.ceil(ready / slot - 1e-9) * slot
+                                finish[ac] = start[ac] + bo[ac] * slot
+                                end = min(end, finish[ac])
+            now = self.env.now
+            for ac in start:                            # slots counted so far
+                done = max(0, int((now - start[ac]) / slot + 1e-9))
+                bo[ac] = max(0, bo[ac] - done)
+            if interrupted:
+                log(self, "Channel busy during EDCA backoff, frozen")
+                continue
+            finished = [ac for ac in start if finish[ac] <= now + 1e-9]
+            winner = min(finished, key=traffic_class_priority_rank)
+            for ac in finished:
+                bo[ac] = None                           # winner: new backoff after its transmission
+                if ac != winner:
+                    # Virtual collision - CW grows exactly like a real one,
+                    # but the packet itself is untouched (retry_count NOT
+                    # incremented - no real transmission attempt happened).
+                    self.ac_failed_in_row[ac] += 1
+            return winner
+        # Rashed-Step pre_21.B-10-11-2026-end
+
+    # Rashed-Step pre_21.B-10-11-2026-start
+    def _edca_ifs_extra(self) -> float:
+        """Extra deferral on top of AIFS for this idle period (0; Step 21.B adds EIFS)."""
+        return 0.0
+    # Rashed-Step pre_21.B-10-11-2026-end
 
     def send_frame_edca(self, ac: str):
         """
