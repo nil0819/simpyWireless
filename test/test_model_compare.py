@@ -80,3 +80,21 @@ def test_compare_dtmc_default_wifi_frame_matches_step6d_ballpark():
     assert result["model_Cn"] > result["model_Cw"]
     assert result["measured_Cn"] > result["measured_Cw"]
 # Rashed-Step pre_11.C-08-13-2026-end
+
+
+# Rashed-Step pre_22.G-10-14-2026-start
+def test_sim_accounted_cw_counts_data_plus_ack_per_success():
+    from model import dtmc
+    from model.compare import sim_accounted_cw
+    m = dtmc.predict(w=1, Wo=32, ng=55, Twp_us=5400.0, Tmcot_us=6000.0)
+    # Same successes per interval, 5444 instead of 5503 us each.
+    assert sim_accounted_cw(m, 5400.0) == pytest.approx(m["Cw"] * 5444.0 / 5503.0, rel=1e-12)
+    assert m["Cw"] == pytest.approx(0.7267, abs=0.001)          # the paper's eq. value is unchanged
+
+
+def test_compare_dtmc_reports_both_cw_values():
+    r = compare_dtmc(w=1, Wo=32, ng=55, Twp_us=5400.0, Tmcot_us=6000.0, sim_time_s=1.0,
+                     wifi_packet_size_bytes=36286)
+    assert r["model_Cw"] < r["model_Cw_dtmc"]
+    assert r["deviation_Cw"] == pytest.approx(abs(r["measured_Cw"] - r["model_Cw"]) / r["model_Cw"])
+# Rashed-Step pre_22.G-10-14-2026-end

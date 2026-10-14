@@ -12,6 +12,16 @@ from model import bianchi, dtmc
 from model.runner import run_scenario
 
 
+# Rashed-Step pre_22.G-10-14-2026-start
+def sim_accounted_cw(model: Dict, Twp_us: float, Tack_us: float = 44.0) -> float:
+    """The DTMC's Wi-Fi occupancy counted the way the simulator counts it:
+    Pws successes per mean interval, each worth Twp + Tack_us (the
+    simulator's get_ack_frame_time(), SIFS included) instead of the
+    model's Tws = Twp + SIFS + ACK + DIFS + sigma. model = dtmc.predict()."""
+    return model["Pws"] * (Twp_us + Tack_us) / model["Tinterval"]
+# Rashed-Step pre_22.G-10-14-2026-end
+
+
 def _cluster_ap_positions(center: str, w: int, cluster_radius: float) -> List[str]:
     """
     Deterministically place w AP positions evenly around a circle of the
@@ -187,14 +197,23 @@ def compare_dtmc(w: int, Wo: int, ng: int, Twp_us: float, Tmcot_us: float, sim_t
     measured = run_scenario(argv)
 
     model = dtmc.predict(w=w, Wo=Wo, ng=ng, Twp_us=Twp_us, Tmcot_us=Tmcot_us)
+    # Rashed-Step pre_22.G-10-14-2026-start
+    # Compare like with like: the DTMC's Cw counts Tws = Twp + SIFS + ACK +
+    # DIFS + sigma per success, the simulator's "Wifi occupancy" counts the
+    # data airtime + get_ack_frame_time() (SIFS + ACK = 44 us). model_Cw is
+    # now the DTMC's own success rate at the simulator's accounting
+    # (5503 -> 5444 us per success at Twp 5400, about -0.9 points);
+    # model_Cw_dtmc keeps the paper's eq. value.
+    model_cw = sim_accounted_cw(model, Twp_us)
+    # Rashed-Step pre_22.G-10-14-2026-end
     measured_cn = measured["gnb_occ"]
     measured_cw = measured["wifi_occ"]
     dev_cn = abs(measured_cn - model["Cn"]) / model["Cn"] if measured_cn is not None else None
-    dev_cw = abs(measured_cw - model["Cw"]) / model["Cw"] if measured_cw is not None else None
+    dev_cw = abs(measured_cw - model_cw) / model_cw if measured_cw is not None else None
 
     return {
         "w": w, "Wo": Wo, "ng": ng, "Twp_us": Twp_us, "Tmcot_us": Tmcot_us,
-        "model_Cn": model["Cn"], "model_Cw": model["Cw"],
+        "model_Cn": model["Cn"], "model_Cw": model_cw, "model_Cw_dtmc": model["Cw"],
         "model_tau_w": model["tau_w"], "model_tau_n": model["tau_n"],
         "measured_Cn": measured_cn, "measured_Cw": measured_cw,
         "deviation_Cn": dev_cn, "deviation_Cw": dev_cw,

@@ -251,9 +251,19 @@ just passes with HE + A-MPDU.
 (1-6 co-located APs + one gNB, fixed contention window, 5.4 ms frames)
 with the frame exchange on.
 
+- **The model's Wi-Fi occupancy is counted the simulator's way.** The
+  DTMC's Cw charges each success Twp + SIFS + ACK + DIFS + σ; the
+  simulator counts the data plus SIFS + ACK. `compare_dtmc` now reports
+  the model's success rate at the simulator's accounting (`model_Cw`; the
+  paper's value stays in `model_Cw_dtmc`). That is about 0.9 points
+  lower, and the figures use it.
+- **The original stack then matches up to 4 APs.** The Wi-Fi deviation is
+  0.1-0.5 points for 1-4 APs and 1.8 / 2.4 points at 5 / 6 APs, where the
+  simulator's fixed-window Wi-Fi collides more than the paper's eq. 7
+  attempt rate predicts. Mean deviation: Wi-Fi 0.83 points, NR-U 0.80.
 - **Agreement gets worse with the frame exchange.** Mean deviation from
-  the model: Wi-Fi 1.71 -> 3.69 points, NR-U 0.80 -> 1.81, growing with
-  the number of APs (6 APs: Wi-Fi 0.804 -> 0.771, model 0.837).
+  the model: Wi-Fi 0.83 -> 3.07 points, NR-U 0.80 -> 1.81, growing with
+  the number of APs (6 APs: Wi-Fi 0.804 -> 0.771, model 0.828).
 - **The DTMC (from the CAD paper) models neither effect behind it.** One
   is EIFS after collisions: switching EIFS off brings NR-U back to the
   original value. The other is the higher collision rate the frame
@@ -261,7 +271,7 @@ with the frame exchange on.
   - the same correction that made the simulator match Bianchi in 20.A).
 - **So the CCNC validation stands for the simplified MAC it was built
   against.** With the full 802.11 exchange the model over-predicts Wi-Fi
-  occupancy by 2-4 points at high AP counts.
+  occupancy by 2-6 points from 3 APs up.
 
 ## 8. Limitations
 
