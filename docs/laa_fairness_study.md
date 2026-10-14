@@ -183,7 +183,87 @@ one of the 14 regression cases (2 gNBs: Wi-Fi collision probability
 0.421 → 0.381). Every study result above was re-run with the fix and is
 unchanged.
 
-## 7. Limitations
+## 7. Re-validation on the Step 20-21 Wi-Fi stack (Step pre_22)
+
+The study above ran with the original Wi-Fi model: the ACK time was only
+waited out, the PHY was legacy 802.11a and every access carried one frame.
+Steps 20-21 added the real frame exchange (ACK / NAV / EIFS on the air),
+HE rates and A-MPDU, and fixed EDCA. None of the earlier scripts use the
+new options, so every figure above is unchanged (checked: the baseline CSV
+and the CCNC occupancy figures regenerate byte-identical). The question
+is whether the conclusions hold when the realistic options are on.
+
+`python -m analysis.laa_revalidation` repeats the replacement test with
+three Wi-Fi stacks: original, frame exchange on the air
+(`--wifi-mac-exchange`), and HE20 MCS 7 + A-MPDU 32 + frame exchange.
+
+![Replacement-test latency ratio on three Wi-Fi stacks](../analysis/generated/laa_revalidation_latency_ratio.jpg)
+
+| Distance | Original | Frame exchange | HE20 + A-MPDU |
+|---|---|---|---|
+| 5-30 m | passes (ratio 0.08-0.34) | passes (0.03-0.11) | passes (0.64-0.93) |
+| 35-40 m | **fails** (6.5-10.2) | **fails** (2.3-3.5) | **fails** (2.4-3.7) |
+| 50 m | passes | passes | **fails** (1.30) |
+| 60-80 m | passes | passes | passes |
+
+The ratio is network A's latency next to NR-U over its latency next to a
+Wi-Fi neighbor.
+
+- **The diagnosis holds on every stack.** NR-U fails exactly where
+  neither side hears the other by energy detection while NR-U still
+  breaks Wi-Fi frames.
+- **The failing band widens with an efficient Wi-Fi.** A Wi-Fi neighbor
+  with HE and aggregation keeps network A's latency near 1 ms, so the
+  ~10% frame failures NR-U still causes at 50 m are now visible.
+- **The ratios look milder with the frame exchange.** That's because the
+  Wi-Fi reference gets worse: with collisions counted correctly, two
+  Wi-Fi networks next to each other collide more (A's latency at 10 m:
+  32 -> 66 ms).
+
+Mitigations at 10 / 25 / 40 m (`... laa_revalidation mitigations`): ED
+-82 dBm + CTS-to-self passes everywhere on both new stacks, with ~0 Wi-Fi
+frame failures. ED -82 alone passes but leaves 12-15% failures.
+CTS-to-self alone still fails at 40 m with the frame exchange, and only
+just passes with HE + A-MPDU.
+
+### Follow-ups
+
+- **A power-matched CTS removes the over-protection.** The 23 dBm
+  CTS-to-self is decodable to ~88 m, past a 20 dBm Wi-Fi neighbor's
+  ~70 m, so at 70-80 m Wi-Fi waited for COTs that couldn't hurt it
+  (4.69 vs 0.63 ms, a fail). With `--nru-cts-power-dbm 20`, 70-80 m
+  match the Wi-Fi reference (0.63 ms) and 50-60 m still pass. ED -82 dBm
+  + a 20 dBm CTS-to-self now passes the replacement test at every
+  distance.
+- **A reservation signal closes NR-U's sync-slot gap.** After its
+  backoff, NR-U used to wait silently for the next 1 ms slot boundary,
+  and a Wi-Fi network with long A-MPDUs took the channel in that gap.
+  With `--nru-reservation-signal` NR-U transmits until the boundary
+  instead. In the 19.F LAA scenario (with ED -82 + CTS-to-self and Wi-Fi
+  A-MPDU 32) the split moves from Wi-Fi 41 / SCell 22 Mbps to Wi-Fi 20 /
+  SCell 56 Mbps (NR-U COTs 30-43 -> ~100 per second). That is about the
+  even share a Wi-Fi neighbor would leave; Wi-Fi alone gets 30.8. The
+  reservation signal carries no data and comes out of the COT.
+
+### The CCNC occupancy validation
+
+`python -m analysis.occupancy_revalidation` repeats the DTMC comparison
+(1-6 co-located APs + one gNB, fixed contention window, 5.4 ms frames)
+with the frame exchange on.
+
+- **Agreement gets worse with the frame exchange.** Mean deviation from
+  the model: Wi-Fi 1.71 -> 3.69 points, NR-U 0.80 -> 1.81, growing with
+  the number of APs (6 APs: Wi-Fi 0.804 -> 0.771, model 0.837).
+- **The DTMC (from the CAD paper) models neither effect behind it.** One
+  is EIFS after collisions: switching EIFS off brings NR-U back to the
+  original value. The other is the higher collision rate the frame
+  exchange produces (Wi-Fi collision probability 0.234 -> 0.260 at 6 APs
+  - the same correction that made the simulator match Bianchi in 20.A).
+- **So the CCNC validation stands for the simplified MAC it was built
+  against.** With the full 802.11 exchange the model over-predicts Wi-Fi
+  occupancy by 2-4 points at high AP counts.
+
+## 8. Limitations
 
 - **No shadowing or fading.** The regimes are sharp steps. Real deployments would blur the band boundaries.
 - **One topology:** one AP, one neighbor, STAs and UEs within 5 m, 20 MHz on a single channel, 802.11a rates.
@@ -191,13 +271,15 @@ unchanged.
 - **The replacement test uses unsaturated loads** (except the throughput sweep). The pass criterion is latency-based.
 - **A-MPDU** is 802.11n-style aggregation on the legacy 20 MHz rate table, for the AP downlink only.
 
-## 8. Reproduce
+## 9. Reproduce
 
 ```bash
 python -m analysis.laa_fairness              # baseline replacement test (pre_20.A)
 python -m analysis.laa_fairness_sweeps       # distance / load / A-MPDU sweeps (~8 min)
 python -m analysis.laa_fairness_mitigations  # D.1-D.3 scoring (~20 min; or name one study: capc, ed, ed_distance, reservation)
 python -m analysis.laa_scell_mitigations     # 19.F LAA scenario (~3 min; --plot-only redraws)
+python -m analysis.laa_revalidation          # pre_22: the test on three Wi-Fi stacks (~12 min)
+python -m analysis.occupancy_revalidation    # pre_22: DTMC validation with the frame exchange (~5 min)
 ```
 
 CSVs land in `analysis/generated/` (untracked). Figures are written there

@@ -301,6 +301,7 @@ Is NR-U fair to Wi-Fi, and what fixes it? Scored with the 3GPP replacement test 
 | Priority classes | `--nru-priority-class 1-4` | TS 37.213 channel access priority class: defer slots, CW_min/CW_max and MCOT (gNB downlink table; UEs' own Type 1 LBT use the uplink table) |
 | ED threshold | `--nru-ed-mode ts37213`, `--nru-ed-threshold-dbm` | NR-U energy-detection threshold from TS 37.213 clause 4.1.5 (from tx power and bandwidth; -72 dBm at 23 dBm / 20 MHz), or any value |
 | COTs visible to Wi-Fi | `--nru-wifi-reservation preamble\|cts_to_self` (needs `--wifi-preamble-detect`) | NR-U transmissions carry an 802.11 preamble, or the gNB sends a CTS-to-self (44 us + SIFS) whose NAV covers the COT |
+| Reservation signal / CTS power (pre_22) | `--nru-reservation-signal`, `--nru-cts-power-dbm` | NR-U transmits until the sync-slot boundary instead of waiting silently in the gap; CTS-to-self at its own power (20 dBm matches Wi-Fi's reach) |
 | Reference-slot feedback | `--nru-ref-nack-threshold`, `--nru-adaptive-cot` | contention window grows when this share of the reference slot's blocks fail (TS 37.213 Z, default 0.8); adaptive COT halves the next COT after a failed reference slot |
 
 Findings in short: the unfairness is a sensing problem - between about 32 and 45 m neither side hears the other by energy detection while NR-U still breaks Wi-Fi frames (network A latency 75.6 vs 7.5 ms next to Wi-Fi). Priority classes, the standard 37.213 threshold and reference-slot feedback don't fix it (feedback can't see it at all: NR-U's own reference slots never fail there). A lower NR-U threshold (-82 dBm, non-standard) plus CTS-to-self passes the replacement test at every distance up to 60 m with ~0 Wi-Fi frame failures.
@@ -361,7 +362,7 @@ Assert-based regression suite (no print-and-eyeball scripts for anything added s
 pip install pytest
 pytest test/
 ```
-619 tests passing as of Step 21. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
+623 tests passing as of Step pre_22. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
 
 ## Current Work Status
 
@@ -399,6 +400,7 @@ pytest test/
 ----> Step pre_20 (A-E) - LAA / NR-U fairness study with the 3GPP replacement test: fairness report and 802.11 preamble detection (`--fairness-report`, `--wifi-preamble-detect`), Wi-Fi A-MPDU (`--wifi-ampdu`), diagnosis sweeps, and four mitigations - TS 37.213 priority classes (`--nru-priority-class`), ED threshold (`--nru-ed-mode`, `--nru-ed-threshold-dbm`), preamble / CTS-to-self with a Wi-Fi NAV (`--nru-wifi-reservation`), reference-slot feedback (`--nru-ref-nack-threshold`, `--nru-adaptive-cot`). Report: `docs/laa_fairness_study.md`. Step pre_20.D.3a: Wi-Fi's SINR no longer counts one interferer's back-to-back frames twice
 ----> Step 20 (20.A-20.E) - full-stack Wi-Fi, all opt-in: 802.11 frame exchange on the air (`--wifi-mac-exchange`, `--wifi-rts-threshold`: ACK/Block Ack, NAV, RTS/CTS, EIFS - collision probability now matches Bianchi); STA uplink and EDCA with poisson/cbr queues, A-MPDU on every path (`--wifi-sta-traffic-model`); 802.11n/ac/ax PHY (`--wifi-phy`, `--wifi-channel-width`, `--wifi-gi`); management plane - beacons, association, roaming (`--wifi-management`); 802.11ax OFDMA downlink and trigger-based uplink (`--wifi-ofdma`, `--wifi-ul-ofdma`). Fix pre_20.C0: interference uses the transmitter's in-band power share (unequal bandwidths)
 ----> Step 21 (21.A-21.E) - closing the Wi-Fi gaps: per-STA single-user downlink (`--wifi-stas-per-ap`), EDCA deferral fixed (fresh AIFS after busy, slot grid, residual backoff - EDCA now matches Bianchi; it under-counted collisions 4-8x), EIFS on EDCA, OFDMA with EDCA + MU EDCA (`--wifi-mu-edca`), short/long retry counters (`--wifi-short-retry-limit`), control responses at the rate-adapted MCS, OFDMA airtime counted once
+----> Step pre_22 (A-E) - the LAA study and the CCNC validation re-run on the Step 20-21 Wi-Fi stack (`analysis/laa_revalidation.py`, `analysis/occupancy_revalidation.py`): the diagnosis holds on every stack (the failing band widens to 50 m with HE + A-MPDU); the DTMC over-predicts Wi-Fi occupancy by 2-4 points with the full 802.11 exchange (EIFS, real collision rate). NR-U `--nru-cts-power-dbm` (a 20 dBm CTS removes the 70-80 m over-protection) and `--nru-reservation-signal` (closes the sync-slot gap). See docs/laa_fairness_study.md section 7
 
 Full detail (design rationale, exact verified numbers, what was deliberately left out) for every sub-step above is in `Project details/Step N.txt`; `Project details/STATUS - resume context.txt` is the current single-file "start here" summary.
 
