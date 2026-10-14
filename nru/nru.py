@@ -401,6 +401,17 @@ class Config_NR:
     #                   whose NAV covers the whole COT incl. its uplink.
     # None (default) = neither, byte-identical.
     wifi_reservation: Optional[str] = None
+    # Rashed-Step pre_22.D-10-13-2026-start
+    # CTS-to-self transmit power (pre_22.D): None (default) = tx_power_dbm.
+    # Set to Wi-Fi's power (20 dBm) so the CTS / its NAV reach only as far
+    # as a Wi-Fi frame would (the 23 dBm CTS over-protects, pre_20.D.3).
+    cts_power_dbm: Optional[float] = None
+    # Reservation signal (pre_22.D, "slots" only): after its backoff the
+    # gNB transmits a (data-less) reservation signal until the next sync-
+    # slot boundary instead of waiting silently in the gap - so nobody
+    # takes the channel in between. False (default) = gap, as before.
+    reservation_signal: bool = False
+    # Rashed-Step pre_22.D-10-13-2026-end
     # Rashed-Step pre_20.D.4-10-08-2026-start
     # Reference-slot feedback (pre_20.D.4, "slots" only). TS 37.213:
     # the contention window grows when at least Z of the reference
@@ -474,6 +485,10 @@ class Config_NR:
         if self.adaptive_cot and self.cot_model != "slots":
             raise ValueError("Config_NR.adaptive_cot needs cot_model=\"slots\".")
         # Rashed-Step pre_20.D.4-10-08-2026-end
+        # Rashed-Step pre_22.D-10-13-2026-start
+        if self.reservation_signal and self.cot_model != "slots":
+            raise ValueError("Config_NR.reservation_signal needs cot_model=\"slots\".")
+        # Rashed-Step pre_22.D-10-13-2026-end
         if not (0.0 < self.ul_cot_fraction < 1.0):
             raise ValueError(
                 f"Config_NR.ul_cot_fraction must be strictly between 0 and 1 "
@@ -1120,6 +1135,10 @@ class Gnb:
             self.slot_stats["cot_cap_us_sum"] += total_us
         # Rashed-Step pre_20.D.4-10-08-2026-end
         rs_time = 0 if gap else (self.next_sync_slot_boundry - self.env.now)
+        # Rashed-Step pre_22.D-10-13-2026-start
+        if cfg.reservation_signal:                  # occupy the channel up to the sync boundary
+            rs_time = max(0.0, getattr(self, "_rs_until", self.env.now) - self.env.now)
+        # Rashed-Step pre_22.D-10-13-2026-end
         # Rashed-Step pre_20.D.3-10-08-2026-start
         if cts_us:  # the CTS + SIFS took the start of the COT (and of its reservation signal)
             total_us -= cts_us
@@ -1169,7 +1188,7 @@ class Gnb:
         self._mark_wifi_preamble(active)
         if cts_us:
             self.channel.set_nav(ActiveTx(tx_id=self.name, tx_pos=active.tx_pos, rx_pos=active.tx_pos,
-                                          tx_start=tx_start, tx_power_dbm=cfg.tx_power_dbm, f_hz=cfg.f_ghz,
+                                          tx_start=tx_start, tx_power_dbm=self._cts_power(), f_hz=cfg.f_ghz,  # pre_22.D
                                           pl_exp=cfg.pl_exp, t_end=tx_start + dl_us + ul_window_us, tech="NRU",
                                           bandwidth_mhz=cfg.bandwidth_mhz, noise_figure_db=cfg.noise_figure_db))
         # Rashed-Step pre_20.D.3-10-08-2026-end
@@ -1234,6 +1253,12 @@ class Gnb:
         if self.config_nr.wifi_reservation == "preamble":
             tx.wifi_preamble = True
 
+    # Rashed-Step pre_22.D-10-13-2026-start
+    def _cts_power(self):
+        p = self.config_nr.cts_power_dbm
+        return self.config_nr.tx_power_dbm if p is None else p
+
+    # Rashed-Step pre_22.D-10-13-2026-end
     def _send_cts_to_self(self):
         """802.11 CTS-to-self (generator): a Wi-Fi-decodable frame from this
         gNB at full power, then SIFS. Returns the time it took (us). The
@@ -1242,7 +1267,7 @@ class Gnb:
         cfg = self.config_nr
         now = self.env.now
         cts = ActiveTx(tx_id=self.name, tx_pos=self.current_pos(), rx_pos=self.current_pos(), tx_start=now,
-                       tx_power_dbm=cfg.tx_power_dbm, f_hz=cfg.f_ghz, pl_exp=cfg.pl_exp,
+                       tx_power_dbm=self._cts_power(), f_hz=cfg.f_ghz, pl_exp=cfg.pl_exp,  # pre_22.D
                        t_end=now + CTS_TO_SELF_US, tech="NRU", bandwidth_mhz=cfg.bandwidth_mhz,
                        noise_figure_db=cfg.noise_figure_db)
         cts.wifi_preamble = True

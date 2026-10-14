@@ -218,6 +218,11 @@ class LbtChannelAccess:
             time_to_next_sync_slot += config.synchronization_slot_duration
             log(node, f'Backoff finished but next sync slot was in the past, new time to next possible sync = {time_to_next_sync_slot}')
 
+        # Rashed-Step pre_22.D-10-13-2026-start
+        if getattr(config, "reservation_signal", False):   # NR-U: reservation signal instead of the gap
+            node._rs_until = node.env.now + time_to_next_sync_slot
+            return
+        # Rashed-Step pre_22.D-10-13-2026-end
         gap_remaining = time_to_next_sync_slot
         log(node, f"Starting gap period of : {gap_remaining} us")
         # Rashed-Step pre_18.E-10-05-2026-start

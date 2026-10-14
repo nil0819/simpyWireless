@@ -312,6 +312,10 @@ def _mgmt_config(on, beacon_ms, scan_ms, roam_dbm, hyst_db):
 @click.option("--nru-ed-mode", "nru_ed_mode", type=click.Choice(["ts37213"]), default=None, help="NR-U energy-detection threshold from 3GPP TS 37.213 clause 4.1.5 (Step pre_20.D.2): computed from --nru-tx-power-dbm and --nru-bandwidth-mhz (T_A 10 dB, P_H 23 dBm) - -72 dBm at 23 dBm / 20 MHz, up to -62 dBm at 13 dBm. Overrides --nru-ed-threshold-dbm.")
 # Rashed-Step pre_20.D.2-10-08-2026-end
 # Rashed-Step pre_20.D.3-10-08-2026-start
+# Rashed-Step pre_22.D-10-13-2026-start
+@click.option("--nru-cts-power-dbm", "nru_cts_power_dbm", type=float, default=None, help="NR-U CTS-to-self transmit power (Step pre_22.D; with --nru-wifi-reservation cts_to_self). Default = --nru-tx-power-dbm; 20 matches Wi-Fi, so the NAV reaches as far as a Wi-Fi frame.")
+@click.option("--nru-reservation-signal", "nru_reservation_signal", is_flag=True, default=False, help="NR-U reservation signal (Step pre_22.D; needs --nru-cot-model slots): after its backoff the gNB transmits until the next sync-slot boundary instead of waiting silently in the gap. Default (unset) = gap, byte-identical.")
+# Rashed-Step pre_22.D-10-13-2026-end
 @click.option("--nru-wifi-reservation", "nru_wifi_reservation", type=click.Choice(["preamble", "cts_to_self"]), default=None, help="Make NR-U COTs visible to Wi-Fi (Step pre_20.D.3; needs --wifi-preamble-detect). preamble: NR-U transmissions carry an 802.11-decodable preamble, Wi-Fi defers from -82 dBm (no airtime cost, upper bound). cts_to_self: before each COT the gNB sends an 802.11 CTS-to-self (44 us + SIFS) whose NAV covers the COT; needs --nru-cot-model slots. Default (unset) = neither, byte-identical.")
 # Rashed-Step pre_20.D.3-10-08-2026-end
 # Rashed-Step pre_20.D.4-10-08-2026-start
@@ -533,6 +537,7 @@ def single_run(
         nru_priority_class: Optional[int] = None,  # pre_20.D.1
         nru_ed_threshold_dbm: Optional[float] = None, nru_ed_mode: Optional[str] = None,  # pre_20.D.2
         nru_wifi_reservation: Optional[str] = None,  # pre_20.D.3
+        nru_cts_power_dbm: Optional[float] = None, nru_reservation_signal: bool = False,  # pre_22.D
         nru_ref_nack_threshold: float = 0.8, nru_adaptive_cot: bool = False,  # pre_20.D.4
         wifi_mac_exchange: bool = False, wifi_rts_threshold: Optional[int] = None,  # 20.A
         wifi_short_retry_limit: Optional[int] = None, wifi_long_retry_limit: int = 4,  # 21.D
@@ -732,6 +737,10 @@ def single_run(
     if wifi_rts_threshold is not None and not wifi_mac_exchange:
         raise click.BadParameter("--wifi-rts-threshold needs --wifi-mac-exchange.")
     # Rashed-Step 20.A-10-08-2026-end
+    # Rashed-Step pre_22.D-10-13-2026-start
+    if nru_reservation_signal and nru_cot_model != "slots":
+        raise click.BadParameter("--nru-reservation-signal needs --nru-cot-model slots.")
+    # Rashed-Step pre_22.D-10-13-2026-end
     if nru_adaptive_cot and nru_cot_model != "slots":
         raise click.BadParameter("--nru-adaptive-cot needs --nru-cot-model slots.")
     # Rashed-Step pre_20.D.4-10-08-2026-end
@@ -967,6 +976,7 @@ def single_run(
                                  priority_class=nru_priority_class,  # pre_20.D.1
                                  ed_threshold_mode=nru_ed_mode,  # pre_20.D.2
                                  wifi_reservation=nru_wifi_reservation,  # pre_20.D.3
+                                 cts_power_dbm=nru_cts_power_dbm, reservation_signal=nru_reservation_signal,  # pre_22.D
                                  ref_slot_nack_threshold=nru_ref_nack_threshold, adaptive_cot=nru_adaptive_cot,  # pre_20.D.4
                                  **({} if nru_ed_threshold_dbm is None else {"ed_threshold_dbm": nru_ed_threshold_dbm}),
                                  numerology=1 if nru_numerology is None else nru_numerology,
