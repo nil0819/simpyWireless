@@ -8,6 +8,7 @@ import click
 
 from simulation_nr import run_simulation_licensed_nr, parse_pos_list_nr
 from nr.nr import Config_NRL
+from channel.propagation import pathloss_spec_from_cli  # Rashed-Step 22.A-10-15-2026
 # Rashed-Step 16.F-10-02-2026-start
 from core.network import core_config_from_cli
 # Rashed-Step 18.A-10-06-2026-start
@@ -131,6 +132,13 @@ from ran.protocol.handover import handover_config_from_cli
 @click.option("--core-amf-capacity", "core_amf_capacity", type=int, default=None, help="Registrations the AMF handles at once (default unlimited); each holds a slot for --core-service-ms, the rest queue. Requires the Core.")
 @click.option("--core-smf-capacity", "core_smf_capacity", type=int, default=None, help="PDU session procedures the SMF handles at once (default unlimited). Requires the Core.")
 @click.option("--core-service-ms", "core_service_ms", type=float, default=None, help="AMF/SMF processing time per procedure, part of its delay (default 10 ms). Requires the Core.")
+# Rashed-Step 22.A-10-15-2026-start
+@click.option("--pathloss-model", "pathloss_model", type=click.Choice(["log-distance", "inh-office-mixed", "inh-office-open", "umi", "uma", "tgax-residential", "tgax-enterprise"]), default="log-distance", help="Path-loss model (Step 22.A): 3GPP TR 38.901 InH-Office (mixed / open office), UMi-Street Canyon, UMa, or IEEE TGax residential / enterprise (with wall losses). LOS/NLOS per link from the model's LOS probability; heights from the node role (AP/gNB at the BS height). Default log-distance (exponent 3), byte-identical.")
+@click.option("--pathloss-los", "pathloss_los", type=click.Choice(["auto", "los", "nlos"]), default="auto", help="38.901 models: draw each link's LOS state from the LOS probability (auto, default) or force LOS / NLOS on every link.")
+@click.option("--bs-height-m", "bs_height_m", type=float, default=None, help="AP / gNB antenna height (m) for --pathloss-model (default: InH/TGax 3, UMi 10, UMa 25).")
+@click.option("--ut-height-m", "ut_height_m", type=float, default=None, help="STA / UE height (m) for --pathloss-model (default 1.5).")
+@click.option("--tgax-room-size-m", "tgax_room_size_m", type=float, default=None, help="TGax models: room size (m) of the square grid whose walls a link crosses (default residential 10, enterprise 20).")
+# Rashed-Step 22.A-10-15-2026-end
 # Rashed-Step 19.D.2-10-07-2026-end
 def single_run_nr(
         runs, seed, gnb_number, ues_per_gnb, simulation_time,
@@ -181,7 +189,15 @@ def single_run_nr(
         # Rashed-Step 19.A-10-07-2026-end
         # Rashed-Step 18.F-10-06-2026-end
         # Rashed-Step 18.E-10-06-2026-end
+        pathloss_model="log-distance", pathloss_los="auto", bs_height_m=None, ut_height_m=None,
+        tgax_room_size_m=None,  # 22.A
 ):
+    # Rashed-Step 22.A-10-15-2026-start
+    try:
+        pathloss = pathloss_spec_from_cli(pathloss_model, pathloss_los, bs_height_m, ut_height_m, tgax_room_size_m)
+    except ValueError as e:
+        raise click.UsageError(str(e))
+    # Rashed-Step 22.A-10-15-2026-end
     gnb_positions = parse_pos_list_nr(gnb_pos, "--gnb-pos") if gnb_pos else None
 
     # Rashed-Step 15.G-09-18-2026-start
@@ -378,6 +394,7 @@ def single_run_nr(
             # Rashed-Step 18.A-10-06-2026-start
             error_model_config=error_model_config,
             # Rashed-Step 18.A-10-06-2026-end
+            pathloss=pathloss,  # 22.A
         )
 
 

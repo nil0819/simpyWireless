@@ -257,8 +257,7 @@ class GenericWirelessDevice:
             if tx.tx_id == self.name:
                 continue
             d = dist(tx.tx_pos, my_pos)
-            shadow = self.channel.shadow_db(tx.tx_id, my_pos)
-            rx_dbm = rx_power_dbm(tx.tx_power_dbm, d, tx.f_hz, n=tx.pl_exp, shadow_db=shadow)
+            rx_dbm = self.channel.rx_power_at(tx, my_pos, False)  # Rashed-Step 22.A-10-15-2026
             visible.append(VisibleTx(
                 tx_id=tx.tx_id, tech=tx.tech, f_hz=tx.f_hz,
                 distance_m=d, rx_power_dbm=rx_dbm,

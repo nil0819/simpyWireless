@@ -15,6 +15,7 @@ from typing import List, Optional
 from common.common import Pos, rand_pos, dist
 from common.common_phy import WaypointMobility
 from channel.channel import Channel
+from channel.propagation import Propagation  # Rashed-Step 22.A-10-15-2026
 from nr.nr import Config_NRL, GnbLicensedNR, NUMEROLOGY_SCS_KHZ, slot_duration_us
 from nr.ue import NrUeLicensed
 # Rashed-Step 13.E.3-08-23-2026-start
@@ -358,6 +359,7 @@ def run_simulation_licensed_nr(
         # = the hard per-MCS threshold rule, byte-identical to earlier runs.
         error_model_config: Optional[ErrorModelConfig] = None,
         # Rashed-Step 18.A-10-06-2026-end
+        pathloss=None,  # Rashed-Step 22.A-10-15-2026: channel.propagation.PathLossSpec, None = log-distance
 ):
     random.seed(seed)
     # Rashed-Step 18.A-10-06-2026-start
@@ -382,6 +384,7 @@ def run_simulation_licensed_nr(
         {},  # airtime_control - unused (WiFi)
         {},  # airtime_data_NR - unused (NR-U)
         {},  # airtime_control_NR - unused (NR-U)
+        propagation=Propagation(pathloss, seed) if pathloss is not None else None,  # Rashed-Step 22.A-10-15-2026
     )
 
     # Rashed-Step 19.E.1-10-07-2026-start

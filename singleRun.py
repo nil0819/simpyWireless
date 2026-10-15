@@ -2,6 +2,7 @@ import click
 import sys
 
 from simulation import *
+from channel.propagation import pathloss_spec_from_cli  # Rashed-Step 22.A-10-15-2026
 # Rashed-Step 16.F-10-02-2026-start
 from core.network import core_config_from_cli
 # Rashed-Step 18.A-10-06-2026-start
@@ -370,6 +371,13 @@ def _mgmt_config(on, beacon_ms, scan_ms, roam_dbm, hyst_db):
 @click.option("--nr-handover", "nr_handover", is_flag=True, default=False, help="A3 handover between the licensed cells (needs --nr-rrc-enabled).")
 # Rashed-Step 19.E.2-10-07-2026-end
 @click.option("--nru-buffer-limit-bytes", "nru_buffer_limit_bytes", type=int, default=None, help="slots only: drop-tail limit of each per-UE downlink buffer (default unbounded).")
+# Rashed-Step 22.A-10-15-2026-start
+@click.option("--pathloss-model", "pathloss_model", type=click.Choice(["log-distance", "inh-office-mixed", "inh-office-open", "umi", "uma", "tgax-residential", "tgax-enterprise"]), default="log-distance", help="Path-loss model (Step 22.A): 3GPP TR 38.901 InH-Office (mixed / open office), UMi-Street Canyon, UMa, or IEEE TGax residential / enterprise (with wall losses). LOS/NLOS per link from the model's LOS probability; heights from the node role (AP/gNB at the BS height). Default log-distance (exponent 3), byte-identical.")
+@click.option("--pathloss-los", "pathloss_los", type=click.Choice(["auto", "los", "nlos"]), default="auto", help="38.901 models: draw each link's LOS state from the LOS probability (auto, default) or force LOS / NLOS on every link.")
+@click.option("--bs-height-m", "bs_height_m", type=float, default=None, help="AP / gNB antenna height (m) for --pathloss-model (default: InH/TGax 3, UMi 10, UMa 25).")
+@click.option("--ut-height-m", "ut_height_m", type=float, default=None, help="STA / UE height (m) for --pathloss-model (default 1.5).")
+@click.option("--tgax-room-size-m", "tgax_room_size_m", type=float, default=None, help="TGax models: room size (m) of the square grid whose walls a link crosses (default residential 10, enterprise 20).")
+# Rashed-Step 22.A-10-15-2026-end
 # Rashed-Step 18.C-10-06-2026-end
 
 def single_run(
@@ -573,7 +581,15 @@ def single_run(
         # Rashed-Step 17.G-10-04-2026-end
         # Rashed-Step pre_17.B-10-04-2026-end
         # Rashed-Step 16.F-10-02-2026-end
+        pathloss_model: str = "log-distance", pathloss_los: str = "auto", bs_height_m: Optional[float] = None,
+        ut_height_m: Optional[float] = None, tgax_room_size_m: Optional[float] = None,  # 22.A
 ):
+    # Rashed-Step 22.A-10-15-2026-start
+    try:
+        pathloss = pathloss_spec_from_cli(pathloss_model, pathloss_los, bs_height_m, ut_height_m, tgax_room_size_m)
+    except ValueError as e:
+        raise click.UsageError(str(e))
+    # Rashed-Step 22.A-10-15-2026-end
     backoffs = {key: {ap_number: 0} for key in range(wifi_cw_max + 1)}
     airtime_data = {"Station {}".format(i): 0 for i in range(1, ap_number + 1)}
     airtime_control = {"Station {}".format(i): 0 for i in range(1, ap_number + 1)}
@@ -1067,6 +1083,7 @@ def single_run(
                        nr_ue_uplink_enabled=nr_ue_uplink_enabled, nr_rrc_enabled=nr_rrc_enabled,
                        nru_scell=nru_scell,  # 19.F
                        fairness_report=fairness_report,  # pre_20.A
+                       pathloss=pathloss,  # 22.A
                        # Rashed-Step 19.E.2-10-07-2026-end
                        # Rashed-Step 16.F-10-02-2026-end
                        )

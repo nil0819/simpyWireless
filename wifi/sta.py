@@ -281,13 +281,8 @@ class WiFiSTA:
         fr.rx_name = self.ap.name
         fr.rx_pos = rx_pos
         fr.distance_m = dist(my_pos, rx_pos)
-        fr.pr_dbm = rx_power_dbm(
-            tx_power_dbm=self.config.tx_power_dbm,
-            d_m=fr.distance_m,
-            f_hz=self.config.f_ghz,
-            n=self.config.pl_exp,
-            shadow_db=self.channel.shadow_db(self.name, fr.rx_pos)
-        )
+        fr.pr_dbm = self.channel.link_rx_power_dbm(self.name, my_pos, fr.rx_pos, self.config.tx_power_dbm,
+                                                   self.config.f_ghz, self.config.pl_exp)  # Rashed-Step 22.A-10-15-2026
         return fr
 
     def wait_back_off(self):

@@ -13,6 +13,8 @@ from common.common_phy import rx_power_dbm, dbm_to_mw, mw_to_dbm, Pos, sample_sh
 # Rashed-Step pre_20.C0-10-08-2026-start
 from common.common_phy import power_fraction_in_band
 # Rashed-Step pre_20.C0-10-08-2026-end
+from channel.propagation import is_infrastructure  # Rashed-Step 22.A-10-15-2026
+from types import SimpleNamespace  # Rashed-Step 22.A-10-15-2026
 from typing import Optional, List
 from typing import Any, List, Tuple
 # Rashed-Step 8.A-08-06-2026-start
@@ -214,6 +216,11 @@ class Channel:
     nav_reservations: List[ActiveTx] = field(default_factory=list)
     # Rashed-Step pre_20.D.3-10-08-2026-end
     # Rashed-Step 5.E.1-02-06-2026-end
+    # Rashed-Step 22.A-10-15-2026-start
+    # Path-loss model (channel/propagation.Propagation). None = the
+    # original log-distance path loss with each transmission's pl_exp.
+    propagation: Optional[Any] = None
+    # Rashed-Step 22.A-10-15-2026-end
 
      # Rashed-Step 3.B-01-12-2026-start
     def __post_init__(self):
@@ -387,11 +394,7 @@ class Channel:
              else:
                  overlap = 1.0
              # Rashed-Step 5.E-02-06-2026-end
-             d = dist(tx.tx_pos, sense_pos)
-             # Rashed-Step 5.B-02-06-2026-start
-             shadow = self.shadow_db(tx.tx_id, sense_pos)
-             pr = rx_power_dbm(tx.tx_power_dbm, d, tx.f_hz, n = tx.pl_exp, shadow_db=shadow)
-             # Rashed-Step 5.B-02-06-2026-end
+             pr = self.rx_power_at(tx, sense_pos, is_infrastructure(exclude_tx_id))  # Rashed-Step 22.A-10-15-2026
              # Rashed-Step 5.E-02-06-2026-start
              total_mw += dbm_to_mw(pr) * overlap
              # Rashed-Step 5.E-02-06-2026-end
@@ -450,8 +453,7 @@ class Channel:
                 continue
             if sense_f_hz is not None and spectral_overlap_fraction(sense_f_hz, sense_bw_mhz, r.f_hz, r.bandwidth_mhz) <= 0.0:
                 continue
-            pr = rx_power_dbm(r.tx_power_dbm, dist(r.tx_pos, sense_pos), r.f_hz, n=r.pl_exp,
-                              shadow_db=self.shadow_db(r.tx_id, sense_pos))
+            pr = self.rx_power_at(r, sense_pos, is_infrastructure(exclude_tx_id))  # Rashed-Step 22.A-10-15-2026
             if pr >= preamble_detect_dbm:
                 return True
         return False
@@ -492,8 +494,7 @@ class Channel:
         err = getattr(self, "_wifi_error", None)
         if err is None or err.tx_id == exclude_tx_id or err.t_end <= getattr(self, "_wifi_ok_end", -1.0):
             return False
-        pr = rx_power_dbm(err.tx_power_dbm, dist(err.tx_pos, sense_pos), err.f_hz, n=err.pl_exp,
-                          shadow_db=self.shadow_db(err.tx_id, sense_pos))
+        pr = self.rx_power_at(err, sense_pos, is_infrastructure(exclude_tx_id))  # Rashed-Step 22.A-10-15-2026
         return pr >= detect_dbm
     # Rashed-Step 20.A-10-08-2026-end
     
@@ -510,12 +511,31 @@ class Channel:
 
     # Rashed-Step 4.C-01-20-2026-start
 
-    def _rx_pwr_dbm(self, tx:ActiveTx, at_pos: Pos) -> float:
-         d = dist(tx.tx_pos, at_pos)
-         # Rashed-Step 5.B-02-06-2026-start
-         shadow = self.shadow_db(tx.tx_id, at_pos)
-         return rx_power_dbm(tx.tx_power_dbm, d, tx.f_hz, n=tx.pl_exp, shadow_db=shadow)
-         # Rashed-Step 5.B-02-06-2026-end
+    def _rx_pwr_dbm(self, tx:ActiveTx, at_pos: Pos, rx_infra: Optional[bool] = None) -> float:
+         return self.rx_power_at(tx, at_pos, rx_infra)  # Rashed-Step 22.A-10-15-2026
+
+    # Rashed-Step 22.A-10-15-2026-start
+    def rx_power_at(self, tx, at_pos: Pos, rx_infra: Optional[bool] = None) -> float:
+        """Received power (dBm) of tx at at_pos: path loss + shadowing.
+        Every received-power computation goes through here. No model: the
+        original log-distance expression. With a model, rx_infra says
+        whether the receiver is an AP/gNB (BS height); None = the opposite
+        of the transmitter's role (downlink / uplink)."""
+        shadow = self.shadow_db(tx.tx_id, at_pos)
+        if self.propagation is None:
+            return rx_power_dbm(tx.tx_power_dbm, dist(tx.tx_pos, at_pos), tx.f_hz, n=tx.pl_exp, shadow_db=shadow)
+        tx_infra = is_infrastructure(tx.tx_id)
+        if rx_infra is None:
+            rx_infra = not tx_infra
+        return tx.tx_power_dbm - self.propagation.loss_db(tx.tx_pos, at_pos, tx.f_hz, tx_infra, rx_infra) - shadow
+
+    def link_rx_power_dbm(self, tx_id: str, tx_pos: Pos, rx_pos: Pos, tx_power_dbm: float, f_hz: float,
+                          pl_exp: float, rx_infra: Optional[bool] = None) -> float:
+        """rx_power_at() for callers without an ActiveTx (the frames'
+        diagnostic pr_dbm, generic devices)."""
+        return self.rx_power_at(SimpleNamespace(tx_id=tx_id, tx_pos=tx_pos, tx_power_dbm=tx_power_dbm,
+                                                f_hz=f_hz, pl_exp=pl_exp), rx_pos, rx_infra)
+    # Rashed-Step 22.A-10-15-2026-end
     
     # Rashed-Step 5.C-02-06-2026-start
     # BUGFIX/upgrade: noise_dbm used to default to a hardcoded -94.0 dBm
@@ -628,7 +648,7 @@ class Channel:
             # Rashed-Step pre_20.C0-10-08-2026-end
             if overlap <= 0.0:
                 continue
-            i_dbm = self._rx_pwr_dbm(other, target.rx_pos)
+            i_dbm = self._rx_pwr_dbm(other, target.rx_pos, not is_infrastructure(target.tx_id))  # 22.A: at the target's receiver
             # Rashed-Step pre_20.D.3a-10-08-2026-start
             if per_tx is not None:
                 per_tx.setdefault(other.tx_id, []).append((other.tx_start, other.t_end, dbm_to_mw(i_dbm) * overlap))

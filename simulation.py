@@ -15,6 +15,8 @@ from wifi.sta import *
 # Rashed-Step 1.D_2-12-26-2025-end
 # Rashed-Step 5.A-02-06-2026-start
 from typing import Optional
+from typing import Any  # Rashed-Step 22.A-10-15-2026
+from channel.propagation import Propagation  # Rashed-Step 22.A-10-15-2026
 # Rashed-Step 5.A-02-06-2026-end
 # Rashed-Step 5.F-02-06-2026-start
 from common.common_phy import check_eirp_compliance
@@ -240,6 +242,10 @@ def run_simulation(
         fairness_report: bool = False,
         # Rashed-Step pre_20.A-10-08-2026-end
         # Rashed-Step 19.F-10-07-2026-end
+        # Rashed-Step 22.A-10-15-2026-start
+        # channel.propagation.PathLossSpec; None = log-distance (as before).
+        pathloss: Optional[Any] = None,
+        # Rashed-Step 22.A-10-15-2026-end
 ):
     random.seed(seed)
     environment = simpy.Environment()
@@ -289,8 +295,9 @@ def run_simulation(
         airtime_data_NR,
         airtime_control_NR,
         # Rashed-Step 5.B-02-06-2026-start
-        shadowing_sigma_db=shadowing_sigma_db
+        shadowing_sigma_db=shadowing_sigma_db,
         # Rashed-Step 5.B-02-06-2026-end
+        propagation=Propagation(pathloss, seed) if pathloss is not None else None,  # Rashed-Step 22.A-10-15-2026
     )
 
     # Rashed-Step 3.F-01-13-2026-end

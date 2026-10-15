@@ -2199,13 +2199,8 @@ class Gnb:
             # Rashed-Step 5.G-02-06-2026-end
 
             # Rashed-Step 5.B-02-06-2026-start
-            tx.pr_dbm = rx_power_dbm(
-                tx_power_dbm=self.config_nr.tx_power_dbm,
-                d_m= tx.distance_m,
-                f_hz=self.config_nr.f_ghz,
-                n = self.config_nr.pl_exp,
-                shadow_db=self.channel.shadow_db(self.name, tx.rx_pos)
-            )
+            tx.pr_dbm = self.channel.link_rx_power_dbm(self.name, my_pos, tx.rx_pos, self.config_nr.tx_power_dbm,
+                                                       self.config_nr.f_ghz, self.config_nr.pl_exp)  # Rashed-Step 22.A-10-15-2026
             # Rashed-Step 5.B-02-06-2026-end
 
         return tx

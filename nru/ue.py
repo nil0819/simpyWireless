@@ -287,13 +287,8 @@ class NrUE:
         tx.rx_name = self.gnb.name
         tx.rx_pos = rx_pos
         tx.distance_m = dist(my_pos, rx_pos)
-        tx.pr_dbm = rx_power_dbm(
-            tx_power_dbm=self.config_nr.tx_power_dbm,
-            d_m=tx.distance_m,
-            f_hz=self.config_nr.f_ghz,
-            n=self.config_nr.pl_exp,
-            shadow_db=self.channel.shadow_db(self.name, tx.rx_pos)
-        )
+        tx.pr_dbm = self.channel.link_rx_power_dbm(self.name, my_pos, tx.rx_pos, self.config_nr.tx_power_dbm,
+                                                   self.config_nr.f_ghz, self.config_nr.pl_exp)  # Rashed-Step 22.A-10-15-2026
         return tx
 
     def wait_back_off(self):
