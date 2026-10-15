@@ -24,7 +24,7 @@ pip install pytest
 pytest test/
 ```
 
-You should see `641 passed` (as of Step 22.B). If that's clean, you're ready to run simulations.
+You should see `647 passed` (as of Step 22.C). If that's clean, you're ready to run simulations.
 
 ## 2. Scenario 1 - Wi-Fi + NR-U coexistence
 

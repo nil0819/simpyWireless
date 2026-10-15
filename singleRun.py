@@ -379,6 +379,11 @@ def _mgmt_config(on, beacon_ms, scan_ms, roam_dbm, hyst_db):
 @click.option("--tgax-room-size-m", "tgax_room_size_m", type=float, default=None, help="TGax models: room size (m) of the square grid whose walls a link crosses (default residential 10, enterprise 20).")
 # Rashed-Step 22.B-10-15-2026-start
 @click.option("--pathloss-shadowing", "pathloss_shadowing", is_flag=True, default=False, help="With --pathloss-model (Step 22.B): add the model's own log-normal shadowing - 38.901 sigma by LOS state (InH 3 / 8.03 dB, UMi 4 / 7.82, UMa 4 / 6), TGax 5 dB - spatially correlated (38.901 decorrelation distances) and the same in both directions. Default (unset) = no model shadowing, byte-identical.")
+# Rashed-Step 22.C-10-15-2026-start
+@click.option("--fading", "fading", is_flag=True, default=False, help="Flat block fading on every link (Step 22.C): Rayleigh, or Rician on LOS links with a --pathloss-model (K: InH 7 dB, UMi/UMa 9, TGax residential 0 / enterprise 3 within the breakpoint). Doppler from node movement (spatial Clarke/Jakes field) plus the environment (--fading-env-speed-mps); the gain is held over blocks of a tenth of the coherence time and is the same for channel sensing and decoding, in both directions. Default (unset) = no fading, byte-identical.")
+@click.option("--fading-k-db", "fading_k_db", type=float, default=None, help="--fading without a --pathloss-model: Rician K (dB) on every link (default: Rayleigh).")
+@click.option("--fading-env-speed-mps", "fading_env_speed_mps", type=float, default=None, help="--fading: speed (m/s) of the moving environment that makes static links fade (default 0.333 = 1.2 km/h, the TGn/TGax value: ~5.8 Hz Doppler at 5 GHz).")
+# Rashed-Step 22.C-10-15-2026-end
 @click.option("--shadowing-correlated", "shadowing_correlated", is_flag=True, default=False, help="With --shadowing-sigma-db (Step 22.B): the shadowing becomes the same in both directions (A->B = B->A) and spatially correlated - it changes smoothly as a node moves (correlation exp(-distance / --shadowing-decorr-m)) instead of a fresh draw at every position. Default (unset) = the original independent draws, byte-identical.")
 @click.option("--shadowing-decorr-m", "shadowing_decorr_m", type=float, default=None, help="Decorrelation distance (m) for --shadowing-correlated (default 10, the 38.901 InH LOS value).")
 # Rashed-Step 22.B-10-15-2026-end
@@ -590,6 +595,8 @@ def single_run(
         ut_height_m: Optional[float] = None, tgax_room_size_m: Optional[float] = None,  # 22.A
         pathloss_shadowing: bool = False, shadowing_correlated: bool = False,
         shadowing_decorr_m: Optional[float] = None,  # 22.B
+        fading: bool = False, fading_k_db: Optional[float] = None,
+        fading_env_speed_mps: Optional[float] = None,  # 22.C
 ):
     # Rashed-Step 22.A-10-15-2026-start
     try:
@@ -603,6 +610,15 @@ def single_run(
     if shadowing_decorr_m is not None and (not shadowing_correlated or shadowing_decorr_m <= 0):
         raise click.UsageError("--shadowing-decorr-m needs --shadowing-correlated and a value > 0")
     # Rashed-Step 22.B-10-15-2026-end
+    # Rashed-Step 22.C-10-15-2026-start
+    if not fading and (fading_k_db is not None or fading_env_speed_mps is not None):
+        raise click.UsageError("--fading-k-db / --fading-env-speed-mps need --fading")
+    if fading_k_db is not None and pathloss is not None:
+        raise click.UsageError("--fading-k-db is for --fading without a --pathloss-model (the model sets K)")
+    if fading_env_speed_mps is not None and fading_env_speed_mps <= 0:
+        raise click.UsageError("--fading-env-speed-mps must be > 0")
+    fading_spec = (fading_k_db, fading_env_speed_mps) if fading else None
+    # Rashed-Step 22.C-10-15-2026-end
     # Rashed-Step 22.A-10-15-2026-end
     backoffs = {key: {ap_number: 0} for key in range(wifi_cw_max + 1)}
     airtime_data = {"Station {}".format(i): 0 for i in range(1, ap_number + 1)}
@@ -1100,6 +1116,7 @@ def single_run(
                        pathloss=pathloss,  # 22.A
                        shadowing_correlated=shadowing_correlated,
                        shadowing_decorr_m=shadowing_decorr_m if shadowing_decorr_m is not None else 10.0,  # 22.B
+                       fading=fading_spec,  # 22.C
                        # Rashed-Step 19.E.2-10-07-2026-end
                        # Rashed-Step 16.F-10-02-2026-end
                        )

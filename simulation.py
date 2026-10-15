@@ -18,6 +18,7 @@ from typing import Optional
 from typing import Any  # Rashed-Step 22.A-10-15-2026
 from channel.propagation import Propagation  # Rashed-Step 22.A-10-15-2026
 from channel.link_field import LinkField  # Rashed-Step 22.B-10-15-2026
+from channel.fading import Fading  # Rashed-Step 22.C-10-15-2026
 # Rashed-Step 5.A-02-06-2026-end
 # Rashed-Step 5.F-02-06-2026-start
 from common.common_phy import check_eirp_compliance
@@ -253,6 +254,7 @@ def run_simulation(
         shadowing_correlated: bool = False,
         shadowing_decorr_m: float = 10.0,
         # Rashed-Step 22.B-10-15-2026-end
+        fading: Optional[tuple] = None,  # Rashed-Step 22.C-10-15-2026: (K dB or None, env speed or None)
 ):
     random.seed(seed)
     environment = simpy.Environment()
@@ -307,6 +309,7 @@ def run_simulation(
         propagation=Propagation(pathloss, seed) if pathloss is not None else None,  # Rashed-Step 22.A-10-15-2026
         shadow_field=(LinkField(seed, 4, shadowing_decorr_m)
                       if shadowing_correlated and shadowing_sigma_db > 0 else None),  # Rashed-Step 22.B-10-15-2026
+        fading=Fading(seed, *([fading[1]] if fading[1] is not None else []), k_db=fading[0]) if fading is not None else None,  # Rashed-Step 22.C-10-15-2026
     )
 
     # Rashed-Step 3.F-01-13-2026-end

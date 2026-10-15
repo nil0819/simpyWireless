@@ -140,6 +140,11 @@ from ran.protocol.handover import handover_config_from_cli
 @click.option("--tgax-room-size-m", "tgax_room_size_m", type=float, default=None, help="TGax models: room size (m) of the square grid whose walls a link crosses (default residential 10, enterprise 20).")
 # Rashed-Step 22.B-10-15-2026-start
 @click.option("--pathloss-shadowing", "pathloss_shadowing", is_flag=True, default=False, help="With --pathloss-model (Step 22.B): add the model's own log-normal shadowing - 38.901 sigma by LOS state (InH 3 / 8.03 dB, UMi 4 / 7.82, UMa 4 / 6), TGax 5 dB - spatially correlated (38.901 decorrelation distances) and the same in both directions. Default (unset) = no model shadowing, byte-identical.")
+# Rashed-Step 22.C-10-15-2026-start
+@click.option("--fading", "fading", is_flag=True, default=False, help="Flat block fading on every link (Step 22.C): Rayleigh, or Rician on LOS links with a --pathloss-model (K: InH 7 dB, UMi/UMa 9, TGax residential 0 / enterprise 3 within the breakpoint). Doppler from node movement (spatial Clarke/Jakes field) plus the environment (--fading-env-speed-mps); the gain is held over blocks of a tenth of the coherence time and is the same for channel sensing and decoding, in both directions. Default (unset) = no fading, byte-identical.")
+@click.option("--fading-k-db", "fading_k_db", type=float, default=None, help="--fading without a --pathloss-model: Rician K (dB) on every link (default: Rayleigh).")
+@click.option("--fading-env-speed-mps", "fading_env_speed_mps", type=float, default=None, help="--fading: speed (m/s) of the moving environment that makes static links fade (default 0.333 = 1.2 km/h, the TGn/TGax value: ~5.8 Hz Doppler at 5 GHz).")
+# Rashed-Step 22.C-10-15-2026-end
 # Rashed-Step 22.B-10-15-2026-end
 # Rashed-Step 22.A-10-15-2026-end
 # Rashed-Step 19.D.2-10-07-2026-end
@@ -195,6 +200,7 @@ def single_run_nr(
         pathloss_model="log-distance", pathloss_los="auto", bs_height_m=None, ut_height_m=None,
         tgax_room_size_m=None,  # 22.A
         pathloss_shadowing=False,  # 22.B
+        fading=False, fading_k_db=None, fading_env_speed_mps=None,  # 22.C
 ):
     # Rashed-Step 22.A-10-15-2026-start
     try:
@@ -202,6 +208,15 @@ def single_run_nr(
                                           pathloss_shadowing)  # 22.B
     except ValueError as e:
         raise click.UsageError(str(e))
+    # Rashed-Step 22.C-10-15-2026-start
+    if not fading and (fading_k_db is not None or fading_env_speed_mps is not None):
+        raise click.UsageError("--fading-k-db / --fading-env-speed-mps need --fading")
+    if fading_k_db is not None and pathloss is not None:
+        raise click.UsageError("--fading-k-db is for --fading without a --pathloss-model (the model sets K)")
+    if fading_env_speed_mps is not None and fading_env_speed_mps <= 0:
+        raise click.UsageError("--fading-env-speed-mps must be > 0")
+    fading_spec = (fading_k_db, fading_env_speed_mps) if fading else None
+    # Rashed-Step 22.C-10-15-2026-end
     # Rashed-Step 22.A-10-15-2026-end
     gnb_positions = parse_pos_list_nr(gnb_pos, "--gnb-pos") if gnb_pos else None
 
@@ -400,6 +415,7 @@ def single_run_nr(
             error_model_config=error_model_config,
             # Rashed-Step 18.A-10-06-2026-end
             pathloss=pathloss,  # 22.A
+            fading=fading_spec,  # 22.C
         )
 
 

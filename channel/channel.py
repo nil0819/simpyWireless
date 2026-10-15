@@ -227,6 +227,11 @@ class Channel:
     # None = the per-(transmitter, receiver position) draws of shadow_db().
     shadow_field: Optional[Any] = None
     # Rashed-Step 22.B-10-15-2026-end
+    # Rashed-Step 22.C-10-15-2026-start
+    # --fading: a channel/fading.Fading (flat block fading on every link,
+    # in sensing and decoding). None = no fading.
+    fading: Optional[Any] = None
+    # Rashed-Step 22.C-10-15-2026-end
 
      # Rashed-Step 3.B-01-12-2026-start
     def __post_init__(self):
@@ -534,11 +539,22 @@ class Channel:
             shadow = self.shadow_db(tx.tx_id, at_pos)
         # Rashed-Step 22.B-10-15-2026-end
         if self.propagation is None:
-            return rx_power_dbm(tx.tx_power_dbm, dist(tx.tx_pos, at_pos), tx.f_hz, n=tx.pl_exp, shadow_db=shadow)
-        tx_infra = is_infrastructure(tx.tx_id)
-        if rx_infra is None:
-            rx_infra = not tx_infra
-        return tx.tx_power_dbm - self.propagation.loss_db(tx.tx_pos, at_pos, tx.f_hz, tx_infra, rx_infra) - shadow
+            pr = rx_power_dbm(tx.tx_power_dbm, dist(tx.tx_pos, at_pos), tx.f_hz, n=tx.pl_exp, shadow_db=shadow)
+            k_db = None
+        else:
+            tx_infra = is_infrastructure(tx.tx_id)
+            if rx_infra is None:
+                rx_infra = not tx_infra
+            pr = tx.tx_power_dbm - self.propagation.loss_db(tx.tx_pos, at_pos, tx.f_hz, tx_infra, rx_infra) - shadow
+            k_db = self.propagation.rician_k_db(tx.tx_pos, at_pos) if self.fading is not None else None
+        # Rashed-Step 22.C-10-15-2026-start
+        # Flat block fading (channel/fading.py): the link's gain for the
+        # current block - the same for sensing and decoding.
+        if self.fading is not None:
+            pr += self.fading.gain_db(tx.tx_pos, at_pos, self.env.now, tx.f_hz,
+                                      k_db if self.propagation is not None else self.fading.k_db)
+        # Rashed-Step 22.C-10-15-2026-end
+        return pr
 
     def link_rx_power_dbm(self, tx_id: str, tx_pos: Pos, rx_pos: Pos, tx_power_dbm: float, f_hz: float,
                           pl_exp: float, rx_infra: Optional[bool] = None) -> float:

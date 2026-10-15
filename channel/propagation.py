@@ -196,6 +196,18 @@ class Propagation:
             return self.spec.los_mode == "los"
         return self._los_field.uniform(a, b) < los_probability(self.spec.model, d2d)  # Rashed-Step 22.B-10-15-2026
 
+    # Rashed-Step 22.C-10-15-2026-start
+    def rician_k_db(self, tx_pos, rx_pos) -> Optional[float]:
+        """Fading K-factor of the link: the model's K on a LOS link (TGax:
+        within the breakpoint distance), None (Rayleigh) otherwise."""
+        from channel.fading import K_DB
+        model = self.spec.model
+        d2d = math.hypot(tx_pos[0] - rx_pos[0], tx_pos[1] - rx_pos[1])
+        if model in TGAX:
+            return K_DB[model] if d2d <= TGAX[model][0] else None
+        return K_DB[model] if self.is_los(tuple(tx_pos), tuple(rx_pos), d2d) else None
+    # Rashed-Step 22.C-10-15-2026-end
+
     def loss_db(self, tx_pos, rx_pos, f_hz: float, tx_infra: bool, rx_infra: bool) -> float:
         d2d = math.hypot(tx_pos[0] - rx_pos[0], tx_pos[1] - rx_pos[1])
         h_tx = self.h_bs if tx_infra else self.h_ut

@@ -16,6 +16,7 @@ from common.common import Pos, rand_pos, dist
 from common.common_phy import WaypointMobility
 from channel.channel import Channel
 from channel.propagation import Propagation  # Rashed-Step 22.A-10-15-2026
+from channel.fading import Fading  # Rashed-Step 22.C-10-15-2026
 from nr.nr import Config_NRL, GnbLicensedNR, NUMEROLOGY_SCS_KHZ, slot_duration_us
 from nr.ue import NrUeLicensed
 # Rashed-Step 13.E.3-08-23-2026-start
@@ -360,6 +361,7 @@ def run_simulation_licensed_nr(
         error_model_config: Optional[ErrorModelConfig] = None,
         # Rashed-Step 18.A-10-06-2026-end
         pathloss=None,  # Rashed-Step 22.A-10-15-2026: channel.propagation.PathLossSpec, None = log-distance
+        fading=None,  # Rashed-Step 22.C-10-15-2026: (K dB or None, env speed or None), None = no fading
 ):
     random.seed(seed)
     # Rashed-Step 18.A-10-06-2026-start
@@ -385,6 +387,7 @@ def run_simulation_licensed_nr(
         {},  # airtime_data_NR - unused (NR-U)
         {},  # airtime_control_NR - unused (NR-U)
         propagation=Propagation(pathloss, seed) if pathloss is not None else None,  # Rashed-Step 22.A-10-15-2026
+        fading=Fading(seed, *([fading[1]] if fading[1] is not None else []), k_db=fading[0]) if fading is not None else None,  # Rashed-Step 22.C-10-15-2026
     )
 
     # Rashed-Step 19.E.1-10-07-2026-start
