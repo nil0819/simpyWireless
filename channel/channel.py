@@ -221,6 +221,12 @@ class Channel:
     # original log-distance path loss with each transmission's pl_exp.
     propagation: Optional[Any] = None
     # Rashed-Step 22.A-10-15-2026-end
+    # Rashed-Step 22.B-10-15-2026-start
+    # --shadowing-correlated: a channel/link_field.LinkField that makes the
+    # --shadowing-sigma-db shadowing reciprocal and spatially correlated.
+    # None = the per-(transmitter, receiver position) draws of shadow_db().
+    shadow_field: Optional[Any] = None
+    # Rashed-Step 22.B-10-15-2026-end
 
      # Rashed-Step 3.B-01-12-2026-start
     def __post_init__(self):
@@ -521,7 +527,12 @@ class Channel:
         original log-distance expression. With a model, rx_infra says
         whether the receiver is an AP/gNB (BS height); None = the opposite
         of the transmitter's role (downlink / uplink)."""
-        shadow = self.shadow_db(tx.tx_id, at_pos)
+        # Rashed-Step 22.B-10-15-2026-start
+        if self.shadow_field is not None and self.shadowing_sigma_db > 0.0:
+            shadow = self.shadowing_sigma_db * self.shadow_field.value(tx.tx_pos, at_pos)
+        else:
+            shadow = self.shadow_db(tx.tx_id, at_pos)
+        # Rashed-Step 22.B-10-15-2026-end
         if self.propagation is None:
             return rx_power_dbm(tx.tx_power_dbm, dist(tx.tx_pos, at_pos), tx.f_hz, n=tx.pl_exp, shadow_db=shadow)
         tx_infra = is_infrastructure(tx.tx_id)

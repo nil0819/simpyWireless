@@ -138,6 +138,9 @@ from ran.protocol.handover import handover_config_from_cli
 @click.option("--bs-height-m", "bs_height_m", type=float, default=None, help="AP / gNB antenna height (m) for --pathloss-model (default: InH/TGax 3, UMi 10, UMa 25).")
 @click.option("--ut-height-m", "ut_height_m", type=float, default=None, help="STA / UE height (m) for --pathloss-model (default 1.5).")
 @click.option("--tgax-room-size-m", "tgax_room_size_m", type=float, default=None, help="TGax models: room size (m) of the square grid whose walls a link crosses (default residential 10, enterprise 20).")
+# Rashed-Step 22.B-10-15-2026-start
+@click.option("--pathloss-shadowing", "pathloss_shadowing", is_flag=True, default=False, help="With --pathloss-model (Step 22.B): add the model's own log-normal shadowing - 38.901 sigma by LOS state (InH 3 / 8.03 dB, UMi 4 / 7.82, UMa 4 / 6), TGax 5 dB - spatially correlated (38.901 decorrelation distances) and the same in both directions. Default (unset) = no model shadowing, byte-identical.")
+# Rashed-Step 22.B-10-15-2026-end
 # Rashed-Step 22.A-10-15-2026-end
 # Rashed-Step 19.D.2-10-07-2026-end
 def single_run_nr(
@@ -191,10 +194,12 @@ def single_run_nr(
         # Rashed-Step 18.E-10-06-2026-end
         pathloss_model="log-distance", pathloss_los="auto", bs_height_m=None, ut_height_m=None,
         tgax_room_size_m=None,  # 22.A
+        pathloss_shadowing=False,  # 22.B
 ):
     # Rashed-Step 22.A-10-15-2026-start
     try:
-        pathloss = pathloss_spec_from_cli(pathloss_model, pathloss_los, bs_height_m, ut_height_m, tgax_room_size_m)
+        pathloss = pathloss_spec_from_cli(pathloss_model, pathloss_los, bs_height_m, ut_height_m, tgax_room_size_m,
+                                          pathloss_shadowing)  # 22.B
     except ValueError as e:
         raise click.UsageError(str(e))
     # Rashed-Step 22.A-10-15-2026-end

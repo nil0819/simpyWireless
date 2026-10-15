@@ -33,16 +33,19 @@ TGax: 40.05 + 20 log10(fc/2.4) + 20 log10(min(d, dBP))
 
 Heights: infrastructure nodes (names "AP ..." / "Gnb...") at the BS height,
 everyone else at the UT height (defaults per model: InH 3 / 1.5 m, UMi 10 /
-1.5, UMa 25 / 1.5, TGax 3 / 1.5). A link's LOS state is drawn once from its
-LOS probability and kept for the run, the same in both directions (keyed by
-the unordered pair of end positions); --pathloss-los los|nlos forces it.
-Shadowing is unchanged here (--shadowing-sigma-db); Step 22.B adds the
-models' own.
+1.5, UMa 25 / 1.5, TGax 3 / 1.5). A link is LOS when a spatially
+consistent, reciprocal uniform field (channel/link_field.py, LOS correlation
+distance InH 10 m, UMi/UMa 50 m) is below its LOS probability (Step 22.B;
+22.A drew each position pair independently); --pathloss-los los|nlos
+forces it. Shadowing: --shadowing-sigma-db as before, or (22.B,
+--pathloss-shadowing) the model's own sigma for the link's LOS state on a
+correlated, reciprocal field (SHADOW below).
 """
 import math
-import random
-from dataclasses import dataclass, field
-from typing import Dict, Optional, Tuple
+from dataclasses import dataclass
+from typing import Optional, Tuple
+
+from channel.link_field import LinkField  # Rashed-Step 22.B-10-15-2026
 
 C_M_S = 3.0e8
 
@@ -56,6 +59,18 @@ DEFAULT_HEIGHTS = {
     "tgax-residential": (3.0, 1.5), "tgax-enterprise": (3.0, 1.5),
 }
 TGAX = {"tgax-residential": (5.0, 5.0, 10.0), "tgax-enterprise": (10.0, 7.0, 20.0)}  # dBP, wall dB, room size
+# Rashed-Step 22.B-10-15-2026-start
+# model -> (sigma LOS, sigma NLOS [dB], decorrelation LOS, NLOS [m]): 38.901
+# Tables 7.4.1-1 / 7.5-6 (InH, UMi, UMa); TGax: 5 dB (no state), 10 m
+# (TGax gives no decorrelation distance - InH's value).
+SHADOW = {
+    "inh-office-mixed": (3.0, 8.03, 10.0, 6.0), "inh-office-open": (3.0, 8.03, 10.0, 6.0),
+    "umi": (4.0, 7.82, 10.0, 13.0), "uma": (4.0, 6.0, 37.0, 50.0),
+    "tgax-residential": (5.0, 5.0, 10.0, 10.0), "tgax-enterprise": (5.0, 5.0, 10.0, 10.0),
+}
+# LOS-state correlation distance (38.901 Table 7.6.3.1-2).
+LOS_DCOR = {"inh-office-mixed": 10.0, "inh-office-open": 10.0, "umi": 50.0, "uma": 50.0}
+# Rashed-Step 22.B-10-15-2026-end
 
 
 def is_infrastructure(name: Optional[str]) -> bool:
@@ -138,6 +153,7 @@ class PathLossSpec:
     bs_height_m: Optional[float] = None
     ut_height_m: Optional[float] = None
     room_size_m: Optional[float] = None
+    shadowing: bool = False  # Rashed-Step 22.B-10-15-2026: the model's own shadowing
 
     def __post_init__(self):
         if self.model not in MODELS:
@@ -155,12 +171,20 @@ class PathLossSpec:
 class Propagation:
     spec: PathLossSpec
     seed: int = 0
-    _los: Dict[tuple, bool] = field(default_factory=dict, repr=False)
-    _rng: random.Random = field(init=False, repr=False)
 
     def __post_init__(self):
-        # Own RNG: switching a model on doesn't move any other random draw.
-        self._rng = random.Random(self.seed * 1_000_003 + 22)
+        # Rashed-Step 22.B-10-15-2026-start
+        # LOS state and shadowing are spatially consistent, reciprocal link
+        # fields (channel/link_field.py) seeded from the run seed - their own
+        # random streams, so switching a model on moves no other random draw.
+        # (22.A drew each position pair's LOS state independently.)
+        model = self.spec.model
+        self._los_field = LinkField(self.seed, 1, LOS_DCOR[model]) if model in LOS_DCOR else None
+        self._shadow = None
+        if self.spec.shadowing:
+            s_los, s_nlos, d_los, d_nlos = SHADOW[model]
+            self._shadow = ((s_los, LinkField(self.seed, 2, d_los)), (s_nlos, LinkField(self.seed, 3, d_nlos)))
+        # Rashed-Step 22.B-10-15-2026-end
         bs, ut = DEFAULT_HEIGHTS[self.spec.model]
         self.h_bs = self.spec.bs_height_m if self.spec.bs_height_m is not None else bs
         self.h_ut = self.spec.ut_height_m if self.spec.ut_height_m is not None else ut
@@ -170,10 +194,7 @@ class Propagation:
     def is_los(self, a, b, d2d: float) -> bool:
         if self.spec.los_mode != "auto":
             return self.spec.los_mode == "los"
-        key = (a, b) if a <= b else (b, a)
-        if key not in self._los:
-            self._los[key] = self._rng.random() < los_probability(self.spec.model, d2d)
-        return self._los[key]
+        return self._los_field.uniform(a, b) < los_probability(self.spec.model, d2d)  # Rashed-Step 22.B-10-15-2026
 
     def loss_db(self, tx_pos, rx_pos, f_hz: float, tx_infra: bool, rx_infra: bool) -> float:
         d2d = math.hypot(tx_pos[0] - rx_pos[0], tx_pos[1] - rx_pos[1])
@@ -182,16 +203,29 @@ class Propagation:
         model = self.spec.model
         walls = walls_between(tx_pos, rx_pos, self.room_m) if model in TGAX else 0
         los = True if model in TGAX else self.is_los(tuple(tx_pos), tuple(rx_pos), d2d)
-        return path_loss_db(model, d2d, max(h_tx, h_rx), min(h_tx, h_rx), f_hz, los, walls=walls)
+        pl = path_loss_db(model, d2d, max(h_tx, h_rx), min(h_tx, h_rx), f_hz, los, walls=walls)
+        # Rashed-Step 22.B-10-15-2026-start
+        if self._shadow is not None:
+            sigma, fld = self._shadow[0] if los else self._shadow[1]
+            pl += sigma * fld.value(tx_pos, rx_pos)
+        # Rashed-Step 22.B-10-15-2026-end
+        return pl
 
 
 def pathloss_spec_from_cli(model: Optional[str], los: str = "auto", bs_height_m: Optional[float] = None,
                            ut_height_m: Optional[float] = None,
-                           room_size_m: Optional[float] = None) -> Optional[PathLossSpec]:
+                           room_size_m: Optional[float] = None, shadowing: bool = False,
+                           shadowing_sigma_db: float = 0.0) -> Optional[PathLossSpec]:
     """--pathloss-model & co. -> PathLossSpec, or None (log-distance)."""
     if model is None or model == "log-distance":
-        if los != "auto" or bs_height_m is not None or ut_height_m is not None or room_size_m is not None:
-            raise ValueError("--pathloss-los / --bs-height-m / --ut-height-m / --tgax-room-size-m need --pathloss-model")
+        if (los != "auto" or bs_height_m is not None or ut_height_m is not None or room_size_m is not None
+                or shadowing):
+            raise ValueError("--pathloss-los / --bs-height-m / --ut-height-m / --tgax-room-size-m / "
+                             "--pathloss-shadowing need --pathloss-model")
         return None
-    return PathLossSpec(model, los, bs_height_m, ut_height_m, room_size_m)
+    # Rashed-Step 22.B-10-15-2026-start
+    if shadowing and shadowing_sigma_db > 0:
+        raise ValueError("--pathloss-shadowing uses the model's own sigma - don't add --shadowing-sigma-db too")
+    # Rashed-Step 22.B-10-15-2026-end
+    return PathLossSpec(model, los, bs_height_m, ut_height_m, room_size_m, shadowing)
 # Rashed-Step 22.A-10-15-2026-end

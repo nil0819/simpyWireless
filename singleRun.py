@@ -377,6 +377,11 @@ def _mgmt_config(on, beacon_ms, scan_ms, roam_dbm, hyst_db):
 @click.option("--bs-height-m", "bs_height_m", type=float, default=None, help="AP / gNB antenna height (m) for --pathloss-model (default: InH/TGax 3, UMi 10, UMa 25).")
 @click.option("--ut-height-m", "ut_height_m", type=float, default=None, help="STA / UE height (m) for --pathloss-model (default 1.5).")
 @click.option("--tgax-room-size-m", "tgax_room_size_m", type=float, default=None, help="TGax models: room size (m) of the square grid whose walls a link crosses (default residential 10, enterprise 20).")
+# Rashed-Step 22.B-10-15-2026-start
+@click.option("--pathloss-shadowing", "pathloss_shadowing", is_flag=True, default=False, help="With --pathloss-model (Step 22.B): add the model's own log-normal shadowing - 38.901 sigma by LOS state (InH 3 / 8.03 dB, UMi 4 / 7.82, UMa 4 / 6), TGax 5 dB - spatially correlated (38.901 decorrelation distances) and the same in both directions. Default (unset) = no model shadowing, byte-identical.")
+@click.option("--shadowing-correlated", "shadowing_correlated", is_flag=True, default=False, help="With --shadowing-sigma-db (Step 22.B): the shadowing becomes the same in both directions (A->B = B->A) and spatially correlated - it changes smoothly as a node moves (correlation exp(-distance / --shadowing-decorr-m)) instead of a fresh draw at every position. Default (unset) = the original independent draws, byte-identical.")
+@click.option("--shadowing-decorr-m", "shadowing_decorr_m", type=float, default=None, help="Decorrelation distance (m) for --shadowing-correlated (default 10, the 38.901 InH LOS value).")
+# Rashed-Step 22.B-10-15-2026-end
 # Rashed-Step 22.A-10-15-2026-end
 # Rashed-Step 18.C-10-06-2026-end
 
@@ -583,12 +588,21 @@ def single_run(
         # Rashed-Step 16.F-10-02-2026-end
         pathloss_model: str = "log-distance", pathloss_los: str = "auto", bs_height_m: Optional[float] = None,
         ut_height_m: Optional[float] = None, tgax_room_size_m: Optional[float] = None,  # 22.A
+        pathloss_shadowing: bool = False, shadowing_correlated: bool = False,
+        shadowing_decorr_m: Optional[float] = None,  # 22.B
 ):
     # Rashed-Step 22.A-10-15-2026-start
     try:
-        pathloss = pathloss_spec_from_cli(pathloss_model, pathloss_los, bs_height_m, ut_height_m, tgax_room_size_m)
+        pathloss = pathloss_spec_from_cli(pathloss_model, pathloss_los, bs_height_m, ut_height_m, tgax_room_size_m,
+                                          pathloss_shadowing, shadowing_sigma_db)  # 22.B
     except ValueError as e:
         raise click.UsageError(str(e))
+    # Rashed-Step 22.B-10-15-2026-start
+    if shadowing_correlated and shadowing_sigma_db <= 0:
+        raise click.UsageError("--shadowing-correlated needs --shadowing-sigma-db > 0")
+    if shadowing_decorr_m is not None and (not shadowing_correlated or shadowing_decorr_m <= 0):
+        raise click.UsageError("--shadowing-decorr-m needs --shadowing-correlated and a value > 0")
+    # Rashed-Step 22.B-10-15-2026-end
     # Rashed-Step 22.A-10-15-2026-end
     backoffs = {key: {ap_number: 0} for key in range(wifi_cw_max + 1)}
     airtime_data = {"Station {}".format(i): 0 for i in range(1, ap_number + 1)}
@@ -1084,6 +1098,8 @@ def single_run(
                        nru_scell=nru_scell,  # 19.F
                        fairness_report=fairness_report,  # pre_20.A
                        pathloss=pathloss,  # 22.A
+                       shadowing_correlated=shadowing_correlated,
+                       shadowing_decorr_m=shadowing_decorr_m if shadowing_decorr_m is not None else 10.0,  # 22.B
                        # Rashed-Step 19.E.2-10-07-2026-end
                        # Rashed-Step 16.F-10-02-2026-end
                        )
