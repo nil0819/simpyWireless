@@ -98,6 +98,45 @@ def test_cell_report():
     assert t["user_p5_mbps"] < t["user_p50_mbps"]
 
 
+# Rashed-Step 22.E-10-15-2026-start
+def test_serving_rule_matches_the_runs_channel_and_redrops_users():
+    import simpy
+    from channel.channel import ActiveTx, Channel
+    from channel.propagation import PathLossSpec, Propagation
+    from common.layouts import serving_rule
+    spec = PathLossSpec("inh-office-mixed", shadowing=True)
+    ok = serving_rule(-70.0, lambda s: 23.0, lambda s: 5.18e9, spec, seed=4)
+    L = build_layout("tr38889-indoor", 4, serving_ok=ok)
+    env = simpy.Environment()
+    ch = Channel(simpy.PriorityResource(env, capacity=1), simpy.Resource(env, capacity=1), 1, 1, {}, {}, {}, {}, {},
+                 propagation=Propagation(spec, 4))
+    for i, s in enumerate(L.sites):
+        for u in s.users:
+            tx = ActiveTx(tx_id=f"AP {i + 1}", tx_pos=s.pos, tx_start=0, rx_pos=u, tx_power_dbm=23.0, f_hz=5.18e9,
+                          pl_exp=3.0, t_end=1, tech="WiFi")
+            assert ch.rx_power_at(tx, u) >= -70.0                  # the run sees the same serving power
+    plain = build_layout("tr38889-indoor", 4)
+    assert [s.users for s in plain.sites] != [s.users for s in L.sites]
+    with pytest.raises(ValueError):
+        build_layout("tgax-residential", 1, serving_ok=ok)
+
+
+def test_cli_min_serving():
+    from singleRun import single_run
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        os.makedirs("log", exist_ok=True)
+        good = runner.invoke(single_run, ["--seed", "1", "-t", "0.05", "-r", "1", "--layout", "tr38889-indoor",
+                                          "--pathloss-model", "inh-office-mixed", "--pathloss-shadowing",
+                                          "--layout-min-serving-dbm", "-82"])
+        bad = [runner.invoke(single_run, a) for a in (
+            ["--ap-number", "1", "--gnb-number", "0", "--layout-min-serving-dbm", "-82"],
+            ["--layout", "tgax-residential", "--layout-min-serving-dbm", "-82"])]
+    assert good.exit_code == 0, good.output[-400:]
+    assert all(b.exit_code != 0 for b in bad)
+# Rashed-Step 22.E-10-15-2026-end
+
+
 def test_cli():
     from singleRun import single_run
     runner = CliRunner()

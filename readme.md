@@ -370,7 +370,7 @@ Assert-based regression suite (no print-and-eyeball scripts for anything added s
 pip install pytest
 pytest test/
 ```
-654 tests passing as of Step 22.D. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
+656 tests passing as of Step 22.E. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
 
 ## Current Work Status
 
@@ -409,6 +409,7 @@ pytest test/
 ----> Step 20 (20.A-20.E) - full-stack Wi-Fi, all opt-in: 802.11 frame exchange on the air (`--wifi-mac-exchange`, `--wifi-rts-threshold`: ACK/Block Ack, NAV, RTS/CTS, EIFS - collision probability now matches Bianchi); STA uplink and EDCA with poisson/cbr queues, A-MPDU on every path (`--wifi-sta-traffic-model`); 802.11n/ac/ax PHY (`--wifi-phy`, `--wifi-channel-width`, `--wifi-gi`); management plane - beacons, association, roaming (`--wifi-management`); 802.11ax OFDMA downlink and trigger-based uplink (`--wifi-ofdma`, `--wifi-ul-ofdma`). Fix pre_20.C0: interference uses the transmitter's in-band power share (unequal bandwidths)
 ----> Step 21 (21.A-21.E) - closing the Wi-Fi gaps: per-STA single-user downlink (`--wifi-stas-per-ap`), EDCA deferral fixed (fresh AIFS after busy, slot grid, residual backoff - EDCA now matches Bianchi; it under-counted collisions 4-8x), EIFS on EDCA, OFDMA with EDCA + MU EDCA (`--wifi-mu-edca`), short/long retry counters (`--wifi-short-retry-limit`), control responses at the rate-adapted MCS, OFDMA airtime counted once
 ----> Step pre_22 (A-E) - the LAA study and the CCNC validation re-run on the Step 20-21 Wi-Fi stack (`analysis/laa_revalidation.py`, `analysis/occupancy_revalidation.py`): the diagnosis holds on every stack (the failing band widens to 50 m with HE + A-MPDU); the DTMC over-predicts Wi-Fi occupancy by 2-6 points with the full 802.11 exchange (EIFS, real collision rate); `compare_dtmc` counts the model's Wi-Fi occupancy the simulator's way (pre_22.G). NR-U `--nru-cts-power-dbm` (a 20 dBm CTS removes the 70-80 m over-protection) and `--nru-reservation-signal` (closes the sync-slot gap). See docs/laa_fairness_study.md section 7
+----> Step 22 (22.A-22.E) - Phase D realism, all opt-in: 3GPP TR 38.901 InH-Office / UMi / UMa and TGax path loss (`--pathloss-model`), reciprocal spatially correlated shadowing (`--pathloss-shadowing`, `--shadowing-correlated`), flat block fading (`--fading`), multi-cell layouts with per-cell channels and a Cell Report (`--layout`, `--channel-reuse`, `--cell-report`). On a realistic channel the 35-40 m failing band of the LAA test moves with the propagation model, and NR-U passes the replacement test on the TR 38.889 indoor layout (`analysis/realism_study.py`). See docs/laa_fairness_study.md section 8
 
 Full detail (design rationale, exact verified numbers, what was deliberately left out) for every sub-step above is in `Project details/Step N.txt`; `Project details/STATUS - resume context.txt` is the current single-file "start here" summary.
 

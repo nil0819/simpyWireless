@@ -273,15 +273,78 @@ with the frame exchange on.
   against.** With the full 802.11 exchange the model over-predicts Wi-Fi
   occupancy by 2-6 points from 3 APs up.
 
-## 8. Limitations
+## 8. On a realistic channel (Step 22)
 
-- **No shadowing or fading.** The regimes are sharp steps. Real deployments would blur the band boundaries.
-- **One topology:** one AP, one neighbor, STAs and UEs within 5 m, 20 MHz on a single channel, 802.11a rates.
+Everything above used log-distance path loss (exponent 3) with no
+shadowing or fading, so the regimes are sharp steps. Step 22 added the
+3GPP TR 38.901 and TGax path-loss models, spatially correlated shadowing,
+flat fading and multi-cell layouts. `python -m analysis.realism_study`
+repeats the test on them.
+
+![Replacement-test latency ratio on four channels](../analysis/generated/realism_latency_ratio.jpg)
+
+**Two networks against distance** (the setup above, frame exchange on, 5
+seeds x 1 s). The ratio is network A's latency next to NR-U over its
+latency next to a Wi-Fi neighbor.
+
+| Channel | Fails at | Highest ratio |
+|---|---|---|
+| Log-distance (as before) | 35, 40 m | 3.50 |
+| 38.901 InH-Office (mixed) | nowhere | 0.81 (35 m) |
+| InH + shadowing | 30, 60 m | 4.80 (60 m) |
+| InH + shadowing + fading | nowhere | 0.71 (30 m) |
+
+- **The failing band is a property of the propagation model, not a fixed
+  distance.** InH loses about 9 dB less than log-distance at short range,
+  so Wi-Fi hears NR-U's energy over the distances where it used to miss
+  it, and the band disappears.
+- **Shadowing moves the failures around.** Each seed is a different
+  shadowing draw, so a link lands in the "NR-U hears Wi-Fi, Wi-Fi doesn't
+  hear NR-U" window at some distances and not others. Five seeds per
+  distance aren't enough to say where; the mechanism is the same.
+- **Fading makes the reference worse, not NR-U better.** Fades break
+  frames in both cases, so a Wi-Fi neighbor already costs network A tens
+  of milliseconds, and NR-U's effect is relatively smaller.
+
+**The test on its own layout** (TR 38.889 indoor: 120 m x 80 m, two
+operators x 3 cells, 5 users per cell re-dropped below -82 dBm serving
+power, InH + shadowing + fading, preamble detection, rate adaptation, 23
+dBm, Poisson load per cell, 5 seeds x 2 s). Operator B is Wi-Fi; operator
+A is Wi-Fi or NR-U.
+
+| Load per cell | Operator A | B latency (ms) | B throughput (Mbps) | Test |
+|---|---|---|---|---|
+| 50 pkt/s (0.6 Mbps) | Wi-Fi | 4.31 +- 2.61 | 1.72 | reference |
+| | NR-U | 1.96 +- 0.60 | 1.73 | passes |
+| | NR-U, ED -82 dBm + 20 dBm CTS-to-self | 1.73 +- 0.35 | 1.83 | passes |
+| 100 pkt/s (1.2 Mbps) | Wi-Fi | 181 +- 59 | 2.27 | reference |
+| | NR-U | 49.5 +- 50.4 | 3.17 | passes |
+| | NR-U, ED -82 dBm + 20 dBm CTS-to-self | 25.5 +- 33.3 | 3.33 | passes |
+
+- **NR-U passes on the 3GPP layout.** All six cells share one 20 MHz
+  channel, and at 100 pkt/s the middle Wi-Fi cell already saturates when
+  its neighbor is Wi-Fi. An NR-U neighbor costs operator B less than a
+  Wi-Fi one. Why hasn't been isolated; fewer, longer channel accesses are
+  a likely reason. ED -82 dBm + CTS-to-self (Wi-Fi then sees NR-U's
+  COTs) helps further.
+- **Without the -82 dBm re-drop rule the layout isn't meaningful.** With
+  InH shadowing, users 40-60 m from their cell can be out of coverage,
+  and a Wi-Fi-only room's failure ratio went from 0.15 to 0.64.
+  `--layout-min-serving-dbm -82` applies the rule.
+
+So the pre_20 diagnosis (the unfairness comes from asymmetric sensing)
+still holds, but where it bites depends on the propagation, and on the
+3GPP indoor layout NR-U meets the replacement test.
+
+## 9. Limitations
+
+- **Shadowing and fading are opt-in (Step 22).** Sections 3-7 are without them; section 8 is with them, on few seeds.
+- **One topology** in sections 3-7: one AP, one neighbor, STAs and UEs within 5 m, 20 MHz on a single channel, 802.11a rates.
 - **The NAV is optimistic.** Every Wi-Fi node in decoding range honors it, including one that was transmitting when the CTS went out. The preamble mode is an upper bound in the same way.
 - **The replacement test uses unsaturated loads** (except the throughput sweep). The pass criterion is latency-based.
 - **A-MPDU** is 802.11n-style aggregation on the legacy 20 MHz rate table, for the AP downlink only.
 
-## 9. Reproduce
+## 10. Reproduce
 
 ```bash
 python -m analysis.laa_fairness              # baseline replacement test (pre_20.A)
@@ -290,6 +353,7 @@ python -m analysis.laa_fairness_mitigations  # D.1-D.3 scoring (~20 min; or name
 python -m analysis.laa_scell_mitigations     # 19.F LAA scenario (~3 min; --plot-only redraws)
 python -m analysis.laa_revalidation          # pre_22: the test on three Wi-Fi stacks (~12 min)
 python -m analysis.occupancy_revalidation    # pre_22: DTMC validation with the frame exchange (~5 min)
+python -m analysis.realism_study             # Step 22: the test on realistic channels and the TR 38.889 layout (~20 min)
 ```
 
 CSVs land in `analysis/generated/` (untracked). Figures are written there

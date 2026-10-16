@@ -44,7 +44,8 @@ OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "generated")
 
 def run_case(network_b: str, load_a_pps: float, load_b_pps: float, distance_m: float, seed: int,
              sim_time_s: float = 1.0, wifi_config: Optional[Config] = None,
-             nru_config: Optional[Config_NR] = None, wifi_preamble_detect: bool = True) -> Dict:
+             nru_config: Optional[Config_NR] = None, wifi_preamble_detect: bool = True,
+             sim_kw: Optional[Dict] = None) -> Dict:  # Rashed-Step 22.E-10-15-2026: extra run_simulation kwargs
     """One run; returns network A / B throughput and latency plus the
     run's fairness dict."""
     assert network_b in ("wifi", "nru")
@@ -66,6 +67,7 @@ def run_case(network_b: str, load_a_pps: float, load_b_pps: float, distance_m: f
               wifi_traffic_config=ta, nru_traffic_config=tb, fairness_report=True)
     if network_b == "wifi":
         kw["wifi_ap_traffic_configs"] = [ta, tb]
+    kw.update(sim_kw or {})  # Rashed-Step 22.E-10-15-2026: e.g. pathloss / fading (Step 22)
     logging.disable(logging.CRITICAL)
     try:
         with contextlib.redirect_stdout(io.StringIO()):

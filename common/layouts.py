@@ -65,9 +65,11 @@ def _nearest(p: Pos, sites: List[Site]) -> Site:
 
 
 def _drop_associated(rng: random.Random, sites: List[Site], n: int, area_w: float, area_h: float,
-                     inside=None) -> None:
+                     inside=None, serving_ok=None) -> None:
     """n users per site, uniform over the area (optionally `inside(p)`),
-    each kept by its nearest site until every site has n."""
+    each kept by its nearest site until every site has n. serving_ok(site,
+    p) (Step 22.E): drop the position again if its serving power is too low
+    (TR 38.889 A.1.1: below -82 dBm)."""
     need = {id(s): n for s in sites}
     for _ in range(200000):
         if not any(need.values()):
@@ -76,18 +78,21 @@ def _drop_associated(rng: random.Random, sites: List[Site], n: int, area_w: floa
         if inside is not None and not inside(p):
             continue
         s = _nearest(p, sites)
+        if serving_ok is not None and not serving_ok(s, p):  # Rashed-Step 22.E-10-15-2026
+            continue
         if need[id(s)] > 0:
             s.users.append(p)
             need[id(s)] -= 1
     raise RuntimeError("could not drop users for every site")
 
 
-def tr38889_indoor(rng: random.Random, users_per_cell: int = 5) -> Layout:
+def tr38889_indoor(rng: random.Random, users_per_cell: int = 5, serving_ok=None) -> Layout:
     a, b, c, d = 20.0, 40.0, 20.0, 40.0
     xs = [a, a + b, a + 2 * b]
     sites = [Site((x, c), "A") for x in xs] + [Site((x, c + d), "B") for x in xs]
     for op in ("A", "B"):
-        _drop_associated(rng, [s for s in sites if s.operator == op], users_per_cell, 120.0, 80.0)
+        _drop_associated(rng, [s for s in sites if s.operator == op], users_per_cell, 120.0, 80.0,
+                         serving_ok=serving_ok)
     return Layout("tr38889-indoor", 120.0, 80.0, sites)
 
 
@@ -126,7 +131,8 @@ def hex_sites(rings: int, isd: float) -> List[Pos]:
     return out
 
 
-def hexagon(rng: random.Random, rings: int = 1, isd: float = 200.0, users_per_cell: int = 5) -> Layout:
+def hexagon(rng: random.Random, rings: int = 1, isd: float = 200.0, users_per_cell: int = 5,
+            serving_ok=None) -> Layout:
     if rings not in (1, 2):
         raise ValueError("hex layout: rings must be 1 or 2")
     pts = hex_sites(rings, isd)
@@ -138,21 +144,25 @@ def hexagon(rng: random.Random, rings: int = 1, isd: float = 200.0, users_per_ce
     # Inside the network: closer to a site than half the ISD x 2/sqrt(3)
     # (its hexagon) - the nearest-site rule then keeps it in that hexagon.
     inside = lambda p: min(math.hypot(p[0] - s.pos[0], p[1] - s.pos[1]) for s in sites) <= margin
-    _drop_associated(rng, sites, users_per_cell, w, h, inside)
+    _drop_associated(rng, sites, users_per_cell, w, h, inside, serving_ok)
     return Layout("hex", w, h, sites)
 
 
 def build_layout(name: str, seed: int, users_per_cell: Optional[int] = None, rows: Optional[int] = None,
-                 cols: Optional[int] = None, hex_rings: int = 1, hex_isd_m: float = 200.0) -> Layout:
+                 cols: Optional[int] = None, hex_rings: int = 1, hex_isd_m: float = 200.0,
+                 serving_ok=None) -> Layout:
     """The layout for one run; its own RNG (seed-derived), so the rest of
-    the run's random draws don't move."""
+    the run's random draws don't move. serving_ok(site, p): optional
+    coverage rule for tr38889-indoor / hex user drops (Step 22.E)."""
     rng = random.Random(int(seed) * 1_000_003 + 2204)
     kw = {} if users_per_cell is None else {"users_per_cell": users_per_cell}
     grid = {k: v for k, v in (("rows", rows), ("cols", cols)) if v is not None}
     if name == "tr38889-indoor":
         if grid:
             raise ValueError("--layout-rows/--layout-cols don't apply to tr38889-indoor")
-        return tr38889_indoor(rng, **kw)
+        return tr38889_indoor(rng, serving_ok=serving_ok, **kw)
+    if name.startswith("tgax") and serving_ok is not None:
+        raise ValueError("the minimum serving power applies to tr38889-indoor and hex (TGax users stay in their room)")
     if name == "tgax-residential":
         return tgax_residential(rng, **grid, **kw)
     if name == "tgax-enterprise":
@@ -160,7 +170,7 @@ def build_layout(name: str, seed: int, users_per_cell: Optional[int] = None, row
     if name == "hex":
         if grid:
             raise ValueError("--layout-rows/--layout-cols don't apply to hex (use --hex-rings)")
-        return hexagon(rng, hex_rings, hex_isd_m, **kw)
+        return hexagon(rng, hex_rings, hex_isd_m, serving_ok=serving_ok, **kw)
     raise ValueError(f"layout must be one of {LAYOUTS}, got {name!r}")
 
 
@@ -181,3 +191,24 @@ def assign_channels(positions: List[Pos], n_channels: int) -> List[float]:
         chosen.append(best)
     return [CHANNELS_GHZ[c] * 1e9 for c in chosen]
 # Rashed-Step 22.D-10-15-2026-end
+
+
+# Rashed-Step 22.E-10-15-2026-start
+def serving_rule(min_dbm: float, tx_dbm_of, f_hz_of, pathloss=None, seed: int = 0):
+    """serving_ok(site, p) for build_layout: the site's received power at p
+    (its tx power - path loss incl. the model's shadowing, as the run will
+    see it: Propagation is a function of the seed and positions) >= min_dbm.
+    No path-loss model: log-distance, exponent 3. tx_dbm_of / f_hz_of map a
+    Site to its cell's tx power / frequency."""
+    from channel.propagation import Propagation
+    from common.common_phy import rx_power_dbm
+    prop = Propagation(pathloss, seed) if pathloss is not None else None
+
+    def ok(site, p):
+        if prop is not None:
+            pr = tx_dbm_of(site) - prop.loss_db(site.pos, p, f_hz_of(site), True, False)
+        else:
+            pr = rx_power_dbm(tx_dbm_of(site), math.hypot(site.pos[0] - p[0], site.pos[1] - p[1]), f_hz_of(site), n=3.0)
+        return pr >= min_dbm
+    return ok
+# Rashed-Step 22.E-10-15-2026-end

@@ -100,14 +100,25 @@ def _mgmt_config(on, beacon_ms, scan_ms, roam_dbm, hyst_db):
 
 
 # Rashed-Step 22.D-10-15-2026-start
-def _layout_cells(layout, seed, layout_tech, users_per_cell, rows, cols, hex_rings, hex_isd_m):
+def _layout_cells(layout, seed, layout_tech, users_per_cell, rows, cols, hex_rings, hex_isd_m, serving=None):
     """--layout -> this run's cells: AP / gNB positions, their users, area.
     tr38889-indoor: operator A's cells are --layout-tech (default NR-U),
     operator B's Wi-Fi; other layouts: every cell is --layout-tech
     (default Wi-Fi)."""
     from common.layouts import build_layout
-    lay = build_layout(layout, seed, users_per_cell, rows, cols, hex_rings, hex_isd_m)
     tech_a = layout_tech or ("nru" if layout == "tr38889-indoor" else "wifi")
+    # Rashed-Step 22.E-10-15-2026-start
+    # serving = (min dBm, PathLossSpec or None, (Wi-Fi tx dBm, Hz), (NR-U tx
+    # dBm, Hz)): users whose serving cell reaches them below min dBm are
+    # dropped again (--layout-min-serving-dbm; TR 38.889 A.1.1: -82).
+    serving_ok = None
+    if serving is not None:
+        from common.layouts import serving_rule
+        min_dbm, spec, wifi_tf, nru_tf = serving
+        tf = lambda site: nru_tf if (site.operator == "A" and tech_a == "nru") else wifi_tf
+        serving_ok = serving_rule(min_dbm, lambda site: tf(site)[0], lambda site: tf(site)[1], spec, seed)
+    # Rashed-Step 22.E-10-15-2026-end
+    lay = build_layout(layout, seed, users_per_cell, rows, cols, hex_rings, hex_isd_m, serving_ok)
     aps, gnbs = [], []
     for s in lay.sites:
         (gnbs if (s.operator == "A" and tech_a == "nru") else aps).append(s)
@@ -428,6 +439,7 @@ def _cell_freqs(explicit, positions, reuse, n):
 @click.option("--layout-cols", "layout_cols", type=click.IntRange(1, 20), default=None, help="--layout tgax-*: apartment / office columns (default residential 10, enterprise 4).")
 @click.option("--hex-rings", "hex_rings", type=click.IntRange(1, 2), default=1, help="--layout hex: rings around the centre site (1 = 7 sites, 2 = 19).")
 @click.option("--hex-isd-m", "hex_isd_m", type=float, default=200.0, help="--layout hex: inter-site distance (m, default 200).")
+@click.option("--layout-min-serving-dbm", "layout_min_serving_dbm", type=float, default=None, help="--layout tr38889-indoor / hex (Step 22.E): drop a user again while its serving cell reaches it below this power (path loss + the model's shadowing, as the run sees it; TR 38.889 A.1.1 uses -82). Default: no coverage rule.")
 @click.option("--wifi-ap-freq-ghz", "wifi_ap_freq_ghz", type=float, multiple=True, help="Per-AP centre frequency (GHz), repeatable in AP order (Step 22.D); APs without one use --wifi-freq-ghz.")
 @click.option("--nru-gnb-freq-ghz", "nru_gnb_freq_ghz", type=float, multiple=True, help="Per-gNB centre frequency (GHz), repeatable in gNB order (Step 22.D); gNBs without one use --nru-freq-ghz.")
 @click.option("--channel-reuse", "channel_reuse", type=click.IntRange(1, 8), default=None, help="Spread each technology's cells over N 20 MHz channels (36, 40, ... = 5.18, 5.20, ... GHz; Step 22.D): each cell takes the channel whose nearest co-channel cell is farthest away. Needs --layout or every cell's position. Default: one channel per technology, as before.")
@@ -649,6 +661,7 @@ def single_run(
         layout: Optional[str] = None, layout_tech: Optional[str] = None,
         layout_users_per_cell: Optional[int] = None, layout_rows: Optional[int] = None,
         layout_cols: Optional[int] = None, hex_rings: int = 1, hex_isd_m: float = 200.0,
+        layout_min_serving_dbm: Optional[float] = None,  # 22.E
         wifi_ap_freq_ghz: tuple = (), nru_gnb_freq_ghz: tuple = (), channel_reuse: Optional[int] = None,
         cell_report: bool = False,  # 22.D
 ):
@@ -679,6 +692,8 @@ def single_run(
         if hex_isd_m <= 0:
             raise click.UsageError("--hex-isd-m must be > 0")
         try:
+            if layout_min_serving_dbm is not None and layout.startswith("tgax"):
+                raise ValueError("--layout-min-serving-dbm applies to tr38889-indoor and hex")
             first = _layout_cells(layout, seed, layout_tech, layout_users_per_cell, layout_rows, layout_cols,
                                   hex_rings, hex_isd_m)
         except ValueError as e:
@@ -686,9 +701,9 @@ def single_run(
         ap_number, gnb_number = first["ap_number"], first["gnb_number"]
     else:
         if any(explicit(n) for n in ("layout_tech", "layout_users_per_cell", "layout_rows", "layout_cols",
-                                      "hex_rings", "hex_isd_m")):
+                                      "hex_rings", "hex_isd_m", "layout_min_serving_dbm")):
             raise click.UsageError("--layout-tech / --layout-users-per-cell / --layout-rows / --layout-cols / "
-                                   "--hex-rings / --hex-isd-m need --layout")
+                                   "--hex-rings / --hex-isd-m / --layout-min-serving-dbm need --layout")
         if ap_number is None or gnb_number is None:
             raise click.UsageError("--ap-number and --gnb-number are required (or use --layout)")
     # Rashed-Step 22.D-10-15-2026-end
@@ -1045,8 +1060,11 @@ def single_run(
         curr_seed = seed + i
         # Rashed-Step 22.D-10-15-2026-start
         if layout is not None:
+            serving = (None if layout_min_serving_dbm is None else
+                       (layout_min_serving_dbm, pathloss, (wifi_tx_power_dbm, wifi_freq_ghz * 1e9),
+                        (nru_tx_power_dbm, nru_freq_ghz * 1e9)))  # 22.E
             cells = _layout_cells(layout, curr_seed, layout_tech, layout_users_per_cell, layout_rows, layout_cols,
-                                  hex_rings, hex_isd_m)
+                                  hex_rings, hex_isd_m, serving)
         else:
             cells = {"area_w": area_w, "area_h": area_h, "ap_positions": ap_positions,
                      "gnb_positions": gnb_positions, "sta_positions": None, "ue_positions": None,
