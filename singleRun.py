@@ -3,6 +3,7 @@ import sys
 
 from simulation import *
 from channel.propagation import pathloss_spec_from_cli  # Rashed-Step 22.A-10-15-2026
+from dataclasses import replace as _dc_replace  # Rashed-Step 22.D-10-15-2026
 # Rashed-Step 16.F-10-02-2026-start
 from core.network import core_config_from_cli
 # Rashed-Step 18.A-10-06-2026-start
@@ -98,6 +99,41 @@ def _mgmt_config(on, beacon_ms, scan_ms, roam_dbm, hyst_db):
                       roam_threshold_dbm=roam_dbm, roam_hysteresis_db=hyst_db)
 
 
+# Rashed-Step 22.D-10-15-2026-start
+def _layout_cells(layout, seed, layout_tech, users_per_cell, rows, cols, hex_rings, hex_isd_m):
+    """--layout -> this run's cells: AP / gNB positions, their users, area.
+    tr38889-indoor: operator A's cells are --layout-tech (default NR-U),
+    operator B's Wi-Fi; other layouts: every cell is --layout-tech
+    (default Wi-Fi)."""
+    from common.layouts import build_layout
+    lay = build_layout(layout, seed, users_per_cell, rows, cols, hex_rings, hex_isd_m)
+    tech_a = layout_tech or ("nru" if layout == "tr38889-indoor" else "wifi")
+    aps, gnbs = [], []
+    for s in lay.sites:
+        (gnbs if (s.operator == "A" and tech_a == "nru") else aps).append(s)
+    return {"ap_number": len(aps), "gnb_number": len(gnbs), "area_w": lay.area_w, "area_h": lay.area_h,
+            "ap_positions": [s.pos for s in aps] or None, "gnb_positions": [s.pos for s in gnbs] or None,
+            "sta_positions": [list(s.users) for s in aps] or None,
+            "ue_positions": [list(s.users) for s in gnbs] or None, "room_size_m": lay.room_size_m}
+
+
+def _cell_freqs(explicit, positions, reuse, n):
+    """Per-cell centre frequencies (Hz): the explicit list, else a reuse
+    pattern over the cells' positions, else None (every cell on the
+    technology's one frequency)."""
+    from common.layouts import assign_channels
+    if explicit:
+        if len(explicit) > n:
+            raise click.UsageError(f"{len(explicit)} per-cell frequencies for {n} cells")
+        return [f * 1e9 for f in explicit]
+    if reuse is not None and n > 0:
+        if positions is None or len(positions) < n:
+            raise click.UsageError("--channel-reuse needs --layout or a position for every cell (--ap-pos / --gnb-pos)")
+        return assign_channels(list(positions)[:n], reuse)
+    return None
+# Rashed-Step 22.D-10-15-2026-end
+
+
 # Rashed-Step 20.D-10-08-2026-end
 @click.command()
 @click.option("-r", "--runs", "runs", default=10, help="Number of simulation runs")
@@ -106,15 +142,15 @@ def _mgmt_config(on, beacon_ms, scan_ms, roam_dbm, hyst_db):
     "--ap-number",
     "ap_number",
     type=int,
-    required=True,
-    help="Number of Wi-Fi stations",
+    default=None,  # 22.D: required unless --layout
+    help="Number of Wi-Fi stations (required unless --layout sets it)",
 )
 @click.option(
     "--gnb-number",
     "gnb_number",
     type=int,
-    required=True,
-    help="Number of NR-U gNBs",
+    default=None,  # 22.D: required unless --layout
+    help="Number of NR-U gNBs (required unless --layout sets it)",
 )
 @click.option(
     "-t",
@@ -384,6 +420,19 @@ def _mgmt_config(on, beacon_ms, scan_ms, roam_dbm, hyst_db):
 @click.option("--fading-k-db", "fading_k_db", type=float, default=None, help="--fading without a --pathloss-model: Rician K (dB) on every link (default: Rayleigh).")
 @click.option("--fading-env-speed-mps", "fading_env_speed_mps", type=float, default=None, help="--fading: speed (m/s) of the moving environment that makes static links fade (default 0.333 = 1.2 km/h, the TGn/TGax value: ~5.8 Hz Doppler at 5 GHz).")
 # Rashed-Step 22.C-10-15-2026-end
+# Rashed-Step 22.D-10-15-2026-start
+@click.option("--layout", "layout", type=click.Choice(["tr38889-indoor", "tgax-residential", "tgax-enterprise", "hex"]), default=None, help="Multi-cell deployment (Step 22.D): tr38889-indoor = the 3GPP NR-U coexistence room (120 x 80 m, two operators x 3 cells, 5 users per cell); tgax-residential = 802.11ax SS1 apartments (10 x 10 m, one AP + STAs each); tgax-enterprise = SS2 offices (20 x 20 m, 4 APs each); hex = hexagonal sites (--hex-rings, --hex-isd-m). Sets the AP / gNB numbers, positions, users and area - don't combine with --ap-number/--gnb-number/--ap-pos/--gnb-pos/--area-w/--area-h/--wifi-stas-per-ap.")
+@click.option("--layout-tech", "layout_tech", type=click.Choice(["wifi", "nru"]), default=None, help="--layout: technology of the layout's cells (tr38889-indoor: operator A's, operator B is always Wi-Fi; default nru there, wifi elsewhere).")
+@click.option("--layout-users-per-cell", "layout_users_per_cell", type=click.IntRange(1, 100), default=None, help="--layout: users per cell (default tr38889-indoor 5, tgax-residential 2, tgax-enterprise 4, hex 5).")
+@click.option("--layout-rows", "layout_rows", type=click.IntRange(1, 20), default=None, help="--layout tgax-*: apartment / office rows (default 2).")
+@click.option("--layout-cols", "layout_cols", type=click.IntRange(1, 20), default=None, help="--layout tgax-*: apartment / office columns (default residential 10, enterprise 4).")
+@click.option("--hex-rings", "hex_rings", type=click.IntRange(1, 2), default=1, help="--layout hex: rings around the centre site (1 = 7 sites, 2 = 19).")
+@click.option("--hex-isd-m", "hex_isd_m", type=float, default=200.0, help="--layout hex: inter-site distance (m, default 200).")
+@click.option("--wifi-ap-freq-ghz", "wifi_ap_freq_ghz", type=float, multiple=True, help="Per-AP centre frequency (GHz), repeatable in AP order (Step 22.D); APs without one use --wifi-freq-ghz.")
+@click.option("--nru-gnb-freq-ghz", "nru_gnb_freq_ghz", type=float, multiple=True, help="Per-gNB centre frequency (GHz), repeatable in gNB order (Step 22.D); gNBs without one use --nru-freq-ghz.")
+@click.option("--channel-reuse", "channel_reuse", type=click.IntRange(1, 8), default=None, help="Spread each technology's cells over N 20 MHz channels (36, 40, ... = 5.18, 5.20, ... GHz; Step 22.D): each cell takes the channel whose nearest co-channel cell is farthest away. Needs --layout or every cell's position. Default: one channel per technology, as before.")
+@click.option("--cell-report", "cell_report", is_flag=True, default=False, help="Print a Cell Report (Step 22.D): per AP / gNB its channel, users and throughput; per technology Jain's index over cells and over users, mean / median / 5th-percentile user throughput.")
+# Rashed-Step 22.D-10-15-2026-end
 @click.option("--shadowing-correlated", "shadowing_correlated", is_flag=True, default=False, help="With --shadowing-sigma-db (Step 22.B): the shadowing becomes the same in both directions (A->B = B->A) and spatially correlated - it changes smoothly as a node moves (correlation exp(-distance / --shadowing-decorr-m)) instead of a fresh draw at every position. Default (unset) = the original independent draws, byte-identical.")
 @click.option("--shadowing-decorr-m", "shadowing_decorr_m", type=float, default=None, help="Decorrelation distance (m) for --shadowing-correlated (default 10, the 38.901 InH LOS value).")
 # Rashed-Step 22.B-10-15-2026-end
@@ -597,6 +646,11 @@ def single_run(
         shadowing_decorr_m: Optional[float] = None,  # 22.B
         fading: bool = False, fading_k_db: Optional[float] = None,
         fading_env_speed_mps: Optional[float] = None,  # 22.C
+        layout: Optional[str] = None, layout_tech: Optional[str] = None,
+        layout_users_per_cell: Optional[int] = None, layout_rows: Optional[int] = None,
+        layout_cols: Optional[int] = None, hex_rings: int = 1, hex_isd_m: float = 200.0,
+        wifi_ap_freq_ghz: tuple = (), nru_gnb_freq_ghz: tuple = (), channel_reuse: Optional[int] = None,
+        cell_report: bool = False,  # 22.D
 ):
     # Rashed-Step 22.A-10-15-2026-start
     try:
@@ -610,6 +664,34 @@ def single_run(
     if shadowing_decorr_m is not None and (not shadowing_correlated or shadowing_decorr_m <= 0):
         raise click.UsageError("--shadowing-decorr-m needs --shadowing-correlated and a value > 0")
     # Rashed-Step 22.B-10-15-2026-end
+    # Rashed-Step 22.D-10-15-2026-start
+    ctx = click.get_current_context(silent=True)
+
+    def explicit(name):
+        src = ctx.get_parameter_source(name) if ctx is not None else None
+        return src is not None and src.name != "DEFAULT"
+    if layout is not None:
+        clash = [n for n in ("ap_number", "gnb_number", "ap_pos", "gnb_pos", "area_w", "area_h",
+                             "wifi_stas_per_ap") if explicit(n)]
+        if clash:
+            raise click.UsageError("--layout sets the cells, users and area - drop " +
+                                   ", ".join("--" + n.replace("_", "-") for n in clash))
+        if hex_isd_m <= 0:
+            raise click.UsageError("--hex-isd-m must be > 0")
+        try:
+            first = _layout_cells(layout, seed, layout_tech, layout_users_per_cell, layout_rows, layout_cols,
+                                  hex_rings, hex_isd_m)
+        except ValueError as e:
+            raise click.UsageError(str(e))
+        ap_number, gnb_number = first["ap_number"], first["gnb_number"]
+    else:
+        if any(explicit(n) for n in ("layout_tech", "layout_users_per_cell", "layout_rows", "layout_cols",
+                                      "hex_rings", "hex_isd_m")):
+            raise click.UsageError("--layout-tech / --layout-users-per-cell / --layout-rows / --layout-cols / "
+                                   "--hex-rings / --hex-isd-m need --layout")
+        if ap_number is None or gnb_number is None:
+            raise click.UsageError("--ap-number and --gnb-number are required (or use --layout)")
+    # Rashed-Step 22.D-10-15-2026-end
     # Rashed-Step 22.C-10-15-2026-start
     if not fading and (fading_k_db is not None or fading_env_speed_mps is not None):
         raise click.UsageError("--fading-k-db / --fading-env-speed-mps need --fading")
@@ -961,6 +1043,21 @@ def single_run(
     # Rashed-Step 19.E.2-10-07-2026-end
     for i in range(0, runs):
         curr_seed = seed + i
+        # Rashed-Step 22.D-10-15-2026-start
+        if layout is not None:
+            cells = _layout_cells(layout, curr_seed, layout_tech, layout_users_per_cell, layout_rows, layout_cols,
+                                  hex_rings, hex_isd_m)
+        else:
+            cells = {"area_w": area_w, "area_h": area_h, "ap_positions": ap_positions,
+                     "gnb_positions": gnb_positions, "sta_positions": None, "ue_positions": None,
+                     "room_size_m": None}
+        run_pathloss = pathloss
+        if (pathloss is not None and pathloss.model.startswith("tgax") and pathloss.room_size_m is None
+                and cells["room_size_m"] is not None):
+            run_pathloss = _dc_replace(pathloss, room_size_m=cells["room_size_m"])  # walls on the layout's rooms
+        ap_freqs = _cell_freqs(wifi_ap_freq_ghz, cells["ap_positions"], channel_reuse, ap_number)
+        gnb_freqs = _cell_freqs(nru_gnb_freq_ghz, cells["gnb_positions"], channel_reuse, gnb_number)
+        # Rashed-Step 22.D-10-15-2026-end
         print("before simulation")
         run_simulation(ap_number, gnb_number, curr_seed, simulation_time,
                        # Rashed-Step 5.C-02-06-2026-start
@@ -1064,8 +1161,8 @@ def single_run(
                        # Rashed-Step 5.C-02-06-2026-end
                        backoffs, airtime_data, airtime_control, airtime_data_NR, airtime_control_NR, rogue_wifi,
                        # Rashed-Step 5.A-02-06-2026-start
-                       area_w=area_w, area_h=area_h,
-                       ap_positions=ap_positions, gnb_positions=gnb_positions,
+                       area_w=cells["area_w"], area_h=cells["area_h"],  # 22.D: the layout's, else as given
+                       ap_positions=cells["ap_positions"], gnb_positions=cells["gnb_positions"],
                        sta_radius=sta_radius, ue_radius=ue_radius,
                        # Rashed-Step 5.A-02-06-2026-end
                        # Rashed-Step 5.B-02-06-2026-start
@@ -1113,10 +1210,12 @@ def single_run(
                        nr_ue_uplink_enabled=nr_ue_uplink_enabled, nr_rrc_enabled=nr_rrc_enabled,
                        nru_scell=nru_scell,  # 19.F
                        fairness_report=fairness_report,  # pre_20.A
-                       pathloss=pathloss,  # 22.A
+                       pathloss=run_pathloss,  # 22.A (22.D: TGax walls on a layout's rooms)
                        shadowing_correlated=shadowing_correlated,
                        shadowing_decorr_m=shadowing_decorr_m if shadowing_decorr_m is not None else 10.0,  # 22.B
                        fading=fading_spec,  # 22.C
+                       sta_positions=cells["sta_positions"], ue_positions=cells["ue_positions"],
+                       wifi_ap_freqs_hz=ap_freqs, nru_gnb_freqs_hz=gnb_freqs, cell_report=cell_report,  # 22.D
                        # Rashed-Step 19.E.2-10-07-2026-end
                        # Rashed-Step 16.F-10-02-2026-end
                        )

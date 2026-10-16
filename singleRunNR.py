@@ -41,7 +41,7 @@ from ran.protocol.handover import handover_config_from_cli
 @click.command()
 @click.option("-r", "--runs", "runs", default=1, help="Number of simulation runs")
 @click.option("--seed", "seed", default=1, help="Seed for simulation")
-@click.option("--gnb-number", "gnb_number", type=int, required=True, help="Number of licensed-NR gNBs")
+@click.option("--gnb-number", "gnb_number", type=int, default=None, help="Number of licensed-NR gNBs (required unless --layout hex)")  # 22.D
 @click.option("--ues-per-gnb", "ues_per_gnb", type=int, default=4, help="Number of UEs associated to each gNB")
 @click.option("-t", "--simulation-time", "simulation_time", default=1.0, help="Duration of the simulation in s")
 @click.option("--area-w", "area_w", type=float, default=200.0, help="Deployment area width (m)")
@@ -145,6 +145,13 @@ from ran.protocol.handover import handover_config_from_cli
 @click.option("--fading-k-db", "fading_k_db", type=float, default=None, help="--fading without a --pathloss-model: Rician K (dB) on every link (default: Rayleigh).")
 @click.option("--fading-env-speed-mps", "fading_env_speed_mps", type=float, default=None, help="--fading: speed (m/s) of the moving environment that makes static links fade (default 0.333 = 1.2 km/h, the TGn/TGax value: ~5.8 Hz Doppler at 5 GHz).")
 # Rashed-Step 22.C-10-15-2026-end
+# Rashed-Step 22.D-10-15-2026-start
+@click.option("--layout", "layout", type=click.Choice(["hex"]), default=None, help="Hexagonal multi-cell deployment (Step 22.D): --hex-rings rings of sites at --hex-isd-m, users uniform in each site's hexagon. Sets the gNB number, positions, users and area - don't combine with --gnb-number/--gnb-pos/--ues-per-gnb/--area-w/--area-h.")
+@click.option("--hex-rings", "hex_rings", type=click.IntRange(1, 2), default=1, help="--layout hex: rings around the centre site (1 = 7 sites, 2 = 19).")
+@click.option("--hex-isd-m", "hex_isd_m", type=float, default=200.0, help="--layout hex: inter-site distance (m, default 200).")
+@click.option("--layout-users-per-cell", "layout_users_per_cell", type=click.IntRange(1, 100), default=None, help="--layout hex: users per cell (default 5).")
+@click.option("--cell-report", "cell_report", is_flag=True, default=False, help="Print a Cell Report (Step 22.D): per gNB its users and throughput; Jain's index over cells and over users, mean / median / 5th-percentile user throughput.")
+# Rashed-Step 22.D-10-15-2026-end
 # Rashed-Step 22.B-10-15-2026-end
 # Rashed-Step 22.A-10-15-2026-end
 # Rashed-Step 19.D.2-10-07-2026-end
@@ -201,6 +208,7 @@ def single_run_nr(
         tgax_room_size_m=None,  # 22.A
         pathloss_shadowing=False,  # 22.B
         fading=False, fading_k_db=None, fading_env_speed_mps=None,  # 22.C
+        layout=None, hex_rings=1, hex_isd_m=200.0, layout_users_per_cell=None, cell_report=False,  # 22.D
 ):
     # Rashed-Step 22.A-10-15-2026-start
     try:
@@ -219,6 +227,28 @@ def single_run_nr(
     # Rashed-Step 22.C-10-15-2026-end
     # Rashed-Step 22.A-10-15-2026-end
     gnb_positions = parse_pos_list_nr(gnb_pos, "--gnb-pos") if gnb_pos else None
+    # Rashed-Step 22.D-10-15-2026-start
+    ctx = click.get_current_context(silent=True)
+
+    def explicit(name):
+        src = ctx.get_parameter_source(name) if ctx is not None else None
+        return src is not None and src.name != "DEFAULT"
+    if layout is not None:
+        clash = [n for n in ("gnb_number", "gnb_pos", "ues_per_gnb", "area_w", "area_h") if explicit(n)]
+        if clash:
+            raise click.UsageError("--layout sets the cells, users and area - drop " +
+                                   ", ".join("--" + n.replace("_", "-") for n in clash))
+        if hex_isd_m <= 0:
+            raise click.UsageError("--hex-isd-m must be > 0")
+        from common.layouts import build_layout
+        gnb_number = len(build_layout("hex", seed, layout_users_per_cell, hex_rings=hex_rings,
+                                      hex_isd_m=hex_isd_m).sites)
+    else:
+        if any(explicit(n) for n in ("hex_rings", "hex_isd_m", "layout_users_per_cell")):
+            raise click.UsageError("--hex-rings / --hex-isd-m / --layout-users-per-cell need --layout hex")
+        if gnb_number is None:
+            raise click.UsageError("--gnb-number is required (or use --layout hex)")
+    # Rashed-Step 22.D-10-15-2026-end
 
     # Rashed-Step 15.G-09-18-2026-start
     if rrc_enabled and not ue_uplink_enabled:
@@ -392,10 +422,19 @@ def single_run_nr(
 
     for i in range(runs):
         curr_seed = seed + i
+        # Rashed-Step 22.D-10-15-2026-start
+        run_area, run_gnb_pos, run_ue_pos = (area_w, area_h), gnb_positions, None
+        if layout is not None:
+            from common.layouts import build_layout
+            lay = build_layout("hex", curr_seed, layout_users_per_cell, hex_rings=hex_rings, hex_isd_m=hex_isd_m)
+            run_area = (lay.area_w, lay.area_h)
+            run_gnb_pos = [s.pos for s in lay.sites]
+            run_ue_pos = [list(s.users) for s in lay.sites]
+        # Rashed-Step 22.D-10-15-2026-end
         run_simulation_licensed_nr(
             gnb_number, curr_seed, simulation_time, config,
-            area_w=area_w, area_h=area_h,
-            gnb_positions=gnb_positions, ue_radius=ue_radius,
+            area_w=run_area[0], area_h=run_area[1],  # 22.D: the layout's, else as given
+            gnb_positions=run_gnb_pos, ue_radius=ue_radius,
             nr_ues_per_gnb=ues_per_gnb,
             gnb_mobility_speed_mps=gnb_mobility_speed_mps,
             ue_mobility_speed_mps=ue_mobility_speed_mps,
@@ -416,6 +455,7 @@ def single_run_nr(
             # Rashed-Step 18.A-10-06-2026-end
             pathloss=pathloss,  # 22.A
             fading=fading_spec,  # 22.C
+            ue_positions=run_ue_pos, cell_report=cell_report,  # 22.D
         )
 
 

@@ -255,6 +255,17 @@ def run_simulation(
         shadowing_decorr_m: float = 10.0,
         # Rashed-Step 22.B-10-15-2026-end
         fading: Optional[tuple] = None,  # Rashed-Step 22.C-10-15-2026: (K dB or None, env speed or None)
+        # Rashed-Step 22.D-10-15-2026-start
+        # Multi-cell layouts (common/layouts.py, singleRun.py --layout):
+        # per-AP / per-gNB user positions (lists of positions; the number
+        # of users per cell follows), per-cell centre frequencies (Hz), and
+        # the per-cell report. None / False = as before.
+        sta_positions: Optional[list] = None,
+        ue_positions: Optional[list] = None,
+        wifi_ap_freqs_hz: Optional[list] = None,
+        nru_gnb_freqs_hz: Optional[list] = None,
+        cell_report: bool = False,
+        # Rashed-Step 22.D-10-15-2026-end
 ):
     random.seed(seed)
     environment = simpy.Environment()
@@ -343,9 +354,14 @@ def run_simulation(
                                             ap_mobility_speed_mps, mobility_pause_s, ap_pos)
         # Rashed-Step 5.G-02-06-2026-end
 
+        # Rashed-Step 22.D-10-15-2026-start
+        ap_cfg = (_dc_replace(wifi_config, f_ghz=wifi_ap_freqs_hz[i - 1])
+                  if wifi_ap_freqs_hz is not None and i - 1 < len(wifi_ap_freqs_hz) else wifi_config)
+        cell_users = sta_positions[i - 1] if sta_positions is not None and i - 1 < len(sta_positions) else None
+        # Rashed-Step 22.D-10-15-2026-end
         stas_for_ap = []
-        for k in range(1, wifi_stas_per_ap + 1):
-            sta_pos = rand_pos_near(ap_pos, radius=sta_radius)
+        for k in range(1, (len(cell_users) if cell_users is not None else wifi_stas_per_ap) + 1):  # 22.D
+            sta_pos = cell_users[k - 1] if cell_users is not None else rand_pos_near(ap_pos, radius=sta_radius)  # 22.D
             # Rashed-Step 5.G-02-06-2026-start
             sta_mobility = None
             if sta_mobility_speed_mps > 0.0:
@@ -364,7 +380,7 @@ def run_simulation(
                 # Rashed-Step pre_17.B-10-04-2026-start
                 env=environment if wifi_sta_uplink_enabled else None,
                 channel=channel if wifi_sta_uplink_enabled else None,
-                config=wifi_config if wifi_sta_uplink_enabled else None,
+                config=ap_cfg if wifi_sta_uplink_enabled else None,  # 22.D: the AP's channel
                 uplink_enabled=wifi_sta_uplink_enabled,
                 traffic_config=wifi_sta_traffic_config if wifi_sta_uplink_enabled else None,  # 20.B
                 # Rashed-Step pre_17.B-10-04-2026-end
@@ -394,7 +410,7 @@ def run_simulation(
                 channel,
                 ap_pos,
                 stas_for_ap,
-                wifi_config,
+                ap_cfg,  # 22.D: wifi_config, or with this AP's own channel
                 # Rashed-Step 5.G-02-06-2026-start
                 mobility=ap_mobility,
                 # Rashed-Step 5.G-02-06-2026-end
@@ -439,9 +455,14 @@ def run_simulation(
                                            gnb_mobility_linear_duration_s)
         # Rashed-Step 14.D-08-28-2026-end
 
+        # Rashed-Step 22.D-10-15-2026-start
+        gnb_cfg = (_dc_replace(configNr, f_ghz=nru_gnb_freqs_hz[i - 1])
+                   if nru_gnb_freqs_hz is not None and i - 1 < len(nru_gnb_freqs_hz) else configNr)
+        cell_users = ue_positions[i - 1] if ue_positions is not None and i - 1 < len(ue_positions) else None
+        # Rashed-Step 22.D-10-15-2026-end
         ues_for_gnb = []
-        for k in range(1, nr_ues_per_gnb + 1):
-            ue_pos = rand_pos_near(gnb_pos, radius=ue_radius)
+        for k in range(1, (len(cell_users) if cell_users is not None else nr_ues_per_gnb) + 1):  # 22.D
+            ue_pos = cell_users[k - 1] if cell_users is not None else rand_pos_near(gnb_pos, radius=ue_radius)  # 22.D
             # Rashed-Step 5.G-02-06-2026-start
             ue_mobility = None
             if ue_mobility_speed_mps > 0.0:
@@ -475,7 +496,7 @@ def run_simulation(
                 # Rashed-Step 15.G-09-18-2026-start
                 env=environment if nru_ue_uplink_enabled else None,
                 channel=channel if nru_ue_uplink_enabled else None,
-                config_nr=configNr if nru_ue_uplink_enabled else None,
+                config_nr=gnb_cfg if nru_ue_uplink_enabled else None,  # 22.D: the gNB's channel
                 uplink_enabled=nru_ue_uplink_enabled,
                 rrc_enabled=nru_rrc_enabled,
                 # Rashed-Step 15.G-09-18-2026-end
@@ -490,7 +511,7 @@ def run_simulation(
             channel,
             gnb_pos,
             ues_for_gnb,
-            configNr,
+            gnb_cfg,  # 22.D: configNr, or with this gNB's own channel
             # Rashed-Step 5.G-02-06-2026-start
             mobility=gnb_mobility,
             # Rashed-Step 5.G-02-06-2026-end
@@ -972,6 +993,18 @@ def run_simulation(
                                              "p95_latency_us": st.get("p95_latency_us"),
                                              "delivered": st["delivered"], "dropped": st["dropped"]}
     # Rashed-Step pre_20.A-10-08-2026-end
+    # Rashed-Step 22.D-10-15-2026-start
+    if cell_report:
+        from common.cell_report import compute_cell_report, print_cell_report
+        cells = ([(ap.name, "WiFi", ap.config.f_ghz, [s.name for s in getattr(ap, "sta_list", [])],
+                   list(getattr(ap, "packet_log", [])) + [p for s in getattr(ap, "sta_list", [])
+                                                        for p in getattr(s, "packet_log", [])])
+                  for ap in wifi_aps]
+                 + [(g.name, "NRU", g.config_nr.f_ghz, [u.name for u in g.ue_list],
+                     list(g.packet_log) + [p for u in g.ue_list for p in getattr(u, "packet_log", [])])
+                    for g in gnbs])
+        print_cell_report(compute_cell_report(cells, simulation_time))
+    # Rashed-Step 22.D-10-15-2026-end
     # Rashed-Step 18.A-10-06-2026-start
     print_error_model_stats(error_model)
     # Rashed-Step 18.A-10-06-2026-end

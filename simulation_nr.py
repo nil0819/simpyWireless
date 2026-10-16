@@ -93,7 +93,8 @@ def build_licensed_nr_cells(environment, channel, number_of_gnb: int, config: Co
                             area_w: float, area_h: float, gnb_positions: Optional[List[Pos]],
                             ue_radius: float, nr_ues_per_gnb: int, gnb_mobility_speed_mps: float,
                             ue_mobility_speed_mps: float, mobility_pause_s: float,
-                            nr_ue_uplink_enabled: bool, nr_rrc_enabled: bool) -> list:
+                            nr_ue_uplink_enabled: bool, nr_rrc_enabled: bool,
+                            ue_positions: Optional[list] = None) -> list:  # 22.D: per-gNB UE positions
     """Licensed-NR gNBs with their UEs on `channel`; neighbors wired."""
     gnbs = []
     for i in range(1, number_of_gnb + 1):
@@ -108,9 +109,10 @@ def build_licensed_nr_cells(environment, channel, number_of_gnb: int, config: Co
             gnb_mobility = WaypointMobility(environment, area_w, area_h,
                                              gnb_mobility_speed_mps, mobility_pause_s, gnb_pos)
 
+        cell_users = ue_positions[i - 1] if ue_positions is not None and i - 1 < len(ue_positions) else None  # 22.D
         ues_for_gnb = []
-        for k in range(1, nr_ues_per_gnb + 1):
-            ue_pos = rand_pos_near(gnb_pos, radius=ue_radius)
+        for k in range(1, (len(cell_users) if cell_users is not None else nr_ues_per_gnb) + 1):  # 22.D
+            ue_pos = cell_users[k - 1] if cell_users is not None else rand_pos_near(gnb_pos, radius=ue_radius)  # 22.D
             ue_mobility = None
             if ue_mobility_speed_mps > 0.0:
                 ue_mobility = WaypointMobility(environment, area_w, area_h,
@@ -362,6 +364,7 @@ def run_simulation_licensed_nr(
         # Rashed-Step 18.A-10-06-2026-end
         pathloss=None,  # Rashed-Step 22.A-10-15-2026: channel.propagation.PathLossSpec, None = log-distance
         fading=None,  # Rashed-Step 22.C-10-15-2026: (K dB or None, env speed or None), None = no fading
+        ue_positions=None, cell_report=False,  # Rashed-Step 22.D-10-15-2026: per-gNB UE positions, Cell Report
 ):
     random.seed(seed)
     # Rashed-Step 18.A-10-06-2026-start
@@ -394,7 +397,7 @@ def run_simulation_licensed_nr(
     gnbs = build_licensed_nr_cells(environment, channel, number_of_gnb, config, area_w, area_h,
                                    gnb_positions, ue_radius, nr_ues_per_gnb, gnb_mobility_speed_mps,
                                    ue_mobility_speed_mps, mobility_pause_s, nr_ue_uplink_enabled,
-                                   nr_rrc_enabled)
+                                   nr_rrc_enabled, ue_positions=ue_positions)  # 22.D
     print_licensed_nr_topology(gnbs, config)
     # Rashed-Step 19.E.1-10-07-2026-end
 
@@ -417,6 +420,14 @@ def run_simulation_licensed_nr(
 
     # Rashed-Step 19.E.1-10-07-2026-start
     rep = report_licensed_nr(gnbs, config, simulation_time, environment, nr_ue_uplink_enabled, core)
+    # Rashed-Step 22.D-10-15-2026-start
+    if cell_report:
+        from common.cell_report import compute_cell_report, print_cell_report
+        print_cell_report(compute_cell_report(
+            [(g.name, "NR", config.f_ghz, [u.name for u in g.ue_list],
+              list(g.packet_log) + [p for u in g.ue_list for p in getattr(u, "packet_log", [])]) for g in gnbs],
+            simulation_time))
+    # Rashed-Step 22.D-10-15-2026-end
     total_succ, total_fail = rep["total_succ"], rep["total_fail"]
     overall_success_rate, overall_thr_mbps = rep["overall_success_rate"], rep["overall_thr_mbps"]
     ul_thr_mbps, nr_rrc_stats, nr_rach_stats = rep["ul_thr_mbps"], rep["rrc"], rep["rach"]

@@ -1156,6 +1156,7 @@ class GnbLicensedNR:
                     eff = NR_MCS_TABLE[mcs][1]
                     bits = eff * (rb_count * self.rb_bandwidth_hz) * (self.slot_us / 1e6)
                     self.sent_completed(bits)
+                    packet.tb_bits = bits  # Rashed-Step 22.D-10-15-2026: the slot's delivered bits (Cell Report)
                     packet.status = "DELIVERED"
                     packet.delivered_at = self.env.now
                     log(self, f"UE {tx.rx_pos} slot OK: SINR={sinr:.2f} dB, MCS={mcs}, RBs={rb_count}, bits={bits:.0f}")
@@ -1288,6 +1289,7 @@ class GnbLicensedNR:
                     eff = NR_MCS_TABLE[mcs][1]
                     bits = eff * (rb_count * self.rb_bandwidth_hz) * (self.slot_us / 1e6)
                     self.sent_completed_ul(bits)
+                    packet.tb_bits = bits  # Rashed-Step 22.D-10-15-2026: the slot's delivered bits (Cell Report)
                     packet.status = "DELIVERED"
                     packet.delivered_at = self.env.now
                     log(self, f"UL UE {tx.tx_id} slot OK: SINR={sinr:.2f} dB, MCS={mcs}, RBs={rb_count}, bits={bits:.0f}")
