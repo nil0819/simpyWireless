@@ -31,7 +31,8 @@ def compute_file_stats(packets: Iterable) -> Dict[str, Any]:
     done = [f for f in files.values() if not f["dropped"] and f["delivered"] >= f["n"] and f["last"] is not None]
     t_ms = [(f["last"] - f["arrival"]) / 1000.0 for f in done]
     upt = [f["bytes"] * 8 / max(1e-9, (f["last"] - f["arrival"])) for f in done]   # bits/us = Mbps
-    out = {"files_seen": len(files), "files_completed": len(done)}
+    out = {"files_seen": len(files), "files_completed": len(done),
+           "upt_mbps": upt, "transfer_ms": t_ms}  # Rashed-Step 23.F-10-17-2026: per-file values (pooling)
     if done:
         out.update(upt_mean_mbps=float(np.mean(upt)), upt_median_mbps=float(np.median(upt)),
                    upt_p5_mbps=float(np.percentile(upt, 5)), transfer_mean_ms=float(np.mean(t_ms)),

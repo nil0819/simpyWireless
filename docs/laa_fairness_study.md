@@ -336,15 +336,91 @@ So the pre_20 diagnosis (the unfairness comes from asymmetric sensing)
 still holds, but where it bites depends on the propagation, and on the
 3GPP indoor layout NR-U meets the replacement test.
 
-## 9. Limitations
+## 9. With the Step 23 fidelity fixes
 
-- **Shadowing and fading are opt-in (Step 22).** Sections 3-7 are without them; section 8 is with them, on few seeds.
+Step 23 removed the remaining simplifications that favoured one side:
+
+- **Collision window** (`--cca-detect-us 6`). Sensing used to be
+  instantaneous, so whichever node started first always won and Wi-Fi
+  and NR-U almost never collided. Now a transmission is invisible to
+  sensing for its first 6 us (CCA time + RX/TX turnaround). In the DTMC
+  scenario this brings Wi-Fi/NR-U collisions to ~2.9 per second, against
+  the model's 2.3.
+- **Real NR-U payload** (pre_23.B, default). A burst-model COT used to
+  carry one 1500 B packet; it now carries what its MCS and duration hold.
+- **FTP Model 3 traffic** (`--wifi-traffic-model ftp3`,
+  `--nru-traffic-model ftp3`), the traffic TR 36.889 defines the test
+  with: 0.5 MB files arriving per user. The metric is the user-perceived
+  throughput (UPT): file size over transfer time.
+- **Confidence intervals.** Studies run 20 seeds in parallel and report
+  mean +- 95 % CI.
+
+`python -m analysis.coexistence_study` runs the checks below (~50 min on
+8 processes).
+
+**The DTMC comparison is unchanged.** Under the defaults, Wi-Fi and NR-U
+occupancy for 1-6 APs equal the pre_22.C numbers exactly. Every Step 23
+option is off by default, and pre_23.B doesn't touch saturated channel
+access.
+
+**The replacement test on its own layout** (TR 38.889 indoor; FTP Model 3
+on every cell; InH-Office + shadowing + fading; collision window;
+preamble detection; rate adaptation; 23 dBm; NR-U slots model; 20 seeds
+x 10 s). Operator B is Wi-Fi. The table gives B's UPT averaged over its
+files, mean +- 95 % CI over the seeds.
+
+| Files/s per cell | Operator A | B UPT (Mbps) | B 5th pct UPT | B transfer (ms) | Test |
+|---|---|---|---|---|---|
+| 0.25 (1 Mbps) | Wi-Fi | 25.0 +- 2.0 | 11.5 | 184 +- 24 | reference |
+| | NR-U | 28.1 +- 1.3 | 14.5 | 151 +- 11 | passes |
+| | NR-U, ED -82 + CTS 20 dBm | 27.2 +- 1.5 | 14.5 | 167 +- 24 | passes |
+| 0.5 (2 Mbps) | Wi-Fi | 18.2 +- 2.9 | 3.1 | 471 +- 265 | reference |
+| | NR-U | 25.7 +- 1.3 | 9.6 | 189 +- 23 | passes |
+| | NR-U, ED -82 + CTS 20 dBm | 24.2 +- 1.7 | 6.2 | 210 +- 35 | passes |
+| 1.0 (4 Mbps) | Wi-Fi | 11.3 +- 3.1 | 1.1 | 1155 +- 341 | reference |
+| | NR-U | 15.0 +- 3.4 | 1.3 | 958 +- 420 | passes |
+| | NR-U, ED -82 + CTS 20 dBm | 16.2 +- 3.1 | 1.6 | 781 +- 347 | passes |
+
+- **NR-U passes at every load.** Operator B does better next to NR-U
+  than next to another Wi-Fi operator, and the gap grows with load (UPT
+  +12 % at the low load, +41 % at the medium one).
+- **The mitigation is a wash at low load and helps at high load.** ED
+  -82 dBm + a 20 dBm CTS-to-self is within the CIs of plain NR-U at 0.25
+  and 0.5 files/s, and gives B the shortest transfers at 1.0 files/s.
+
+![Replacement-test latency ratio with confidence intervals](../analysis/generated/coexistence_latency_ratio_ci.jpg)
+
+**Two networks against distance** (the section 3 setup on the full
+realistic channel, 20 seeds per point). The latency ratio (A next to NR-U
+over A next to Wi-Fi) is 0.07-0.71: **it passes at every distance.** The
+CIs are wide (shadowing and fading make A's latency vary a lot between
+seeds). The ratio's CI is a symmetric approximation, which is why some
+bars dip below zero. With 20 seeds the scattered failures section 8 saw
+with 5 seeds don't appear.
+
+**Caveats.**
+
+- **Not every file completes.** Only 43-72 % of B's files finish. A file
+  needs all 334 of its packets, and Wi-Fi drops a packet after its MAC
+  retry limit, with no TCP-like retransmission above it. UPT is over
+  completed files.
+- **The mechanism hasn't been isolated.** Why an NR-U neighbor costs B
+  less than a Wi-Fi one isn't established. Fewer, longer channel accesses
+  and NR-U's own LBT are the likely reasons.
+
+So, with collisions, payloads, traffic and statistics now modelled the
+way the 3GPP evaluation does, NR-U meets the replacement test on the
+TR 38.889 layout at low, medium and high load.
+
+## 10. Limitations
+
+- **Shadowing, fading and the collision window are opt-in (Steps 22-23).** Sections 3-7 are without them; section 8 adds the channel on 5 seeds, section 9 the Step 23 fixes on 20 seeds.
 - **One topology** in sections 3-7: one AP, one neighbor, STAs and UEs within 5 m, 20 MHz on a single channel, 802.11a rates.
 - **The NAV is optimistic.** Every Wi-Fi node in decoding range honors it, including one that was transmitting when the CTS went out. The preamble mode is an upper bound in the same way.
 - **The replacement test uses unsaturated loads** (except the throughput sweep). The pass criterion is latency-based.
 - **A-MPDU** is 802.11n-style aggregation on the legacy 20 MHz rate table, for the AP downlink only.
 
-## 10. Reproduce
+## 11. Reproduce
 
 ```bash
 python -m analysis.laa_fairness              # baseline replacement test (pre_20.A)
@@ -354,6 +430,7 @@ python -m analysis.laa_scell_mitigations     # 19.F LAA scenario (~3 min; --plot
 python -m analysis.laa_revalidation          # pre_22: the test on three Wi-Fi stacks (~12 min)
 python -m analysis.occupancy_revalidation    # pre_22: DTMC validation with the frame exchange (~5 min)
 python -m analysis.realism_study             # Step 22: the test on realistic channels and the TR 38.889 layout (~20 min)
+python -m analysis.coexistence_study        # Step 23: FTP Model 3 test, distance with CIs, DTMC check (~50 min, parallel)
 ```
 
 CSVs land in `analysis/generated/` (untracked). Figures are written there
