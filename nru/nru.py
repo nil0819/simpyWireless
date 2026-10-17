@@ -1868,6 +1868,10 @@ class Gnb:
             ul_window_us = tx_dur * self.config_nr.ul_cot_fraction
             tx_dur = tx_dur - ul_window_us
         # Rashed-Step 17.C-10-04-2026-end
+        # Rashed-Step pre_23.B-10-17-2026-start
+        extra = self._burst_fill(self.transmission_to_send.packet,
+                                 tx_dur - (self.transmission_to_send.rs_time or 0))
+        # Rashed-Step pre_23.B-10-17-2026-end
 
         active = ActiveTx(
             tx_id=self.name,
@@ -1952,6 +1956,7 @@ class Gnb:
                 self.sent_completed()
             else:
                 self.sent_failed()
+            self._burst_settle(extra, was_sent, sinr)  # Rashed-Step pre_23.B-10-17-2026
             # Rashed-Step 4.D_3-01-29-2026-start
             # Rashed-Step 4.C_2-01-21-2026-start
             # Yield one extra zero-duration tick before unregistering,
@@ -2361,6 +2366,62 @@ class Gnb:
         del history[:-8]
         # Rashed-Step 13.D-08-23-2026-end
     # Rashed-Step 11.B-08-21-2026-end
+
+    # Rashed-Step pre_23.B-10-17-2026-start
+    # Burst-model payload. A COT used to carry exactly one packet (a 1500 B
+    # placeholder): NR-U's packet throughput was one packet per COT, e.g.
+    # 0.34 Mbps on the TR 38.889 layout. Now it carries what its MCS and
+    # data time hold: the head packet plus as many more as fit - queued ones
+    # (in order), or new ones when saturated. They share the COT's outcome:
+    # delivered with it, or (queued ones) back at the head of the queue for
+    # the next COT; the head packet keeps its retry / drop handling. Channel
+    # access, timing and random draws are unchanged (the extra saturated
+    # packets copy the head's traffic class instead of drawing one).
+    # Capacity: the burst MCS's SINR threshold (NRU_MCS_SINR_THRESHOLDS_DB)
+    # mapped to the spectral efficiency licensed NR's NR_MCS_TABLE gives at
+    # that SINR (5 dB -> 1.18 ... 24 dB -> 5.89 bit/s/Hz), over every
+    # resource block of the carrier.
+    def _burst_capacity_bytes(self, data_us: float) -> int:
+        cfg = self.config_nr
+        mcs = self.current_mcs_for_link(self.rate_adapt_link_key())
+        thr = NRU_MCS_SINR_THRESHOLDS_DB.get(mcs, max(NRU_MCS_SINR_THRESHOLDS_DB.values()))
+        eff = max((e for req, e in NR_MCS_TABLE.values() if req <= thr), default=NR_MCS_TABLE[0][1])
+        scs_khz = NUMEROLOGY_SCS_KHZ[cfg.numerology]
+        rbs = resource_block_count(cfg.bandwidth_mhz, scs_khz)
+        return int(eff * rbs * 12 * scs_khz * 1000.0 * max(0.0, data_us) / 1e6 // 8)
+
+    def _burst_fill(self, head, data_us: float) -> list:
+        if head is None:
+            return []
+        room = self._burst_capacity_bytes(data_us) - head.total_bytes()
+        extra = []
+        if self.traffic_config.mode == "saturated":
+            while room >= head.total_bytes():
+                self._packet_seq += 1
+                p = Packet(packet_id=f"{self.name}-{self._packet_seq:06d}", source=self.name,
+                           destination=head.destination, payload_bytes=head.payload_bytes, header_bytes=0,
+                           created_at=self.env.now, traffic_class=head.traffic_class)
+                extra.append(p)
+                room -= p.total_bytes()
+        else:
+            q = self.packet_queue.items
+            while q and q[0].total_bytes() <= room:
+                p = q.pop(0)
+                p.destination = head.destination
+                extra.append(p)
+                room -= p.total_bytes()
+        return extra
+
+    def _burst_settle(self, extra: list, delivered: bool, sinr: float) -> None:
+        if delivered:
+            for p in extra:
+                p.measured_sinr_db = sinr
+                p.status = "DELIVERED"
+                p.delivered_at = self.env.now
+                self.packet_log.append(p)
+        elif self.traffic_config.mode != "saturated":
+            self.packet_queue.items[0:0] = extra
+    # Rashed-Step pre_23.B-10-17-2026-end
 
     def sent_failed(self):
         # Rashed-Step 2.D_4-02-03-2026-start

@@ -52,6 +52,16 @@ class _RecordingGnb(Gnb):
         self.rx_log.append((tx.packet.packet_id, tx.rx_ue.name if tx.rx_ue else None))
         return tx
 
+    # Rashed-Step pre_23.B-10-17-2026-start
+    # A COT now also carries the packets that fit behind its head packet
+    # (Gnb._burst_fill): they go to the same receiver.
+    def _burst_fill(self, head, data_us):
+        extra = super()._burst_fill(head, data_us)
+        rx = self.transmission_to_send.rx_ue
+        self.rx_log.extend((p.packet_id, rx.name if rx else None) for p in extra)
+        return extra
+    # Rashed-Step pre_23.B-10-17-2026-end
+
 
 def _cell(n_ues=3, gnb_cls=_NoAutoStartGnb):
     env = simpy.Environment()
