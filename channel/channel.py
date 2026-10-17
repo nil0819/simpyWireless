@@ -232,6 +232,14 @@ class Channel:
     # in sensing and decoding). None = no fading.
     fading: Optional[Any] = None
     # Rashed-Step 22.C-10-15-2026-end
+    # Rashed-Step 23.A-10-17-2026-start
+    # Collision window (--cca-detect-us): a transmission is invisible to
+    # channel sensing for its first cca_detect_us (CCA time + RX/TX
+    # turnaround, ~6 us in 802.11: aCCATime 4 + aRxTxTurnaroundTime <= 2),
+    # so nodes that start inside that window collide instead of the first
+    # one always winning. 0 = instantaneous sensing, as before.
+    cca_detect_us: float = 0.0
+    # Rashed-Step 23.A-10-17-2026-end
 
      # Rashed-Step 3.B-01-12-2026-start
     def __post_init__(self):
@@ -270,6 +278,11 @@ class Channel:
          # Rashed-Step pre_18.A-10-04-2026-end
          self.active_txs.append(tx)
          self._pulse_state_changed()
+         # Rashed-Step 23.A-10-17-2026-start
+         # Wake the waiting nodes again when it becomes detectable.
+         if self.cca_detect_us > 0.0:
+              self.env.timeout(self.cca_detect_us).callbacks.append(lambda _e: self._pulse_state_changed())
+         # Rashed-Step 23.A-10-17-2026-end
 
     # Rashed-Step 3.F-01-13-2026-start
     # Rashed-Step 5.1-02-06-2026-start
@@ -395,6 +408,8 @@ class Channel:
              if tx_filter is not None and not tx_filter(tx):
                   continue
              # Rashed-Step pre_20.A-10-08-2026-end
+             if self.cca_detect_us > 0.0 and now - tx.tx_start < self.cca_detect_us:  # Rashed-Step 23.A-10-17-2026
+                  continue                                                             # not detectable yet
              # Rashed-Step 5.E-02-06-2026-start
              if sense_f_hz is not None:
                  # Rashed-Step pre_20.C0-10-08-2026-start

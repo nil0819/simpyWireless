@@ -310,6 +310,7 @@ Is NR-U fair to Wi-Fi, and what fixes it? Scored with the 3GPP replacement test 
 | Correlated shadowing (22.B) | `--pathloss-shadowing`, `--shadowing-correlated`, `--shadowing-decorr-m` | Reciprocal (A->B = B->A), spatially correlated shadowing on a random field over the link's end positions: the path-loss model's own sigma by LOS state (`--pathloss-shadowing`), or the `--shadowing-sigma-db` shadowing made correlated. With a path-loss model the LOS state is spatially consistent too (22.B) |
 | Fading (22.C) | `--fading`, `--fading-k-db`, `--fading-env-speed-mps` | Flat block fading on every link: Rayleigh, or Rician on LOS links with a path-loss model (K: InH 7 dB, UMi/UMa 9, TGax 0 / 3 within the breakpoint). Doppler from node movement plus a moving environment (1.2 km/h); the gain is held over a tenth of the coherence time (~7 ms at 5 GHz), is reciprocal, and is the same for channel sensing and decoding |
 | Multi-cell layouts (22.D) | `--layout tr38889-indoor\|tgax-residential\|tgax-enterprise\|hex`, `--layout-tech`, `--layout-users-per-cell`, `--layout-rows/-cols`, `--hex-rings`, `--hex-isd-m`, `--wifi-ap-freq-ghz`, `--nru-gnb-freq-ghz`, `--channel-reuse`, `--cell-report` | Deployment generators (3GPP TR 38.889 indoor room with two operators, IEEE TGax SS1 apartments / SS2 offices, hexagonal sites; one floor), per-cell channels (explicit or an N-channel reuse pattern) and a Cell Report (per-cell throughput, Jain over cells and users, median / 5th-percentile user throughput). `singleRunNR.py`: `--layout hex`, `--cell-report`. Realistic TR 38.889 runs want `--pathloss-model inh-office-mixed --wifi-preamble-detect --wifi-rate-adapt --nru-rate-adapt --wifi-tx-power-dbm 23` |
+| Collision window (23.A) | `--cca-detect-us N` | A transmission is invisible to channel sensing (ED, preamble detection, NR-U LBT) for its first N us - CCA time + RX/TX turnaround, 6 for 802.11 - so Wi-Fi and NR-U starting within N us of each other collide instead of the first always winning (DTMC w=1: Wi-Fi collision probability 0.001 -> 0.022, model 0.017) |
 | Reference-slot feedback | `--nru-ref-nack-threshold`, `--nru-adaptive-cot` | contention window grows when this share of the reference slot's blocks fail (TS 37.213 Z, default 0.8); adaptive COT halves the next COT after a failed reference slot |
 
 Findings in short: the unfairness is a sensing problem - between about 32 and 45 m neither side hears the other by energy detection while NR-U still breaks Wi-Fi frames (network A latency 75.6 vs 7.5 ms next to Wi-Fi). Priority classes, the standard 37.213 threshold and reference-slot feedback don't fix it (feedback can't see it at all: NR-U's own reference slots never fail there). A lower NR-U threshold (-82 dBm, non-standard) plus CTS-to-self passes the replacement test at every distance up to 60 m with ~0 Wi-Fi frame failures.
@@ -370,7 +371,7 @@ Assert-based regression suite (no print-and-eyeball scripts for anything added s
 pip install pytest
 pytest test/
 ```
-656 tests passing as of Step 22.E. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
+659 tests passing as of Step 23.A. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
 
 ## Current Work Status
 

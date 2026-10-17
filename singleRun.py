@@ -443,6 +443,7 @@ def _cell_freqs(explicit, positions, reuse, n):
 @click.option("--wifi-ap-freq-ghz", "wifi_ap_freq_ghz", type=float, multiple=True, help="Per-AP centre frequency (GHz), repeatable in AP order (Step 22.D); APs without one use --wifi-freq-ghz.")
 @click.option("--nru-gnb-freq-ghz", "nru_gnb_freq_ghz", type=float, multiple=True, help="Per-gNB centre frequency (GHz), repeatable in gNB order (Step 22.D); gNBs without one use --nru-freq-ghz.")
 @click.option("--channel-reuse", "channel_reuse", type=click.IntRange(1, 8), default=None, help="Spread each technology's cells over N 20 MHz channels (36, 40, ... = 5.18, 5.20, ... GHz; Step 22.D): each cell takes the channel whose nearest co-channel cell is farthest away. Needs --layout or every cell's position. Default: one channel per technology, as before.")
+@click.option("--cca-detect-us", "cca_detect_us", type=float, default=None, help="Collision window (Step 23.A): a transmission is invisible to every node's channel sensing (energy detection, preamble detection, NR-U LBT) for its first N us - CCA time + RX/TX turnaround, 6 = 802.11 aCCATime 4 + aRxTxTurnaroundTime 2 - so nodes that start within N us of each other collide. Default (unset) = instantaneous sensing (the first to start always wins), byte-identical.")
 @click.option("--cell-report", "cell_report", is_flag=True, default=False, help="Print a Cell Report (Step 22.D): per AP / gNB its channel, users and throughput; per technology Jain's index over cells and over users, mean / median / 5th-percentile user throughput.")
 # Rashed-Step 22.D-10-15-2026-end
 @click.option("--shadowing-correlated", "shadowing_correlated", is_flag=True, default=False, help="With --shadowing-sigma-db (Step 22.B): the shadowing becomes the same in both directions (A->B = B->A) and spatially correlated - it changes smoothly as a node moves (correlation exp(-distance / --shadowing-decorr-m)) instead of a fresh draw at every position. Default (unset) = the original independent draws, byte-identical.")
@@ -664,6 +665,7 @@ def single_run(
         layout_min_serving_dbm: Optional[float] = None,  # 22.E
         wifi_ap_freq_ghz: tuple = (), nru_gnb_freq_ghz: tuple = (), channel_reuse: Optional[int] = None,
         cell_report: bool = False,  # 22.D
+        cca_detect_us: Optional[float] = None,  # 23.A
 ):
     # Rashed-Step 22.A-10-15-2026-start
     try:
@@ -707,6 +709,8 @@ def single_run(
         if ap_number is None or gnb_number is None:
             raise click.UsageError("--ap-number and --gnb-number are required (or use --layout)")
     # Rashed-Step 22.D-10-15-2026-end
+    if cca_detect_us is not None and not 0.0 < cca_detect_us <= 20.0:  # Rashed-Step 23.A-10-17-2026
+        raise click.UsageError("--cca-detect-us must be in (0, 20] us")
     # Rashed-Step 22.C-10-15-2026-start
     if not fading and (fading_k_db is not None or fading_env_speed_mps is not None):
         raise click.UsageError("--fading-k-db / --fading-env-speed-mps need --fading")
@@ -1234,6 +1238,7 @@ def single_run(
                        fading=fading_spec,  # 22.C
                        sta_positions=cells["sta_positions"], ue_positions=cells["ue_positions"],
                        wifi_ap_freqs_hz=ap_freqs, nru_gnb_freqs_hz=gnb_freqs, cell_report=cell_report,  # 22.D
+                       cca_detect_us=cca_detect_us or 0.0,  # 23.A
                        # Rashed-Step 19.E.2-10-07-2026-end
                        # Rashed-Step 16.F-10-02-2026-end
                        )
