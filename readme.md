@@ -46,6 +46,7 @@ channel/link_field.py   - Step 22.B: reciprocal, spatially correlated link field
 channel/fading.py       - Step 22.C: flat block fading (Rayleigh / Rician, Doppler)
 common/layouts.py, cell_report.py - Step 22.D: multi-cell layouts, per-cell report
 common/ftp.py          - Step 23.C: FTP Model 3 file statistics (UPT)
+analysis/parallel.py   - Step 23.D: seed sweeps in parallel, mean +- 95% CI
 wifi/wifi.py, wifi/sta.py       - Wi-Fi AP + STA (CSMA/CA)
 wifi/mac.py, ampdu.py, phy.py,  - Step 20: frame exchange (ACK/NAV/RTS/EIFS),
 wifi/mgmt.py, ofdma.py            A-MPDU, HT/VHT/HE rates, beacons /
@@ -373,7 +374,7 @@ Assert-based regression suite (no print-and-eyeball scripts for anything added s
 pip install pytest
 pytest test/
 ```
-666 tests passing as of Step 23.C. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
+668 tests passing as of Step 23.D. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
 
 ## Current Work Status
 
