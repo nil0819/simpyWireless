@@ -18,6 +18,7 @@ from typing import Any
 # Rashed-Step 5.G-02-06-2026-end
 # Rashed-Step 8.B-08-06-2026-start
 from common.packet import Packet, TrafficConfig
+from common.packet import ftp3_file  # Rashed-Step 23.C-10-17-2026
 # Rashed-Step 10.A-08-07-2026-start
 from common.packet import pick_traffic_class
 # Rashed-Step 10.A-08-07-2026-end
@@ -790,11 +791,22 @@ class Gnb:
     def _traffic_generator(self):
         """See wifi.WiFi._traffic_generator() - identical contract."""
         while True:
-            if self.traffic_config.mode == "poisson":
+            if self.traffic_config.mode in ("poisson", "ftp3"):  # Rashed-Step 23.C-10-17-2026: ftp3 = files
                 interval_us = random.expovariate(self.traffic_config.arrival_rate_pps / 1e6)
             else:  # "cbr"
                 interval_us = 1e6 / self.traffic_config.arrival_rate_pps
             yield self.env.timeout(interval_us)
+            # Rashed-Step 23.C-10-17-2026-start
+            # One file for the next UE (round robin; the burst model sends
+            # each COT to the UE it picks, so the destination is restamped).
+            if self.traffic_config.mode == "ftp3":
+                self._ftp_files = getattr(self, "_ftp_files", 0) + 1
+                dest = self.ue_list[(self._ftp_files - 1) % len(self.ue_list)].name if self.ue_list else self.name
+                for pkt in ftp3_file(self._make_packet, self.traffic_config, f"{self.name}-F{self._ftp_files}",
+                                     self.env.now, dest):
+                    yield self.packet_queue.put(pkt)
+                continue
+            # Rashed-Step 23.C-10-17-2026-end
             yield self.packet_queue.put(self._make_packet())
     # Rashed-Step 8.B-08-06-2026-end
 
@@ -927,10 +939,11 @@ class Gnb:
                 per_ue = TrafficConfig(mode=self.traffic_config.mode,
                                        arrival_rate_pps=self.traffic_config.arrival_rate_pps / len(self.ue_list),
                                        packet_size_bytes=self.traffic_config.packet_size_bytes,
-                                       traffic_class_mix=self.traffic_config.traffic_class_mix)
+                                       traffic_class_mix=self.traffic_config.traffic_class_mix,
+                                       file_size_bytes=self.traffic_config.file_size_bytes)  # 23.C
                 self.env.process(arrival_process(self.env, buf, per_ue,
                                                  lambda n=ue.name: self._make_dl_packet(n),
-                                                 random.expovariate))
+                                                 random.expovariate, f"{self.name}>{ue.name}"))  # 23.C
             # Uplink buffer at each uplink UE (COT sharing only; autonomous
             # uplink keeps its own one-packet path).
             if (getattr(ue, "uplink_enabled", False)

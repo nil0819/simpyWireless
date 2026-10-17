@@ -183,6 +183,14 @@ class Packet:
     # existing positional Packet(...) call site is affected.
     measured_sinr_db: Optional[float] = None
     # Rashed-Step 13.A-08-23-2026-end
+    # Rashed-Step 23.C-10-17-2026-start
+    # FTP Model 3 (TrafficConfig mode "ftp3"): the file this packet is part
+    # of, how many packets / bytes that file has, and when it arrived.
+    file_id: Optional[str] = None
+    file_packets: int = 0
+    file_bytes: int = 0
+    file_arrival: Optional[float] = None
+    # Rashed-Step 23.C-10-17-2026-end
 
     def total_bytes(self) -> int:
         return self.payload_bytes + self.header_bytes
@@ -210,6 +218,12 @@ class TrafficConfig:
       "cbr" - constant bit/packet rate: packets arrive at a fixed
         interval of 1/arrival_rate_pps seconds. Same "can sit idle"
         behavior as poisson, just deterministic inter-arrival times.
+      "ftp3" - 3GPP TR 36.889 FTP Model 3 (Step 23.C): FILES arrive per a
+        Poisson process at arrival_rate_pps files/s (per cell; a per-UE
+        buffer gets its share), each file_size_bytes (0.5 MB) split into
+        packet_size_bytes packets that arrive together, tagged with the
+        file (Packet.file_id). common/ftp.py derives the user-perceived
+        throughput (file size / transfer time).
     """
     mode: str = "saturated"
     arrival_rate_pps: float = 100.0
@@ -236,7 +250,26 @@ class TrafficConfig:
     # traffic load, rather than every packet being the same class.
     traffic_class_mix: "Optional[dict[str, float]]" = None
     # Rashed-Step 10.A-08-07-2026-end
+    file_size_bytes: int = 500_000  # Rashed-Step 23.C-10-17-2026: "ftp3" only (TR 36.889: 0.5 MB)
 # Rashed-Step 8.A-08-06-2026-end
+
+
+# Rashed-Step 23.C-10-17-2026-start
+def ftp3_file(make_packet, traffic: "TrafficConfig", file_id: str, now: float,
+              destination: Optional[str] = None) -> "list[Packet]":
+    """One FTP Model 3 file: ceil(file_size / packet size) packets from
+    make_packet(), tagged with the file (and sent to `destination` if
+    given)."""
+    first = make_packet()
+    size = max(1, first.total_bytes())
+    n = max(1, -(-traffic.file_size_bytes // size))
+    pkts = [first] + [make_packet() for _ in range(n - 1)]
+    for p in pkts:
+        p.file_id, p.file_packets, p.file_bytes, p.file_arrival = file_id, n, traffic.file_size_bytes, now
+        if destination is not None:
+            p.destination = destination
+    return pkts
+# Rashed-Step 23.C-10-17-2026-end
 
 
 # Rashed-Step 8.G-08-06-2026-start

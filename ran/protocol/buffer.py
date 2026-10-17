@@ -31,11 +31,12 @@ from dataclasses import dataclass, field
 from typing import Callable, Deque, List, Optional, Tuple
 
 from common.packet import Packet, TrafficConfig
+from common.packet import ftp3_file  # Rashed-Step 23.C-10-17-2026
 
 # (packet, bytes of it in this TB, True if those are its last bytes)
 Segment = Tuple[Packet, int, bool]
 
-BUFFERED_TRAFFIC_MODES = ("poisson", "cbr")
+BUFFERED_TRAFFIC_MODES = ("poisson", "cbr", "ftp3")  # Rashed-Step 23.C-10-17-2026: ftp3
 
 
 @dataclass
@@ -242,17 +243,25 @@ def validate_buffered_traffic(traffic: TrafficConfig) -> None:
 
 
 def arrival_process(env, buffer: ByteBuffer, traffic: TrafficConfig, make_packet: Callable[[], Packet],
-                    rng_expovariate: Callable[[float], float]):
+                    rng_expovariate: Callable[[float], float], file_prefix: str = "F"):  # 23.C: file ids
     """SimPy process: packets arrive (Poisson or constant rate) into
     `buffer` from t=0. Arrivals for a UE that isn't connected yet just
     wait in the buffer, the way a UPF buffers downlink for an idle UE."""
     rate_per_us = traffic.arrival_rate_pps / 1e6
+    files = 0  # Rashed-Step 23.C-10-17-2026
     while True:
-        if traffic.mode == "poisson":
+        if traffic.mode in ("poisson", "ftp3"):  # Rashed-Step 23.C-10-17-2026: ftp3 = file arrivals
             interval_us = rng_expovariate(rate_per_us)
         else:
             interval_us = 1.0 / rate_per_us
         yield env.timeout(interval_us)
+        # Rashed-Step 23.C-10-17-2026-start
+        if traffic.mode == "ftp3":
+            files += 1
+            for p in ftp3_file(make_packet, traffic, f"{file_prefix}-F{files}", env.now):
+                buffer.enqueue(p)
+            continue
+        # Rashed-Step 23.C-10-17-2026-end
         buffer.enqueue(make_packet())
 
 def traffic_configs_from_cli(dl_mode: str, dl_rate_pps: Optional[float], ul_mode: str,

@@ -232,10 +232,11 @@ def _cell_freqs(explicit, positions, reuse, n):
 # Rashed-Step 14.D-08-28-2026-end
 # Rashed-Step 5.G-02-06-2026-end
 # Rashed-Step 8.B-08-06-2026-start
-@click.option("--wifi-traffic-model", "wifi_traffic_model", type=click.Choice(["saturated", "poisson", "cbr"]), default="saturated", help="Wi-Fi traffic arrival model. saturated (default) = every AP always has a frame ready the instant it gets channel access, byte-identical to every pre-Step-8.B run. poisson/cbr = packets arrive per the given rate; the AP can genuinely sit idle with nothing to send.")
-@click.option("--wifi-arrival-rate-pps", "wifi_arrival_rate_pps", type=float, default=100.0, help="Wi-Fi packet arrival rate (packets/sec), used only when --wifi-traffic-model is poisson or cbr.")
-@click.option("--nru-traffic-model", "nru_traffic_model", type=click.Choice(["saturated", "poisson", "cbr"]), default="saturated", help="NR-U traffic arrival model. See --wifi-traffic-model.")
-@click.option("--nru-arrival-rate-pps", "nru_arrival_rate_pps", type=float, default=100.0, help="NR-U packet arrival rate (packets/sec), used only when --nru-traffic-model is poisson or cbr.")
+@click.option("--wifi-traffic-model", "wifi_traffic_model", type=click.Choice(["saturated", "poisson", "cbr", "ftp3"]), default="saturated", help="Wi-Fi traffic arrival model. saturated (default) = every AP always has a frame ready the instant it gets channel access, byte-identical to every pre-Step-8.B run. poisson/cbr = packets arrive per the given rate; the AP can genuinely sit idle with nothing to send.")
+@click.option("--wifi-arrival-rate-pps", "wifi_arrival_rate_pps", type=float, default=100.0, help="Wi-Fi packet arrival rate (packets/sec), used only when --wifi-traffic-model is poisson or cbr; with ftp3 (Step 23.C) it is FILES/sec per AP.")
+@click.option("--ftp-file-bytes", "ftp_file_bytes", type=int, default=500000, help="FTP Model 3 file size in bytes (Step 23.C; --wifi-traffic-model / --nru-traffic-model ftp3: files of this size split into packets arrive at --*-arrival-rate-pps files/s per cell, round robin over its users; TR 36.889: 0.5 MB). Prints an FTP Model 3 block (user-perceived throughput = file size / transfer time).")
+@click.option("--nru-traffic-model", "nru_traffic_model", type=click.Choice(["saturated", "poisson", "cbr", "ftp3"]), default="saturated", help="NR-U traffic arrival model. See --wifi-traffic-model.")
+@click.option("--nru-arrival-rate-pps", "nru_arrival_rate_pps", type=float, default=100.0, help="NR-U packet arrival rate (packets/sec), used only when --nru-traffic-model is poisson or cbr; with ftp3 (Step 23.C) it is FILES/sec per gNB.")
 # Rashed-Step 8.B-08-06-2026-end
 # Rashed-Step 8.C-08-06-2026-start
 @click.option("--wifi-packet-size-bytes", "wifi_packet_size_bytes", type=int, default=None, help="Override Wi-Fi packet payload size (bytes). Default (unset/None) = each AP's --mcs-value-controlled config.data_size (1472B), byte-identical to every pre-Step-8.C run. When set, this size now genuinely drives the PPDU on-air duration (Times.get_ppdu_frame_time()), not just a label.")
@@ -666,6 +667,7 @@ def single_run(
         wifi_ap_freq_ghz: tuple = (), nru_gnb_freq_ghz: tuple = (), channel_reuse: Optional[int] = None,
         cell_report: bool = False,  # 22.D
         cca_detect_us: Optional[float] = None,  # 23.A
+        ftp_file_bytes: int = 500000,  # 23.C
 ):
     # Rashed-Step 22.A-10-15-2026-start
     try:
@@ -709,6 +711,8 @@ def single_run(
         if ap_number is None or gnb_number is None:
             raise click.UsageError("--ap-number and --gnb-number are required (or use --layout)")
     # Rashed-Step 22.D-10-15-2026-end
+    if ftp_file_bytes <= 0:  # Rashed-Step 23.C-10-17-2026
+        raise click.UsageError("--ftp-file-bytes must be > 0")
     if cca_detect_us is not None and not 0.0 < cca_detect_us <= 20.0:  # Rashed-Step 23.A-10-17-2026
         raise click.UsageError("--cca-detect-us must be in (0, 20] us")
     # Rashed-Step 22.C-10-15-2026-start
@@ -1031,12 +1035,14 @@ def single_run(
     # the node's own built-in default size", exactly as before).
     wifi_traffic_config = TrafficConfig(
         mode=wifi_traffic_model, arrival_rate_pps=wifi_arrival_rate_pps, packet_size_bytes=wifi_packet_size_bytes,
+        file_size_bytes=ftp_file_bytes,  # 23.C (ftp3 only)
         # Rashed-Step 10.A-08-07-2026-start
         traffic_class_mix=wifi_class_mix,
         # Rashed-Step 10.A-08-07-2026-end
     )
     nru_traffic_config = TrafficConfig(
         mode=nru_traffic_model, arrival_rate_pps=nru_arrival_rate_pps, packet_size_bytes=nru_packet_size_bytes,
+        file_size_bytes=ftp_file_bytes,  # 23.C (ftp3 only)
         # Rashed-Step 10.A-08-07-2026-start
         traffic_class_mix=nru_class_mix,
         # Rashed-Step 10.A-08-07-2026-end

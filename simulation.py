@@ -1007,6 +1007,20 @@ def run_simulation(
                     for g in gnbs])
         print_cell_report(compute_cell_report(cells, simulation_time))
     # Rashed-Step 22.D-10-15-2026-end
+    # Rashed-Step 23.C-10-17-2026-start
+    # FTP Model 3: per technology and per AP / gNB file statistics (UPT).
+    ftp_logs = ([(ap.name, "Wi-Fi", getattr(ap, "packet_log", [])) for ap in wifi_aps]
+                + [(g.name, "NR-U", g.packet_log) for g in gnbs])
+    if any(getattr(p, "file_id", None) is not None for _n, _t, log_ in ftp_logs for p in log_):
+        from common.ftp import compute_file_stats, print_file_stats
+        print("=== FTP Model 3 ===")
+        for tech in ("Wi-Fi", "NR-U"):
+            pk = [p for _n, t, log_ in ftp_logs if t == tech for p in log_]
+            if any(getattr(p, "file_id", None) is not None for p in pk):
+                print_file_stats(tech, compute_file_stats(pk))
+        if fairness_stats is not None:
+            fairness_stats["files"] = {n: compute_file_stats(log_) for n, _t, log_ in ftp_logs}
+    # Rashed-Step 23.C-10-17-2026-end
     # Rashed-Step 18.A-10-06-2026-start
     print_error_model_stats(error_model)
     # Rashed-Step 18.A-10-06-2026-end

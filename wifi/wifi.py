@@ -42,6 +42,7 @@ from typing import Any
 # Rashed-Step 5.G-02-06-2026-end
 # Rashed-Step 8.B-08-06-2026-start
 from common.packet import Packet, TrafficConfig
+from common.packet import ftp3_file  # Rashed-Step 23.C-10-17-2026
 # Rashed-Step 10.A-08-07-2026-start
 from common.packet import pick_traffic_class
 # Rashed-Step 10.A-08-07-2026-end
@@ -617,11 +618,16 @@ class WiFi:
         pushes them into self.packet_queue.
         """
         while True:
-            if self.traffic_config.mode == "poisson":
+            if self.traffic_config.mode in ("poisson", "ftp3"):  # Rashed-Step 23.C-10-17-2026: ftp3 = files
                 interval_us = random.expovariate(self.traffic_config.arrival_rate_pps / 1e6)
             else:  # "cbr"
                 interval_us = 1e6 / self.traffic_config.arrival_rate_pps
             yield self.env.timeout(interval_us)
+            # Rashed-Step 23.C-10-17-2026-start
+            if self.traffic_config.mode == "ftp3":
+                yield from self._ftp3_arrival()
+                continue
+            # Rashed-Step 23.C-10-17-2026-end
             # Rashed-Step 20.B-10-08-2026-start
             # Rashed-Step 20.E-10-09-2026-start
             if self.config.ofdma:
@@ -643,6 +649,27 @@ class WiFi:
             # Rashed-Step 20.B-10-08-2026-end
             yield self.packet_queue.put(self._make_packet())
     # Rashed-Step 8.B-08-06-2026-end
+
+    # Rashed-Step 23.C-10-17-2026-start
+    def _ftp3_arrival(self):
+        """One FTP Model 3 file for the next STA (round robin, no random
+        draw): its packets join the queue the AP sends from."""
+        self._ftp_files = getattr(self, "_ftp_files", 0) + 1
+        dest = self.sta_list[(self._ftp_files - 1) % len(self.sta_list)].name if self.sta_list else self.name
+        for pkt in ftp3_file(self._make_packet, self.traffic_config, f"{self.name}-F{self._ftp_files}",
+                             self.env.now, dest):
+            if self.config.ofdma:
+                if self.sta_list:
+                    self.ofdma_dl[dest].append(pkt)
+                    self._notify_data()
+            elif self.config.qos_enabled:
+                self.ac_queue[pkt.traffic_class].append(pkt)
+                if not self._ac_arrival.triggered:
+                    self._ac_arrival.succeed()
+                self._ac_arrival = self.env.event()
+            else:
+                yield self.packet_queue.put(pkt)
+    # Rashed-Step 23.C-10-17-2026-end
 
     # Rashed-Step 10.B-08-07-2026-start
     # ------------------------------------------------------------------
