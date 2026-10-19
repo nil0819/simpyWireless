@@ -18,6 +18,7 @@ from typing import Any
 # Rashed-Step 5.G-02-06-2026-end
 # Rashed-Step 8.B-08-06-2026-start
 from common.packet import Packet, TrafficConfig
+from common.packet_log import new_packet_log  # Rashed-Step 24.B-10-19-2026
 from common.packet import ftp3_file  # Rashed-Step 23.C-10-17-2026
 # Rashed-Step 10.A-08-07-2026-start
 from common.packet import pick_traffic_class
@@ -618,7 +619,7 @@ class Gnb:
         # DROPPED - never PENDING), appended by sent_completed()/
         # sent_failed(). See wifi.WiFi's matching field for the full
         # rationale - feeds common.packet.compute_packet_stats().
-        self.packet_log = []
+        self.packet_log = new_packet_log()  # Rashed-Step 24.B-10-19-2026: list, or CompactPacketLog with --compact-packet-log
         # Rashed-Step 8.G-08-06-2026-end
         # Rashed-Step 17.C-10-04-2026-start
         # Every uplink window this gNB opened inside its COT (COT_SHARING

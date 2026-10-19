@@ -65,6 +65,7 @@ from ran.protocol.rrc import RrcState
 from ran.protocol.user_plane import user_plane_allows
 # Rashed-Step 18.A-10-06-2026-start
 from common.error_model import decode_ok
+from common.packet_log import new_packet_log  # Rashed-Step 24.B-10-19-2026
 # Rashed-Step 18.A-10-06-2026-end
 # Rashed-Step 16.E-10-02-2026-end
 
@@ -480,7 +481,7 @@ class GnbLicensedNR:
         # Every DATA packet this gNB has finished with (DELIVERED or
         # DROPPED - never PENDING), same convention as nru.Gnb's
         # packet_log (Step 8.G).
-        self.packet_log: List[Packet] = []
+        self.packet_log = new_packet_log()  # Rashed-Step 24.B-10-19-2026: list, or CompactPacketLog with --compact-packet-log
         # Per-UE ahead-of-time rate-adaptation state (only populated/
         # consulted when config.rate_adapt_enabled is True - see
         # current_mcs_for_ue()/record_link_result()).

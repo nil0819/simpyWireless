@@ -453,6 +453,7 @@ def _cell_freqs(explicit, positions, reuse, n):
 # Rashed-Step 22.A-10-15-2026-end
 # Rashed-Step 18.C-10-06-2026-end
 
+@click.option("--compact-packet-log", "compact_packet_log", is_flag=True, default=False, help="Keep finished packets in compact column arrays instead of objects (Step 24.B): the same printed statistics (and CSV export) with ~2-3x less memory - for long runs. Default (unset) = plain lists, as before.")  # Rashed-Step 24.B-10-19-2026
 @click.option("--log-file", "log_file", is_flag=True, default=False, help="Write the per-event debug log to log/<timestamp>.log (Step 24.A: off by default - it took ~45 % of a run's time and 20-30 MB per 100 simulated seconds; printed results don't depend on it).")  # Rashed-Step 24.A-10-19-2026
 @click.option("--log-level", "log_level", type=click.Choice(["INFO", "DEBUG"]), default="INFO", help="Level for --log-file (default INFO, as before).")  # Rashed-Step 24.A-10-19-2026
 def single_run(
@@ -671,6 +672,7 @@ def single_run(
         cca_detect_us: Optional[float] = None,  # 23.A
         ftp_file_bytes: int = 500000,  # 23.C
         log_file: bool = False, log_level: str = "INFO",  # 24.A
+        compact_packet_log: bool = False,  # 24.B
 ):
     # Rashed-Step 24.A-10-19-2026-start
     if log_file:
@@ -1253,6 +1255,7 @@ def single_run(
                        sta_positions=cells["sta_positions"], ue_positions=cells["ue_positions"],
                        wifi_ap_freqs_hz=ap_freqs, nru_gnb_freqs_hz=gnb_freqs, cell_report=cell_report,  # 22.D
                        cca_detect_us=cca_detect_us or 0.0,  # 23.A
+                       compact_packet_log=compact_packet_log,  # 24.B
                        # Rashed-Step 19.E.2-10-07-2026-end
                        # Rashed-Step 16.F-10-02-2026-end
                        )

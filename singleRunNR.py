@@ -155,6 +155,7 @@ from ran.protocol.handover import handover_config_from_cli
 # Rashed-Step 22.B-10-15-2026-end
 # Rashed-Step 22.A-10-15-2026-end
 # Rashed-Step 19.D.2-10-07-2026-end
+@click.option("--compact-packet-log", "compact_packet_log", is_flag=True, default=False, help="Keep finished packets in compact column arrays instead of objects (Step 24.B): the same printed statistics (and CSV export) with ~2-3x less memory - for long runs. Default (unset) = plain lists, as before.")  # Rashed-Step 24.B-10-19-2026
 @click.option("--log-file", "log_file", is_flag=True, default=False, help="Write the per-event debug log to log/<timestamp>.log (Step 24.A: off by default - it took ~45 % of a run's time and 20-30 MB per 100 simulated seconds; printed results don't depend on it).")  # Rashed-Step 24.A-10-19-2026
 @click.option("--log-level", "log_level", type=click.Choice(["INFO", "DEBUG"]), default="INFO", help="Level for --log-file (default INFO, as before).")  # Rashed-Step 24.A-10-19-2026
 def single_run_nr(
@@ -212,6 +213,7 @@ def single_run_nr(
         fading=False, fading_k_db=None, fading_env_speed_mps=None,  # 22.C
         layout=None, hex_rings=1, hex_isd_m=200.0, layout_users_per_cell=None, cell_report=False,  # 22.D
         log_file: bool = False, log_level: str = "INFO",  # 24.A
+        compact_packet_log: bool = False,  # 24.B
 ):
     # Rashed-Step 24.A-10-19-2026-start
     if log_file:
@@ -464,6 +466,7 @@ def single_run_nr(
             pathloss=pathloss,  # 22.A
             fading=fading_spec,  # 22.C
             ue_positions=run_ue_pos, cell_report=cell_report,  # 22.D
+            compact_packet_log=compact_packet_log,  # 24.B
         )
 
 

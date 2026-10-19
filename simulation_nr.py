@@ -365,7 +365,12 @@ def run_simulation_licensed_nr(
         pathloss=None,  # Rashed-Step 22.A-10-15-2026: channel.propagation.PathLossSpec, None = log-distance
         fading=None,  # Rashed-Step 22.C-10-15-2026: (K dB or None, env speed or None), None = no fading
         ue_positions=None, cell_report=False,  # Rashed-Step 22.D-10-15-2026: per-gNB UE positions, Cell Report
+        compact_packet_log=False,  # Rashed-Step 24.B-10-19-2026
 ):
+    # Rashed-Step 24.B-10-19-2026-start
+    from common.packet_log import set_compact_packet_log
+    set_compact_packet_log(compact_packet_log)  # every run sets it, so one run's choice doesn't leak into the next
+    # Rashed-Step 24.B-10-19-2026-end
     random.seed(seed)
     # Rashed-Step 18.A-10-06-2026-start
     error_model = make_error_model(error_model_config, seed)
@@ -423,9 +428,10 @@ def run_simulation_licensed_nr(
     # Rashed-Step 22.D-10-15-2026-start
     if cell_report:
         from common.cell_report import compute_cell_report, print_cell_report
+        from common.packet_log import PacketView  # Rashed-Step 24.B-10-19-2026
         print_cell_report(compute_cell_report(
             [(g.name, "NR", config.f_ghz, [u.name for u in g.ue_list],
-              list(g.packet_log) + [p for u in g.ue_list for p in getattr(u, "packet_log", [])]) for g in gnbs],
+              PacketView([g.packet_log] + [getattr(u, "packet_log", []) for u in g.ue_list])) for g in gnbs],  # 24.B
             simulation_time))
     # Rashed-Step 22.D-10-15-2026-end
     total_succ, total_fail = rep["total_succ"], rep["total_fail"]

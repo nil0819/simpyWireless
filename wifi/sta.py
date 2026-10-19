@@ -29,6 +29,7 @@ import simpy
 _DCF_ACCESS = DcfChannelAccess(Times.t_slot, Times.t_difs)
 # Rashed-Step pre_18.D-10-05-2026-end
 from common.common_phy import dist, rx_power_dbm, mcs_sinr_threshold_db
+from common.packet_log import new_packet_log  # Rashed-Step 24.B-10-19-2026
 # Rashed-Step 15.B-09-18-2026-end
 
 
@@ -158,7 +159,7 @@ class WiFiSTA:
         self.frame_to_send: Optional[Frame] = None
         self._packet_seq = 0
         self._ack_seq = 0
-        self.packet_log = []
+        self.packet_log = new_packet_log()  # Rashed-Step 24.B-10-19-2026: list, or CompactPacketLog with --compact-packet-log
         self.process = None
         # Rashed-Step 20.A-10-08-2026-start
         self.mac_stats = wifi_mac.new_stats()

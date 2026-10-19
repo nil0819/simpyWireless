@@ -47,6 +47,7 @@ channel/fading.py       - Step 22.C: flat block fading (Rayleigh / Rician, Doppl
 common/layouts.py, cell_report.py - Step 22.D: multi-cell layouts, per-cell report
 common/ftp.py          - Step 23.C: FTP Model 3 file statistics (UPT)
 analysis/parallel.py   - Step 23.D: seed sweeps in parallel, mean +- 95% CI
+common/packet_log.py   - Step 24.B: compact packet log (--compact-packet-log)
 wifi/wifi.py, wifi/sta.py       - Wi-Fi AP + STA (CSMA/CA)
 wifi/mac.py, ampdu.py, phy.py,  - Step 20: frame exchange (ACK/NAV/RTS/EIFS),
 wifi/mgmt.py, ofdma.py            A-MPDU, HT/VHT/HE rates, beacons /
@@ -315,6 +316,7 @@ Is NR-U fair to Wi-Fi, and what fixes it? Scored with the 3GPP replacement test 
 | Collision window (23.A) | `--cca-detect-us N` | A transmission is invisible to channel sensing (ED, preamble detection, NR-U LBT) for its first N us - CCA time + RX/TX turnaround, 6 for 802.11 - so Wi-Fi and NR-U starting within N us of each other collide instead of the first always winning (DTMC w=1: Wi-Fi collision probability 0.001 -> 0.022, model 0.017) |
 | FTP Model 3 (23.C) | `--wifi-traffic-model ftp3`, `--nru-traffic-model ftp3`, `--ftp-file-bytes` | 3GPP TR 36.889 file traffic: files (default 0.5 MB) arrive per cell at `--*-arrival-rate-pps` files/s, round robin over its users (per-UE buffers with the NR-U slots model), split into packets; prints an FTP Model 3 block - files completed, user-perceived throughput (file size / transfer time: mean, median, 5th percentile) and transfer time |
 | Debug log file (24.A) | `--log-file`, `--log-level INFO\|DEBUG` | The per-event debug log (`log/<timestamp>.log`) is now OFF by default - it took ~45 % of a run's time and 20-30 MB per 100 simulated seconds; printed results don't depend on it. All five CLIs take the flags |
+| Compact packet log (24.B) | `--compact-packet-log` | Older finished packets are kept in typed column arrays instead of objects (the latest 10 000 per node stay objects): identical printed statistics and CSV export with ~2.7x less memory, for long runs. The end-of-run statistics now read the logs in one pass instead of copying them |
 | Reference-slot feedback | `--nru-ref-nack-threshold`, `--nru-adaptive-cot` | contention window grows when this share of the reference slot's blocks fail (TS 37.213 Z, default 0.8); adaptive COT halves the next COT after a failed reference slot |
 
 Findings in short: the unfairness is a sensing problem - between about 32 and 45 m neither side hears the other by energy detection while NR-U still breaks Wi-Fi frames (network A latency 75.6 vs 7.5 ms next to Wi-Fi). Priority classes, the standard 37.213 threshold and reference-slot feedback don't fix it (feedback can't see it at all: NR-U's own reference slots never fail there). A lower NR-U threshold (-82 dBm, non-standard) plus CTS-to-self passes the replacement test at every distance up to 60 m with ~0 Wi-Fi frame failures.
@@ -375,7 +377,7 @@ Assert-based regression suite (no print-and-eyeball scripts for anything added s
 pip install pytest
 pytest test/
 ```
-670 tests passing as of Step 24.A. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
+676 tests passing as of Step 24.B. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
 
 ## Current Work Status
 

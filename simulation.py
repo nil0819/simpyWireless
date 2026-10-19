@@ -34,6 +34,7 @@ from common.packet import compute_packet_stats
 # Rashed-Step 8.G-08-06-2026-end
 # Rashed-Step 9.A-08-07-2026-start
 from common.packet import compute_packet_stats_by_node
+from common.packet_log import PacketView  # Rashed-Step 24.B-10-19-2026
 # Rashed-Step 9.A-08-07-2026-end
 # Rashed-Step 10.C-08-11-2026-start
 from common.packet import compute_packet_stats_by_class
@@ -267,7 +268,12 @@ def run_simulation(
         cell_report: bool = False,
         # Rashed-Step 22.D-10-15-2026-end
         cca_detect_us: float = 0.0,  # Rashed-Step 23.A-10-17-2026: collision window (0 = instant sensing)
+        compact_packet_log: bool = False,  # Rashed-Step 24.B-10-19-2026: CompactPacketLog for every node
 ):
+    # Rashed-Step 24.B-10-19-2026-start
+    from common.packet_log import set_compact_packet_log
+    set_compact_packet_log(compact_packet_log)  # every run sets it, so one run's choice doesn't leak into the next
+    # Rashed-Step 24.B-10-19-2026-end
     random.seed(seed)
     environment = simpy.Environment()
 
@@ -702,8 +708,9 @@ def run_simulation(
     # (attacker/roguewificad.py - out of scope for Step 8's packet work
     # per standing project convention, never given a packet_log). This
     # just skips those rather than erroring, without touching that file.
-    wifi_packets = [p for ap in wifi_aps for p in getattr(ap, "packet_log", [])]
-    nru_packets = [p for g in gnbs for p in g.packet_log]
+    # Rashed-Step 24.B-10-19-2026: views over the node logs (same order), not copied lists
+    wifi_packets = PacketView(getattr(ap, "packet_log", []) for ap in wifi_aps)
+    nru_packets = PacketView(g.packet_log for g in gnbs)
     wifi_pkt_stats = compute_packet_stats(wifi_packets)
     nru_pkt_stats = compute_packet_stats(nru_packets)
 
@@ -804,7 +811,7 @@ def run_simulation(
     # AP (downlink) packets only, as before; uplink goodput is here.
     wifi_ul_packets = []
     if wifi_sta_uplink_enabled:
-        wifi_ul_packets = [p for sta in wifi_stas for p in getattr(sta, "packet_log", [])]
+        wifi_ul_packets = PacketView(getattr(sta, "packet_log", []) for sta in wifi_stas)  # 24.B
         wifi_ul_stats = compute_packet_stats(wifi_ul_packets)
         wifi_ul_delivered_bytes = sum(p.total_bytes() for p in wifi_ul_packets if p.status == "DELIVERED")
         print("=== Wi-Fi Uplink ===")
@@ -826,7 +833,7 @@ def run_simulation(
     # stdout is unchanged. "NRU packet throughput" above stays gNB
     # (downlink) packets only, as before.
     if nru_ue_uplink_enabled:
-        nru_ul_packets = [p for ue in ues for p in getattr(ue, "packet_log", [])]
+        nru_ul_packets = PacketView(getattr(ue, "packet_log", []) for ue in ues)  # 24.B
         nru_ul_stats = compute_packet_stats(nru_ul_packets)
         nru_ul_bytes = sum(p.total_bytes() for p in nru_ul_packets if p.status == "DELIVERED")
         print("=== NR-U Uplink ===")
@@ -999,11 +1006,11 @@ def run_simulation(
     if cell_report:
         from common.cell_report import compute_cell_report, print_cell_report
         cells = ([(ap.name, "WiFi", ap.config.f_ghz, [s.name for s in getattr(ap, "sta_list", [])],
-                   list(getattr(ap, "packet_log", [])) + [p for s in getattr(ap, "sta_list", [])
-                                                        for p in getattr(s, "packet_log", [])])
+                   PacketView([getattr(ap, "packet_log", [])]
+                              + [getattr(s, "packet_log", []) for s in getattr(ap, "sta_list", [])]))  # 24.B
                   for ap in wifi_aps]
                  + [(g.name, "NRU", g.config_nr.f_ghz, [u.name for u in g.ue_list],
-                     list(g.packet_log) + [p for u in g.ue_list for p in getattr(u, "packet_log", [])])
+                     PacketView([g.packet_log] + [getattr(u, "packet_log", []) for u in g.ue_list]))  # 24.B
                     for g in gnbs])
         print_cell_report(compute_cell_report(cells, simulation_time))
     # Rashed-Step 22.D-10-15-2026-end
@@ -1015,7 +1022,7 @@ def run_simulation(
         from common.ftp import compute_file_stats, print_file_stats
         print("=== FTP Model 3 ===")
         for tech in ("Wi-Fi", "NR-U"):
-            pk = [p for _n, t, log_ in ftp_logs if t == tech for p in log_]
+            pk = PacketView(log_ for _n, t, log_ in ftp_logs if t == tech)  # 24.B
             if any(getattr(p, "file_id", None) is not None for p in pk):
                 print_file_stats(tech, compute_file_stats(pk))
         if fairness_stats is not None:

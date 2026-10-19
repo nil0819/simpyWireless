@@ -42,6 +42,7 @@ from typing import Any
 # Rashed-Step 5.G-02-06-2026-end
 # Rashed-Step 8.B-08-06-2026-start
 from common.packet import Packet, TrafficConfig
+from common.packet_log import new_packet_log  # Rashed-Step 24.B-10-19-2026
 from common.packet import ftp3_file  # Rashed-Step 23.C-10-17-2026
 # Rashed-Step 10.A-08-07-2026-start
 from common.packet import pick_traffic_class
@@ -410,7 +411,7 @@ class WiFi:
         # very long/high-rate runs) - acceptable for this simulator's
         # scale; a future step could cap/roll this off if it ever
         # matters.
-        self.packet_log = []
+        self.packet_log = new_packet_log()  # Rashed-Step 24.B-10-19-2026: list, or CompactPacketLog with --compact-packet-log
         # Rashed-Step pre_20.B-10-08-2026-start
         self.ampdu_stats = {"ppdus": 0, "mpdus": 0, "mpdus_ok": 0, "header_lost": 0}  # = wifi_ampdu.new_stats()
         # Rashed-Step 20.D-10-08-2026-start

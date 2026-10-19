@@ -120,6 +120,10 @@ def run_simulation_attacker(
         replay_max: Optional[int] = None,
         shadowing_sigma_db: float = 0.0,
 ):
+    # Rashed-Step 24.B-10-19-2026-start
+    from common.packet_log import set_compact_packet_log
+    set_compact_packet_log(False)  # every run sets it, so one run's choice doesn't leak into the next
+    # Rashed-Step 24.B-10-19-2026-end
     random.seed(seed)
     environment = simpy.Environment()
 

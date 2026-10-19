@@ -89,6 +89,10 @@ def run_simulation_generic(
         export_packets_csv_path: Optional[str] = None,
         # Rashed-Step 13.E.2-08-23-2026-end
 ):
+    # Rashed-Step 24.B-10-19-2026-start
+    from common.packet_log import set_compact_packet_log
+    set_compact_packet_log(False)  # every run sets it, so one run's choice doesn't leak into the next
+    # Rashed-Step 24.B-10-19-2026-end
     random.seed(seed)
     environment = simpy.Environment()
 

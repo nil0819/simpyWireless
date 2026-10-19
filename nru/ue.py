@@ -17,6 +17,7 @@ from ran.protocol.channel_access import CAPC_UL
 # Rashed-Step pre_20.D.1-10-08-2026-end
 # Rashed-Step 18.A-10-06-2026-start
 from common.error_model import decode_ok
+from common.packet_log import new_packet_log  # Rashed-Step 24.B-10-19-2026
 # Rashed-Step 18.A-10-06-2026-end
 from nru.nru import Transmission_NR, NRU_MCS_SINR_THRESHOLDS_DB, NruDeploymentMode
 # Rashed-Step 15.C-09-18-2026-end
@@ -187,7 +188,7 @@ class NrUE:
         self.failed_transmissions = 0
         self.transmission_to_send: Optional[Transmission_NR] = None
         self._packet_seq = 0
-        self.packet_log = []
+        self.packet_log = new_packet_log()  # Rashed-Step 24.B-10-19-2026: list, or CompactPacketLog with --compact-packet-log
         self.process = None
         # Rashed-Step 17.D-10-04-2026-start
         # COT sharing counters (see send_in_shared_cot()): grants this UE

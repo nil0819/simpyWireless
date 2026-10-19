@@ -66,6 +66,7 @@ from common.common_phy import Pos, dist, rx_power_dbm, WaypointMobility
 from channel.channel import Channel, ActiveTx
 # Rashed-Step 9.B-08-07-2026-start
 from common.packet import Packet
+from common.packet_log import new_packet_log  # Rashed-Step 24.B-10-19-2026
 # Rashed-Step 9.B-08-07-2026-end
 
 
@@ -195,7 +196,7 @@ class GenericWirelessDevice:
         # real SINR-based success/failure decision. Callers/subclasses
         # that want delivery semantics need to build that themselves
         # (e.g. via estimate_sinr_db()).
-        self.packet_log: List[Packet] = []
+        self.packet_log = new_packet_log()  # Rashed-Step 24.B-10-19-2026: list, or CompactPacketLog with --compact-packet-log
         # Rashed-Step 9.B-08-07-2026-end
 
     def current_pos(self) -> Pos:

@@ -136,7 +136,7 @@ DEFAULT_EDCA_PARAMS: Dict[str, EdcaAcParams] = {
 # Rashed-Step 10.B-08-07-2026-end
 
 
-@dataclass
+@dataclass(slots=True)  # Rashed-Step 24.B-10-19-2026: no per-object __dict__ (memory)
 class Packet:
     packet_id: str
     source: str
@@ -191,6 +191,13 @@ class Packet:
     file_bytes: int = 0
     file_arrival: Optional[float] = None
     # Rashed-Step 23.C-10-17-2026-end
+    # Rashed-Step 24.B-10-19-2026-start
+    # Set at runtime by licensed NR (the slot's transport block, 22.D) and
+    # the A-MPDU code (duplicate until a Block Ack confirms it, 20.B); with
+    # __slots__ they have to be declared.
+    tb_bits: Optional[float] = None
+    _dup: bool = False
+    # Rashed-Step 24.B-10-19-2026-end
 
     def total_bytes(self) -> int:
         return self.payload_bytes + self.header_bytes
@@ -318,25 +325,40 @@ def compute_packet_stats(packets: "list[Packet]") -> dict:
                           _percentile() below. None if empty.
       # Rashed-Step 9.A-08-07-2026-end
     """
-    delivered = [p for p in packets if p.status == "DELIVERED"]
-    dropped = [p for p in packets if p.status == "DROPPED"]
-    total = len(delivered) + len(dropped)
+    # Rashed-Step 24.B-10-19-2026-start
+    # One pass over `packets` (any iterable - a list or a CompactPacketLog
+    # view), keeping only (created_at, latency) per delivered packet instead
+    # of lists of Packet objects. Same values, same order, same stable sort.
+    return _stats_from(*_accumulate(packets))
 
-    latencies = [p.delivered_at - p.created_at for p in delivered if p.delivered_at is not None]
 
+def _accumulate(packets):
+    n_delivered = n_dropped = 0
+    pairs = []  # (created_at, latency) of DELIVERED packets with delivered_at, in input order
+    for p in packets:
+        st = p.status
+        if st == "DELIVERED":
+            n_delivered += 1
+            if p.delivered_at is not None:
+                pairs.append((p.created_at, p.delivered_at - p.created_at))
+        elif st == "DROPPED":
+            n_dropped += 1
+    return n_delivered, n_dropped, pairs
+
+
+def _stats_from(n_delivered: int, n_dropped: int, pairs: list) -> dict:
+    total = n_delivered + n_dropped
+    latencies = [lat for _c, lat in pairs]
     # Rashed-Step 9.A-08-07-2026-start
-    # Sorted by created_at (generation order) - the order Packets happen
-    # to sit in `packets`/`delivered` is whatever order sent_completed()
-    # appended them in, which for a cross-node aggregated list (multiple
-    # APs' packet_logs concatenated - see simulation.py) is essentially
-    # arbitrary relative to when each packet was actually GENERATED.
-    # Jitter is only a meaningful "variation between consecutive
-    # packets" measure if "consecutive" means consecutive in time.
-    delivered_by_creation = sorted(
-        (p for p in delivered if p.delivered_at is not None),
-        key=lambda p: p.created_at,
-    )
-    latencies_in_order = [p.delivered_at - p.created_at for p in delivered_by_creation]
+    # Sorted by created_at (generation order) - the order packets sit in the
+    # input is whatever order they were logged in, which for a cross-node
+    # aggregate is arbitrary relative to when each was GENERATED. Jitter is
+    # only a meaningful "variation between consecutive packets" measure if
+    # "consecutive" means consecutive in time. (24.B: a stable sort of the
+    # (created_at, latency) pairs - same order as sorting the packets.)
+    delivered_by_creation = sorted(pairs, key=lambda t: t[0])
+    latencies_in_order = [lat for _c, lat in delivered_by_creation]
+    # Rashed-Step 24.B-10-19-2026-end
 
     if len(latencies_in_order) >= 2:
         diffs = [
@@ -357,9 +379,9 @@ def compute_packet_stats(packets: "list[Packet]") -> dict:
 
     return {
         "total": total,
-        "delivered": len(delivered),
-        "dropped": len(dropped),
-        "loss_rate": (len(dropped) / total) if total > 0 else 0.0,
+        "delivered": n_delivered,  # Rashed-Step 24.B-10-19-2026 (was len(delivered))
+        "dropped": n_dropped,
+        "loss_rate": (n_dropped / total) if total > 0 else 0.0,
         "avg_latency_us": (sum(latencies) / len(latencies)) if latencies else None,
         "min_latency_us": min(latencies) if latencies else None,
         "max_latency_us": max(latencies) if latencies else None,
@@ -475,23 +497,32 @@ def compute_packet_stats_by_class(packets: "list[Packet]", latency_budget_us: "O
     scenario) - defaults to the module-level table when omitted/None.
     """
     budgets = latency_budget_us if latency_budget_us is not None else QOS_LATENCY_BUDGET_US
-    classes_present = sorted(set(p.traffic_class for p in packets))
-
+    # Rashed-Step 24.B-10-19-2026-start
+    # One pass: per class the delivered / dropped counts and (created_at,
+    # latency) pairs (a class whose packets are all still pending still gets
+    # its key, as before).
+    acc = {}
+    for p in packets:
+        a = acc.setdefault(p.traffic_class, [0, 0, []])
+        st = p.status
+        if st == "DELIVERED":
+            a[0] += 1
+            if p.delivered_at is not None:
+                a[2].append((p.created_at, p.delivered_at - p.created_at))
+        elif st == "DROPPED":
+            a[1] += 1
     result = {}
-    for cls in classes_present:
-        class_packets = [p for p in packets if p.traffic_class == cls]
-        stats = compute_packet_stats(class_packets)
-
+    for cls in sorted(acc):
+        n_del, n_drop, pairs = acc[cls]
+        stats = _stats_from(n_del, n_drop, pairs)
         budget = budgets.get(cls)
         if budget is None:
             stats["sla_budget_us"] = None
             stats["sla_compliance_rate"] = None
             stats["sla_violation_rate"] = None
         else:
-            delivered_latencies = [
-                p.delivered_at - p.created_at for p in class_packets
-                if p.status == "DELIVERED" and p.delivered_at is not None
-            ]
+            delivered_latencies = [lat for _c, lat in pairs]
+            # Rashed-Step 24.B-10-19-2026-end
             stats["sla_budget_us"] = budget
             if delivered_latencies:
                 within_budget = sum(1 for lat in delivered_latencies if lat <= budget)
