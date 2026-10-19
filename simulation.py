@@ -330,6 +330,17 @@ def run_simulation(
         fading=Fading(seed, *([fading[1]] if fading[1] is not None else []), k_db=fading[0]) if fading is not None else None,  # Rashed-Step 22.C-10-15-2026
         cca_detect_us=cca_detect_us,  # Rashed-Step 23.A-10-17-2026
     )
+    # Rashed-Step 24.C-10-19-2026-start
+    # Batched backoff countdowns only where sensing can't change between
+    # channel events: no fading, nothing moving, no OFDMA trigger-based uplink.
+    channel.static_sensing = (
+        fading is None
+        and ap_mobility_speed_mps <= 0.0 and sta_mobility_speed_mps <= 0.0
+        and gnb_mobility_speed_mps <= 0.0 and ue_mobility_speed_mps <= 0.0
+        and gnb_mobility_linear_target is None and ue_follow_gnb_offset is None
+        and not getattr(wifi_config, "ofdma", False) and not getattr(wifi_config, "ul_ofdma", False)
+    )
+    # Rashed-Step 24.C-10-19-2026-end
 
     # Rashed-Step 3.F-01-13-2026-end
 

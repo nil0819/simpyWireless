@@ -21,9 +21,10 @@ Studies (python -m analysis.coexistence_study [tr38889] [distance] [dtmc]):
             fading + collision window, with enough seeds for a CI on the
             latency ratio.
   dtmc      The CCNC DTMC comparison (fixed CW, 5.4 ms frames, w = 1..6)
-            under the defaults - must equal the pre_22.C numbers (Step 23's
-            options are all off by default; pre_23.B doesn't touch saturated
-            channel access).
+            under the defaults - must match the pre_22.C numbers within 0.5
+            points (Step 23's options are all off by default; pre_23.B
+            doesn't touch saturated channel access; 24.C's batched countdown
+            only reorders same-instant countdown ends).
 """
 import contextlib
 import csv
@@ -191,11 +192,16 @@ def study_dtmc(processes=None):
     for w, (cw0, cn0) in PRE22_ORIG.items():
         v = [r for j, r in zip(jobs, res) if j["w"] == w]
         cw, cn = statistics.mean(x[0] for x in v), statistics.mean(x[1] for x in v)
-        eq = round(cw, 3) == cw0 and round(cn, 3) == cn0
+        # Rashed-Step 24.C-10-19-2026: within 0.5 points (3 seeds x 10 s noise) -
+        # the batched backoff countdown (24.C, default-on) changes how
+        # same-instant countdown ends are ordered, so the runs are no longer
+        # byte-identical to pre_22.C, only statistically equivalent.
+        eq = abs(cw - cw0) <= 0.005 and abs(cn - cn0) <= 0.005
         same &= eq
         print(f"w={w}: Cw {cw:.3f} (pre_22.C {cw0:.3f})  Cn {cn:.3f} (pre_22.C {cn0:.3f})  {'same' if eq else 'DIFFERENT'}",
               flush=True)
-    print("DTMC comparison unchanged under the defaults" if same else "DTMC comparison CHANGED", flush=True)
+    print("DTMC comparison unchanged under the defaults (within 0.5 points)" if same else "DTMC comparison CHANGED",
+          flush=True)
 
 
 STUDIES = {"tr38889": study_tr38889, "distance": study_distance, "dtmc": study_dtmc}

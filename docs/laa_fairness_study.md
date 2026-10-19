@@ -361,7 +361,9 @@ Step 23 removed the remaining simplifications that favoured one side:
 **The DTMC comparison is unchanged.** Under the defaults, Wi-Fi and NR-U
 occupancy for 1-6 APs equal the pre_22.C numbers exactly. Every Step 23
 option is off by default, and pre_23.B doesn't touch saturated channel
-access.
+access. (Since Step 24.C the backoff countdown is batched, which changes
+how two countdowns ending in the same microsecond are ordered: the
+numbers then match pre_22.C within 0.3 points rather than exactly.)
 
 **The replacement test on its own layout** (TR 38.889 indoor; FTP Model 3
 on every cell; InH-Office + shadowing + fading; collision window;

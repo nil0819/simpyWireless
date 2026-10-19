@@ -136,6 +136,28 @@ def sense_idle_for(node: Any, duration: float, busy):
 # Rashed-Step pre_18.E-10-05-2026-end
 
 
+# Rashed-Step 24.C-10-19-2026-start
+def countdown_slots(node: Any, slots: int, slot_us: float, busy):
+    """Generator -> backoff slots still left (0 = all counted).
+
+    One sense_idle_for() over all `slots` instead of one per slot. If the
+    channel turns busy at time t, the slots that ended by t were idle -
+    floor((t - start) / slot_us) of them, a transmission starting exactly
+    at a slot's end counting that slot as idle (sense_idle_for's same-slot
+    rule) - exactly what the per-slot loop counts. Only valid while sensing
+    can't change between channel events (Channel.static_sensing): the
+    per-slot loop would also see a change at a slot boundary with no event
+    (a fade, a moving node).
+    """
+    env = node.env
+    start = env.now
+    if (yield from sense_idle_for(node, slots * slot_us, busy)):
+        return 0
+    done = int((env.now - start) // slot_us)
+    return slots - min(done, slots)
+# Rashed-Step 24.C-10-19-2026-end
+
+
 class LbtChannelAccess:
     """
     NR-U's Cat-4 LBT channel-access wait: a prioritization period
@@ -204,6 +226,14 @@ class LbtChannelAccess:
                 yield node.channel.state_changed
             if not (yield from sense_idle_for(node, defer_us, busy)):
                 continue
+            # Rashed-Step 24.C-10-19-2026-start
+            if getattr(node.channel, "static_sensing", False) and backoff_slots > 0:
+                backoff_slots = yield from countdown_slots(node, backoff_slots, config.observation_slot_duration, busy)
+                if backoff_slots == 0:
+                    break
+                log(node, f"Channel busy during backoff, frozen with {backoff_slots} slots left - fresh defer period next")
+                continue
+            # Rashed-Step 24.C-10-19-2026-end
             while backoff_slots > 0:
                 if not (yield from sense_idle_for(node, config.observation_slot_duration, busy)):
                     log(node, f"Channel busy during backoff, frozen with {backoff_slots} slots left - fresh defer period next")
@@ -338,6 +368,15 @@ class DcfChannelAccess:
             to_grid = (self.t_slot_us - env.now % self.t_slot_us) % self.t_slot_us
             if not (yield from self._idle_for(node, to_grid)):
                 continue
+            # Rashed-Step 24.C-10-19-2026-start
+            if getattr(node.channel, "static_sensing", False) and backoff_slots > 0:
+                left = yield from countdown_slots(node, backoff_slots, self.t_slot_us, lambda: self._busy(node))
+                if left == 0:
+                    return
+                backoff_slots = left
+                log(node, f"Channel busy during backoff, frozen with {backoff_slots} slots left")
+                continue
+            # Rashed-Step 24.C-10-19-2026-end
             while backoff_slots > 0:
                 if not (yield from self._idle_for(node, self.t_slot_us)):
                     break

@@ -240,6 +240,14 @@ class Channel:
     # one always winning. 0 = instantaneous sensing, as before.
     cca_detect_us: float = 0.0
     # Rashed-Step 23.A-10-17-2026-end
+    # Rashed-Step 24.C-10-19-2026-start
+    # True when nothing can change what a node senses between channel
+    # events (no fading, no moving node, no OFDMA trigger-based uplink) -
+    # set by run_simulation(). Then a backoff countdown waits once for all
+    # its slots (ran/protocol/channel_access.py) instead of once per slot.
+    # False (default): one wait per slot, re-checking at every boundary.
+    static_sensing: bool = False
+    # Rashed-Step 24.C-10-19-2026-end
 
      # Rashed-Step 3.B-01-12-2026-start
     def __post_init__(self):
