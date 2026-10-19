@@ -3,7 +3,8 @@ import csv
 import os
 import random
 import time
-import pandas as pd
+# Rashed-Step 24.D-10-19-2026: `import pandas as pd` removed - nothing used it, and it was
+# ~2.7 s of every process start (each parallel worker re-imports this module).
 import simpy
 
 

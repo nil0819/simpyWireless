@@ -378,7 +378,7 @@ Assert-based regression suite (no print-and-eyeball scripts for anything added s
 pip install pytest
 pytest test/
 ```
-687 tests passing as of Step 24.C. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
+688 tests passing as of Step 24.D. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
 
 ## Current Work Status
 

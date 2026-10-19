@@ -25,7 +25,6 @@ import statistics
 from concurrent.futures import ProcessPoolExecutor
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from scipy import stats as _st
 
 
 def mean_ci(values: Sequence[float], confidence: float = 0.95) -> Tuple[float, float]:
@@ -35,6 +34,7 @@ def mean_ci(values: Sequence[float], confidence: float = 0.95) -> Tuple[float, f
     m = statistics.mean(vals)
     if len(vals) < 2:
         return m, 0.0
+    from scipy import stats as _st  # Rashed-Step 24.D-10-19-2026: lazy (~2.3 s import)
     half = _st.t.ppf(0.5 + confidence / 2.0, len(vals) - 1) * statistics.stdev(vals) / math.sqrt(len(vals))
     return m, float(half)
 
@@ -46,12 +46,13 @@ def _call(args):
 
 def default_processes() -> int:
     """Half the logical CPUs, at most 8. On Windows every worker is a new
-    interpreter that re-imports the simulator (~7 s), and per-run time
-    rises once all cores are busy: measured on 16 logical CPUs, 48 one-
-    second runs took 36.9 s with 8 processes (serial ~168 s), 60.7 s with
-    6, 84.7 s with 4 - but 16 runs on 15 processes (one run per worker)
-    took 102 s, slower than serial. Worth it when each worker gets several
-    runs."""
+    interpreter that re-imports the simulator, and per-run time rises once
+    all cores are busy. Measured on 16 logical CPUs (LAA run_case, 1 s
+    runs): at Step 23.D (~7 s worker start, log file on) 48 runs took
+    36.9 s on 8 processes vs ~168 s serial, and 16 runs on 15 processes
+    102 s - slower than serial. Since Step 24 (log file off, batched
+    backoff, worker start ~1.7 s) 48 runs: serial 42.9 s, 8 processes
+    8.8 s; 16 runs on 15 processes 6.2 s."""
     return max(1, min(8, (os.cpu_count() or 2) // 2))
 
 
