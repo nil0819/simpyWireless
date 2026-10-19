@@ -453,6 +453,8 @@ def _cell_freqs(explicit, positions, reuse, n):
 # Rashed-Step 22.A-10-15-2026-end
 # Rashed-Step 18.C-10-06-2026-end
 
+@click.option("--log-file", "log_file", is_flag=True, default=False, help="Write the per-event debug log to log/<timestamp>.log (Step 24.A: off by default - it took ~45 % of a run's time and 20-30 MB per 100 simulated seconds; printed results don't depend on it).")  # Rashed-Step 24.A-10-19-2026
+@click.option("--log-level", "log_level", type=click.Choice(["INFO", "DEBUG"]), default="INFO", help="Level for --log-file (default INFO, as before).")  # Rashed-Step 24.A-10-19-2026
 def single_run(
         runs: int,
         seed: int,
@@ -668,7 +670,13 @@ def single_run(
         cell_report: bool = False,  # 22.D
         cca_detect_us: Optional[float] = None,  # 23.A
         ftp_file_bytes: int = 500000,  # 23.C
+        log_file: bool = False, log_level: str = "INFO",  # 24.A
 ):
+    # Rashed-Step 24.A-10-19-2026-start
+    if log_file:
+        from common.common import enable_file_log
+        print(f"Log file: {enable_file_log(level=log_level)}")
+    # Rashed-Step 24.A-10-19-2026-end
     # Rashed-Step 22.A-10-15-2026-start
     try:
         pathloss = pathloss_spec_from_cli(pathloss_model, pathloss_los, bs_height_m, ut_height_m, tgax_room_size_m,

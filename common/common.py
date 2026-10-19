@@ -43,14 +43,39 @@ colors = [
 
 typ_filename = "RS_coex_1sta_1wifi2.log"
 
-logging.basicConfig(filename=file_log_name,
-                    format='%(asctime)s %(message)s',
-                    filemode='w')
+# Rashed-Step 24.A-10-19-2026-start
+# The per-event log file used to be opened at import (logging.basicConfig
+# here), so every run - and every parallel worker - wrote log/<time>.log:
+# 45 % of a run's time and 20-30 MB per 100 simulated seconds. Now no file
+# unless enable_file_log() is called (singleRun.py / singleRunNR.py
+# --log-file); log() returns at once while it is off. Printed results don't
+# depend on it.
 logger = logging.getLogger()
-logger.setLevel(logging.INFO)  # chose DEBUG to display stats in debug mode :)
+_FILE_LOG_ON = False
+
+
+def enable_file_log(path: str = None, level: str = "INFO") -> str:
+    """Write log() lines to `path` (default log/<timestamp>.log, as before)
+    at `level` ("INFO" / "DEBUG"). Returns the path."""
+    global _FILE_LOG_ON
+    path = path or file_log_name
+    folder = os.path.dirname(path)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    logging.basicConfig(filename=path, format='%(asctime)s %(message)s', filemode='w', force=True)
+    logger.setLevel(getattr(logging, level))
+    _FILE_LOG_ON = True
+    return path
+
+
+def file_log_enabled() -> bool:
+    return _FILE_LOG_ON
+# Rashed-Step 24.A-10-19-2026-end
 
 
 def log(gnb, mes: str) -> None:
+    if not _FILE_LOG_ON:  # Rashed-Step 24.A-10-19-2026
+        return
     logger.info(
         f"{gnb.col}Time: {gnb.env.now} Station: {gnb.name} Message: {mes}"
     )

@@ -54,6 +54,8 @@ from simulation_nr import parse_pos_list_nr as parse_pos_list  # reused verbatim
 # Rashed-Step 13.E.2-08-23-2026-start
 @click.option("--export-packets-csv", "export_packets_csv_path", type=str, default=None, help="Path to write a packet-level CSV of every GenericTransmitter transmission (technology-agnostic format, same as singleRun.py's --export-packets-csv, Step 9.D/13.E.2) - includes each packet's measured_sinr_db (Step 13.E.2). Default (unset) = no CSV, byte-identical to every pre-13.E.2 run.")
 # Rashed-Step 13.E.2-08-23-2026-end
+@click.option("--log-file", "log_file", is_flag=True, default=False, help="Write the per-event debug log to log/<timestamp>.log (Step 24.A: off by default - it took ~45 % of a run's time and 20-30 MB per 100 simulated seconds; printed results don't depend on it).")  # Rashed-Step 24.A-10-19-2026
+@click.option("--log-level", "log_level", type=click.Choice(["INFO", "DEBUG"]), default="INFO", help="Level for --log-file (default INFO, as before).")  # Rashed-Step 24.A-10-19-2026
 def single_run_generic(
         runs, seed, ap_number, gnb_number, generic_number, simulation_time,
         area_w, area_h, ap_pos, gnb_pos, generic_pos,
@@ -67,7 +69,13 @@ def single_run_generic(
         # Rashed-Step 13.E.2-08-23-2026-start
         export_packets_csv_path=None,
         # Rashed-Step 13.E.2-08-23-2026-end
+        log_file: bool = False, log_level: str = "INFO",  # 24.A
 ):
+    # Rashed-Step 24.A-10-19-2026-start
+    if log_file:
+        from common.common import enable_file_log
+        print(f"Log file: {enable_file_log(level=log_level)}")
+    # Rashed-Step 24.A-10-19-2026-end
     ap_positions = parse_pos_list(ap_pos, "--ap-pos") if ap_pos else None
     gnb_positions = parse_pos_list(gnb_pos, "--gnb-pos") if gnb_pos else None
     generic_positions = parse_pos_list(generic_pos, "--generic-pos") if generic_pos else None

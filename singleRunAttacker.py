@@ -47,6 +47,8 @@ from simulation_nr import parse_pos_list_nr as parse_pos_list  # reused verbatim
 @click.option("--shadowing-sigma-db", "shadowing_sigma_db", type=float, default=0.0, help="Log-normal shadow fading std dev in dB (0 = disabled/deterministic)")
 @click.option("--wifi-tx-power-dbm", "wifi_tx_power_dbm", type=float, default=20.0, help="Wi-Fi tx power (dBm)")
 @click.option("--nru-tx-power-dbm", "nru_tx_power_dbm", type=float, default=23.0, help="NR-U tx power (dBm)")
+@click.option("--log-file", "log_file", is_flag=True, default=False, help="Write the per-event debug log to log/<timestamp>.log (Step 24.A: off by default - it took ~45 % of a run's time and 20-30 MB per 100 simulated seconds; printed results don't depend on it).")  # Rashed-Step 24.A-10-19-2026
+@click.option("--log-level", "log_level", type=click.Choice(["INFO", "DEBUG"]), default="INFO", help="Level for --log-file (default INFO, as before).")  # Rashed-Step 24.A-10-19-2026
 def single_run_attacker(
         runs, seed, ap_number, gnb_number, attacker_number, simulation_time,
         area_w, area_h, sta_radius, ue_radius,
@@ -56,7 +58,13 @@ def single_run_attacker(
         replay_interval_us, replay_max,
         wifi_cw_min, wifi_cw_max, nru_cw_min, nru_cw_max, mcot, synchronization_slot_duration,
         shadowing_sigma_db, wifi_tx_power_dbm, nru_tx_power_dbm,
+        log_file: bool = False, log_level: str = "INFO",  # 24.A
 ):
+    # Rashed-Step 24.A-10-19-2026-start
+    if log_file:
+        from common.common import enable_file_log
+        print(f"Log file: {enable_file_log(level=log_level)}")
+    # Rashed-Step 24.A-10-19-2026-end
     attacker_positions = parse_pos_list(attacker_pos, "--attacker-pos") if attacker_pos else None
     replay_max_val = None if replay_max < 0 else replay_max
 

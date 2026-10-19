@@ -314,6 +314,7 @@ Is NR-U fair to Wi-Fi, and what fixes it? Scored with the 3GPP replacement test 
 | Multi-cell layouts (22.D) | `--layout tr38889-indoor\|tgax-residential\|tgax-enterprise\|hex`, `--layout-tech`, `--layout-users-per-cell`, `--layout-rows/-cols`, `--hex-rings`, `--hex-isd-m`, `--wifi-ap-freq-ghz`, `--nru-gnb-freq-ghz`, `--channel-reuse`, `--cell-report` | Deployment generators (3GPP TR 38.889 indoor room with two operators, IEEE TGax SS1 apartments / SS2 offices, hexagonal sites; one floor), per-cell channels (explicit or an N-channel reuse pattern) and a Cell Report (per-cell throughput, Jain over cells and users, median / 5th-percentile user throughput). `singleRunNR.py`: `--layout hex`, `--cell-report`. Realistic TR 38.889 runs want `--pathloss-model inh-office-mixed --wifi-preamble-detect --wifi-rate-adapt --nru-rate-adapt --wifi-tx-power-dbm 23` |
 | Collision window (23.A) | `--cca-detect-us N` | A transmission is invisible to channel sensing (ED, preamble detection, NR-U LBT) for its first N us - CCA time + RX/TX turnaround, 6 for 802.11 - so Wi-Fi and NR-U starting within N us of each other collide instead of the first always winning (DTMC w=1: Wi-Fi collision probability 0.001 -> 0.022, model 0.017) |
 | FTP Model 3 (23.C) | `--wifi-traffic-model ftp3`, `--nru-traffic-model ftp3`, `--ftp-file-bytes` | 3GPP TR 36.889 file traffic: files (default 0.5 MB) arrive per cell at `--*-arrival-rate-pps` files/s, round robin over its users (per-UE buffers with the NR-U slots model), split into packets; prints an FTP Model 3 block - files completed, user-perceived throughput (file size / transfer time: mean, median, 5th percentile) and transfer time |
+| Debug log file (24.A) | `--log-file`, `--log-level INFO\|DEBUG` | The per-event debug log (`log/<timestamp>.log`) is now OFF by default - it took ~45 % of a run's time and 20-30 MB per 100 simulated seconds; printed results don't depend on it. All five CLIs take the flags |
 | Reference-slot feedback | `--nru-ref-nack-threshold`, `--nru-adaptive-cot` | contention window grows when this share of the reference slot's blocks fail (TS 37.213 Z, default 0.8); adaptive COT halves the next COT after a failed reference slot |
 
 Findings in short: the unfairness is a sensing problem - between about 32 and 45 m neither side hears the other by energy detection while NR-U still breaks Wi-Fi frames (network A latency 75.6 vs 7.5 ms next to Wi-Fi). Priority classes, the standard 37.213 threshold and reference-slot feedback don't fix it (feedback can't see it at all: NR-U's own reference slots never fail there). A lower NR-U threshold (-82 dBm, non-standard) plus CTS-to-self passes the replacement test at every distance up to 60 m with ~0 Wi-Fi frame failures.
@@ -374,7 +375,7 @@ Assert-based regression suite (no print-and-eyeball scripts for anything added s
 pip install pytest
 pytest test/
 ```
-668 tests passing as of Step 23.D. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
+670 tests passing as of Step 24.A. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
 
 ## Current Work Status
 

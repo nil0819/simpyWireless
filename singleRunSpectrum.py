@@ -51,6 +51,8 @@ from simulation_nr import parse_pos_list_nr as parse_pos_list  # reused verbatim
 @click.option("--sniffer-mobility-speed-mps", "sniffer_mobility_speed_mps", type=float, default=0.0, help="Sniffer roaming speed (m/s) - e.g. a vehicle- or drone-mounted spectrum scanner doing a moving sweep instead of sitting at a fixed point. See --ap-mobility-speed-mps.")
 @click.option("--mobility-pause-s", "mobility_pause_s", type=float, default=0.0, help="Dwell time (s) at each waypoint before picking the next one, for any node type with mobility enabled.")
 # Rashed-Step 7.C-08-05-2026-end
+@click.option("--log-file", "log_file", is_flag=True, default=False, help="Write the per-event debug log to log/<timestamp>.log (Step 24.A: off by default - it took ~45 % of a run's time and 20-30 MB per 100 simulated seconds; printed results don't depend on it).")  # Rashed-Step 24.A-10-19-2026
+@click.option("--log-level", "log_level", type=click.Choice(["INFO", "DEBUG"]), default="INFO", help="Level for --log-file (default INFO, as before).")  # Rashed-Step 24.A-10-19-2026
 def single_run_spectrum(
         runs, seed, ap_number, gnb_number, sniffer_number, simulation_time,
         area_w, area_h, sta_radius, ue_radius,
@@ -60,7 +62,13 @@ def single_run_spectrum(
         shadowing_sigma_db, wifi_tx_power_dbm, nru_tx_power_dbm,
         ap_mobility_speed_mps, gnb_mobility_speed_mps, sta_mobility_speed_mps,
         ue_mobility_speed_mps, sniffer_mobility_speed_mps, mobility_pause_s,
+        log_file: bool = False, log_level: str = "INFO",  # 24.A
 ):
+    # Rashed-Step 24.A-10-19-2026-start
+    if log_file:
+        from common.common import enable_file_log
+        print(f"Log file: {enable_file_log(level=log_level)}")
+    # Rashed-Step 24.A-10-19-2026-end
     sniffer_positions = parse_pos_list(sniffer_pos, "--sniffer-pos") if sniffer_pos else None
 
     wifi_config = WifiConfig(cw_min=wifi_cw_min, cw_max=wifi_cw_max, tx_power_dbm=wifi_tx_power_dbm)
