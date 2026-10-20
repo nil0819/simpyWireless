@@ -45,7 +45,7 @@ def test_converges_to_highest_decodable_mcs():
     picks = _run(ms, lambda m: m <= 5)
     assert ms.links["STA"]["best"] == 5
     tail = picks[-1000:]
-    assert tail.count(5) / len(tail) > 0.85                         # ~90 % best, ~10 % look-around
+    assert tail.count(5) / len(tail) > 0.75                         # best; look-around + its retry (25.E chain)
 
 
 def test_prefers_throughput_over_probability():
@@ -60,13 +60,13 @@ def test_prefers_throughput_over_probability():
 
 
 def test_collisions_do_not_walk_the_rate_down():
-    # every 3rd attempt collides regardless of MCS: ARF (2 failures -> down) would drift,
-    # Minstrel stays on the highest decodable MCS because its throughput is still best
-    k = {"n": 0}
+    # a third of the attempts collide (at random) regardless of MCS: ARF (2 failures -> down)
+    # would drift, Minstrel stays on the highest decodable MCS because its throughput is still best
+    import random
+    rng = random.Random(1)
 
     def dec(m):
-        k["n"] += 1
-        return m <= 6 and k["n"] % 3 != 0
+        return m <= 6 and rng.random() >= 1 / 3
     ms = Minstrel(RATES, 6, seed=4)
     _run(ms, dec)
     assert ms.links["STA"]["best"] == 6
@@ -94,3 +94,36 @@ def test_cli():
     assert ok.exit_code == 0 and okhe.exit_code == 0, (ok.output + okhe.output)[-600:]
     assert bad.exit_code != 0
 # Rashed-Step 25.B-10-20-2026-end
+
+
+# Rashed-Step 25.E-10-20-2026-start
+def test_falls_back_when_the_rate_stops_decoding():
+    # MCS 7 decodes, then (after 1 s) only MCS <= 2 does: Minstrel must find MCS 2
+    ms = Minstrel(RATES, 7, seed=5)
+    picks = []
+    for u in range(40):
+        now = (u + 1) * UPDATE_US
+        for _ in range(200):
+            m = ms.choose("STA", now)
+            picks.append(m)
+            ms.record("STA", m <= (7 if u < 10 else 2), now)
+    assert ms.links["STA"]["best"] == 2
+    tail = picks[-2000:]
+    assert tail.count(2) / len(tail) > 0.75
+
+
+def test_retry_chain():
+    ms = Minstrel(RATES, 0, seed=7)
+    _run(ms, lambda m: m <= 5, n_updates=10)                   # learn: best 5, MCS 6 / 7 never decode
+    st = ms.links["STA"]
+    st["fails"] = 0
+    first = ms.choose("STA", 2e6)
+    ms.record("STA", False, 2e6)
+    assert ms.choose("STA", 2e6) == st["second"] != st["best"]   # 1st retry: second-best throughput
+    ms.record("STA", False, 2e6)
+    assert ms.choose("STA", 2e6) == st["maxp"]                   # 2nd: most reliable
+    ms.record("STA", False, 2e6)
+    assert ms.choose("STA", 2e6) == 0                            # 3rd: lowest
+    ms.record("STA", True, 2e6)
+    assert st["fails"] == 0
+# Rashed-Step 25.E-10-20-2026-end
