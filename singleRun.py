@@ -262,6 +262,7 @@ def _cell_freqs(explicit, positions, reuse, n):
 @click.option("--nru-rate-adapt-ml-model", "nru_rate_adapt_ml_model", type=str, default=None, help="Path to a trained SINR-prediction model (ml/train_sinr_model.py's saved output, e.g. ml/data/sinr_model.joblib). When set, NR-U's CQI-style rate adaptation (--nru-rate-adapt, required alongside this flag) uses the model's PREDICTED next SINR instead of the raw last-measured value, once a link has enough history (ml/train_sinr_model.LAG_K measurements). Default (unset/None) = every pre-Step-13.D run's exact behavior. NOTE: Step 13.C's own evaluation found this model does not beat plain 'last observed' on MAE for held-out scenarios - this flag is provided to empirically test its effect on actual coexistence outcomes, not because it's known to help (see Project details/Step 13.txt's 13.D section).")
 # Rashed-Step 13.D-08-23-2026-end
 # Rashed-Step 13.E.1-08-23-2026-start
+@click.option("--wifi-rate-algo", "wifi_rate_algo", type=click.Choice(["arf", "minstrel"]), default="arf", help="Wi-Fi rate-adaptation algorithm with --wifi-rate-adapt (Step 25.B): arf (default, unchanged) or minstrel - per link and MCS an EWMA success probability updated every 100 ms, the MCS with the best expected throughput (rate x probability), and 10 %% of transmissions probing a faster MCS. Collisions lower a rate's probability but do not walk the MCS down step by step as ARF does.")  # Rashed-Step 25.B-10-20-2026
 @click.option("--wifi-rate-adapt-ml-model", "wifi_rate_adapt_ml_model", type=str, default=None, help="Same idea as --nru-rate-adapt-ml-model, for Wi-Fi. When set, Wi-Fi's rate adaptation (--wifi-rate-adapt, required alongside this flag) switches from ARF's success/fail-streak logic to a CQI-style direct MCS pick from the model's PREDICTED next SINR, once a link has enough history. Default (unset/None) = every pre-Step-13.E run's exact ARF behavior. The same model file trained for NR-U works here too (it was trained with a technology_is_wifi feature already) - no separate Wi-Fi model needed.")
 # Rashed-Step 13.E.1-08-23-2026-end
 # Rashed-Step 15.G-09-18-2026-start
@@ -549,6 +550,7 @@ def single_run(
         # Rashed-Step 13.E.1-08-23-2026-start
         wifi_rate_adapt_ml_model: str = None,
         # Rashed-Step 13.E.1-08-23-2026-end
+        wifi_rate_algo: str = "arf",  # Rashed-Step 25.B-10-20-2026
         # Rashed-Step 14.D-08-28-2026-start
         gnb_mobility_linear_target: str = None,
         gnb_mobility_linear_duration_s: float = 0.0,
@@ -844,6 +846,12 @@ def single_run(
             "already-enabled MCS pick, it doesn't enable rate adaptation "
             "on its own)."
         )
+    # Rashed-Step 25.B-10-20-2026-start
+    if wifi_rate_algo != "arf" and not wifi_rate_adapt:
+        raise click.UsageError("--wifi-rate-algo needs --wifi-rate-adapt")
+    if wifi_rate_algo != "arf" and wifi_rate_adapt_ml_model:
+        raise click.UsageError("--wifi-rate-algo minstrel cannot be combined with --wifi-rate-adapt-ml-model")
+    # Rashed-Step 25.B-10-20-2026-end
     wifi_sinr_predictor = None
     if wifi_rate_adapt_ml_model:
         from ml.predictor import SinrPredictor
@@ -1146,6 +1154,7 @@ def single_run(
                               # Rashed-Step 11.A-08-21-2026-start
                               rate_adapt_enabled=wifi_rate_adapt,
                               # Rashed-Step 11.A-08-21-2026-end
+                              rate_adapt_algo=wifi_rate_algo,  # Rashed-Step 25.B-10-20-2026
                               # Rashed-Step 13.E.1-08-23-2026-start
                               sinr_predictor=wifi_sinr_predictor,
                               # Rashed-Step 13.E.1-08-23-2026-end

@@ -216,6 +216,10 @@ class Config:
     # SINR dip immediately crashing the rate (a documented refinement).
     rate_adapt_down_streak: int = 2
     # Rashed-Step 11.A-08-21-2026-end
+    # Rashed-Step 25.B-10-20-2026: rate-adaptation algorithm when rate_adapt_enabled -
+    # "arf" (default, the Step 11.A streaks) or "minstrel" (wifi/minstrel.py: EWMA
+    # success probability per MCS, best expected throughput, 10 % look-around).
+    rate_adapt_algo: str = "arf"
 
     # Rashed-Step 13.E.1-08-23-2026-start
     # Opt-in ML-driven MCS selection, mirroring Config_NR.sinr_predictor
@@ -419,6 +423,13 @@ class WiFi:
         # Rashed-Step 21.A-10-11-2026-start
         self._cur_dest = None      # destination STA name of the frame being prepared / sent
         # Rashed-Step 21.A-10-11-2026-end
+        # Rashed-Step 25.B-10-20-2026-start
+        self._minstrel = None      # wifi.minstrel.Minstrel with rate_adapt_algo "minstrel"
+        if config.rate_adapt_enabled and getattr(config, "rate_adapt_algo", "arf") == "minstrel":
+            from wifi import minstrel as wifi_minstrel
+            self._minstrel = wifi_minstrel.Minstrel(wifi_minstrel.nominal_rates(config), config.mcs,
+                                                    random.getrandbits(32))
+        # Rashed-Step 25.B-10-20-2026-end
         # Rashed-Step 20.D-10-08-2026-end
         # Rashed-Step 20.A-10-08-2026-start
         self.mac_stats = wifi_mac.new_stats()
@@ -1831,6 +1842,8 @@ class WiFi:
         """
         if not self.config.rate_adapt_enabled or link_key is None:
             return self.config.mcs
+        if self._minstrel is not None:  # Rashed-Step 25.B-10-20-2026
+            return self._minstrel.choose(link_key, self.env.now)
         state = self.link_rate_state.get(link_key)
         # Rashed-Step 13.E.1-08-23-2026-start
         predictor = self.config.sinr_predictor
@@ -1875,6 +1888,9 @@ class WiFi:
         untouched.
         """
         if not self.config.rate_adapt_enabled or link_key is None:
+            return
+        if self._minstrel is not None:  # Rashed-Step 25.B-10-20-2026
+            self._minstrel.record(link_key, success, self.env.now)
             return
         min_mcs = min(wifi_phy.sinr_table(self.config).keys())  # 20.C: per-PHY range
         max_mcs = max(wifi_phy.sinr_table(self.config).keys())
