@@ -1006,7 +1006,11 @@ def run_simulation(
         from wifi.phy import rate_mbps
         print("=== Wi-Fi PHY ===")
         print(f"Wifi PHY: {config.phy.upper()} {config.channel_width_mhz} MHz, MCS {config.mcs}, GI {config.guard_interval_ns} ns, "
-              f"1 stream -> {rate_mbps(config.phy, config.channel_width_mhz, config.mcs, config.guard_interval_ns):.1f} Mbps")
+              + (f"1 stream -> {rate_mbps(config.phy, config.channel_width_mhz, config.mcs, config.guard_interval_ns):.1f} Mbps"
+                 if getattr(config, "spatial_streams", 1) == 1 else  # Rashed-Step 25.C-10-20-2026
+                 f"{config.spatial_streams} streams -> {rate_mbps(config.phy, config.channel_width_mhz, config.mcs, config.guard_interval_ns, config.spatial_streams):.1f} Mbps"
+                 + (f", DL MU-MIMO up to {config.mu_mimo_users} users per RU (residual {config.mu_mimo_residual_db:.0f} dB)"
+                    if getattr(config, "mu_mimo_users", 1) > 1 else "")))
     # Rashed-Step 20.C-10-08-2026-end
     if getattr(config, "mac_exchange", False) and wifi_aps:
         nodes = list(wifi_aps) + [s for s in wifi_stas if hasattr(s, "mac_stats")]

@@ -39,7 +39,8 @@ its RU.
     MPDUs that fail are retried in a later round (retry limit r_limit).
     The AP's contention window doubles when no user of a round got
     through.
-Not modeled: MU-MIMO, uplink power control / RU-dependent power limits,
+Downlink MU-MIMO: Step 25.C (mu_groups / mu_sinr_db below).
+Not modeled: uplink MU-MIMO, uplink power control / RU-dependent power limits,
 buffer status reports and random-access RUs (the AP is assumed to know
 the STAs' buffers), cascaded / multi-TID A-MPDUs, MU-RTS.
 """
@@ -88,9 +89,34 @@ def ru_plan(width_mhz: int, n_users: int):
             for k in range(n_users)]
 
 
-def ru_rate_mbps(tones: int, mcs: int, gi_ns: int) -> float:
+def ru_rate_mbps(tones: int, mcs: int, gi_ns: int, nss: int = 1) -> float:  # 25.C: nss
     bpsc, rate = wifi_phy.MODULATION[mcs]
-    return RU_NSD[tones] * bpsc * rate / wifi_phy.symbol_us("he", gi_ns)
+    return RU_NSD[tones] * bpsc * rate * nss / wifi_phy.symbol_us("he", gi_ns)
+
+
+# Rashed-Step 25.C-10-20-2026-start
+MU_MIMO_MIN_TONES = 106
+
+
+def mu_groups(width_mhz: int, n_users: int, k_max: int):
+    """Downlink MU-MIMO grouping (Step 25.C): up to k_max users per RU -
+    the fewest groups, so the largest RUs and the most streams in use -
+    balanced over the groups; the RUs must have at least 106 tones (the
+    802.11ax minimum for MU-MIMO). Returns the group sizes, or None when
+    the groups don't fit (plain OFDMA then)."""
+    g = -(-n_users // max(1, k_max))
+    if g > RU_COUNT[width_mhz].get(MU_MIMO_MIN_TONES, 0):
+        return None
+    return [n_users // g + (1 if i < n_users % g else 0) for i in range(g)]
+
+
+def mu_sinr_db(sinr_db: float, k: int, residual_db: float) -> float:
+    """SINR of one MU-MIMO user: channel SINR (own stream) with the
+    precoding residual of the k - 1 other streams added as interference."""
+    if k <= 1:
+        return sinr_db
+    return -10.0 * math.log10(10.0 ** (-sinr_db / 10.0) + (k - 1) * 10.0 ** (residual_db / 10.0))
+# Rashed-Step 25.C-10-20-2026-end
 
 
 def mu_preamble_us(n_users: int) -> float:
@@ -127,11 +153,13 @@ def _fill(queue_take, put_back, per_mpdu, budget_us, max_mpdus, pending):
     return mpdus, used
 
 
-def _decode_user(channel, em, tx, t0, mpdus, per_mpdu, required, header_ok):
+def _decode_user(channel, em, tx, t0, mpdus, per_mpdu, required, header_ok, mu=None):  # 25.C: mu = (k, residual_db)
     ok = []
     for p in mpdus:
         t1 = t0 + per_mpdu(p.payload_bytes)
         sinr = channel.sinr_db(tx, window=(t0, t1))
+        if mu is not None:
+            sinr = mu_sinr_db(sinr, *mu)
         if p.status != "DELIVERED":
             p.measured_sinr_db = sinr
         if header_ok and decode_ok(em, sinr, required):
@@ -168,14 +196,26 @@ def downlink_round(ap, users, ac=None):  # 21.C: ac = the EDCA access category t
     Returns True if at least one user's Block Ack came back."""
     cfg, env, ch = ap.config, ap.env, ap.channel
     width, gi, mcs = cfg.channel_width_mhz, cfg.guard_interval_ns, cfg.mcs
-    plan = ru_plan(width, len(users))
-    pre = mu_preamble_us(len(users))
+    # Rashed-Step 25.C-10-20-2026-start
+    nss = wifi_phy.n_ss(cfg)
+    groups = mu_groups(width, len(users), cfg.mu_mimo_users) if getattr(cfg, "mu_mimo_users", 1) > 1 else None
+    if groups is None:
+        plan = ru_plan(width, len(users))
+        ks = [1] * len(users)
+    else:                                   # MU-MIMO: users of one group share an RU, one stream each
+        rus = ru_plan(width, len(groups))
+        plan = [ru for ru, k in zip(rus, groups) for _ in range(k)]
+        ks = [k for k in groups for _ in range(k)]
+        ap.ofdma_stats["mu_groups"] = ap.ofdma_stats.get("mu_groups", 0) + sum(1 for k in groups if k > 1)
+    pre = mu_preamble_us(len(users)) + wifi_phy.ltf_extra_us("he", max(nss, max(ks)), gi)
+    # Rashed-Step 25.C-10-20-2026-end
     budget = wifi_ampdu.ppdu_budget_us(ap, ac) - pre   # 21.C: TXOP limit of the AC (= aPPDUMaxTime without EDCA)
     em = getattr(cfg, "error_model", None)
     required = ap.required_sinr_db()
+    required_mu = required - wifi_phy.ss_penalty_db(nss)   # 25.C: an MU-MIMO user gets one stream
     per_user = []
-    for sta, (tones, off, bw) in zip(users, plan):
-        rate = ru_rate_mbps(tones, mcs, gi)
+    for sta, (tones, off, bw), k in zip(users, plan, ks):
+        rate = ru_rate_mbps(tones, mcs, gi, nss if k == 1 else 1)  # 25.C
         per = (lambda r: (lambda payload: (Times.mac_overhead + payload * 8 + 32) / r))(rate)
         q = ap.ofdma_dl[sta.name]
         # Rashed-Step 21.C-10-11-2026-start
@@ -189,8 +229,8 @@ def downlink_round(ap, users, ac=None):  # 21.C: ac = the EDCA access category t
     start = env.now
     dur = pre + data_us
     txs = []
-    for sta, tones, off, bw, per, mpdus, used in per_user:
-        p_dbm = cfg.tx_power_dbm + 10.0 * math.log10(tones / FULL_TONES[width])
+    for (sta, tones, off, bw, per, mpdus, used), k in zip(per_user, ks):
+        p_dbm = cfg.tx_power_dbm + 10.0 * math.log10(tones / FULL_TONES[width]) - 10.0 * math.log10(k)  # 25.C: / k users
         tx = _ru_tx(cfg, ap.name, ap.current_pos(), sta.current_pos(), p_dbm, cfg.f_ghz + off, bw, start, dur,
                     mpdus[0] if mpdus else None)
         ch.register_tx(tx)
@@ -201,9 +241,13 @@ def downlink_round(ap, users, ac=None):  # 21.C: ac = the EDCA access category t
     results = []
     try:
         yield env.timeout(dur)
-        for tx, (sta, tones, off, bw, per, mpdus, used) in zip(txs, per_user):
-            header_ok = decode_ok(em, ch.sinr_db(tx, window=(start, start + pre)), required)
-            results.append(_decode_user(ch, em, tx, start + pre, mpdus, per, required, header_ok))
+        for tx, (sta, tones, off, bw, per, mpdus, used), k in zip(txs, per_user, ks):
+            # Rashed-Step 25.C-10-20-2026-start
+            mu = (k, cfg.mu_mimo_residual_db) if k > 1 else None
+            req = required_mu if k > 1 else required
+            header_ok = decode_ok(em, mu_sinr_db(ch.sinr_db(tx, window=(start, start + pre)), *(mu or (1, 0.0))), req)
+            results.append(_decode_user(ch, em, tx, start + pre, mpdus, per, req, header_ok, mu))
+            # Rashed-Step 25.C-10-20-2026-end
         yield env.timeout(0)
     finally:
         # Rashed-Step pre_21.E-10-11-2026-start
@@ -278,10 +322,11 @@ def uplink_round(ap, users):
         ch.unregister_control_tx(t, ch.airtime_control, account_to=ap.name)
     yield env.timeout(wifi_mac.SIFS_US)
     plan = ru_plan(width, n)
-    budget = cfg.ampdu_max_ppdu_us - TB_PREAMBLE_US
+    nss = wifi_phy.n_ss(cfg)                                     # 25.C
+    budget = cfg.ampdu_max_ppdu_us - TB_PREAMBLE_US - wifi_phy.ltf_extra_us("he", nss, gi)
     per_user = []
     for sta, (tones, off, bw) in zip(users, plan):
-        rate = ru_rate_mbps(tones, mcs, gi)
+        rate = ru_rate_mbps(tones, mcs, gi, nss)                 # 25.C
         per = (lambda r: (lambda payload: (Times.mac_overhead + payload * 8 + 32) / r))(rate)
         mpdus, used = _fill(sta._take_queued_packet, sta._put_back_packet, per, budget, cfg.ampdu_max_mpdus,
                             sta.ofdma_ul_pending)
@@ -289,7 +334,7 @@ def uplink_round(ap, users):
         ap.ofdma_stats["ru_tones"][tones] = ap.ofdma_stats["ru_tones"].get(tones, 0) + 1
     data_us = max(u[6] for u in per_user)
     start = env.now
-    dur = TB_PREAMBLE_US + data_us
+    dur = TB_PREAMBLE_US + wifi_phy.ltf_extra_us("he", nss, gi) + data_us   # 25.C: + LTFs
     txs = []
     for (sta, tones, off, bw, per, mpdus, used), h in zip(per_user, heard):
         if h and mpdus and not getattr(sta, "_tx_active", False):   # 21.C: a STA busy with its own exchange can't answer

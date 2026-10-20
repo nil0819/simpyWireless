@@ -394,7 +394,7 @@ def _cell_freqs(explicit, positions, reuse, n):
 @click.option("--wifi-sta-arrival-rate-pps", "wifi_sta_arrival_rate_pps", type=float, default=100.0, help="Per-STA uplink arrival rate (packets/s) for --wifi-sta-traffic-model poisson/cbr (Step 20.B).")
 # Rashed-Step 20.B-10-08-2026-end
 # Rashed-Step 20.C-10-08-2026-start
-@click.option("--wifi-phy", "wifi_phy", type=click.Choice(["legacy", "ht", "vht", "he"]), default="legacy", help="Wi-Fi PHY (Step 20.C): legacy 802.11a (default, as before), ht (802.11n, MCS 0-7, 20/40 MHz), vht (802.11ac, MCS 0-9, 20-160 MHz), he (802.11ax, MCS 0-11, 20-160 MHz). One spatial stream; -m sets the MCS. Prints a Wi-Fi PHY block.")
+@click.option("--wifi-phy", "wifi_phy", type=click.Choice(["legacy", "ht", "vht", "he"]), default="legacy", help="Wi-Fi PHY (Step 20.C): legacy 802.11a (default, as before), ht (802.11n, MCS 0-7, 20/40 MHz), vht (802.11ac, MCS 0-9, 20-160 MHz), he (802.11ax, MCS 0-11, 20-160 MHz). -m sets the MCS; one spatial stream unless --wifi-spatial-streams. Prints a Wi-Fi PHY block.")
 @click.option("--wifi-channel-width", "wifi_channel_width", type=click.Choice(["20", "40", "80", "160"]), default="20", help="Wi-Fi channel width in MHz for --wifi-phy ht/vht/he (Step 20.C); sets the noise bandwidth too.")
 @click.option("--wifi-gi", "wifi_gi", type=click.Choice(["400", "800", "1600", "3200"]), default="800", help="Guard interval in ns for --wifi-phy ht/vht (400/800) or he (800/1600/3200) (Step 20.C).")
 # Rashed-Step 20.C-10-08-2026-end
@@ -407,6 +407,9 @@ def _cell_freqs(explicit, positions, reuse, n):
 # Rashed-Step 20.D-10-08-2026-end
 # Rashed-Step 20.E-10-09-2026-start
 @click.option("--wifi-ofdma", "wifi_ofdma", is_flag=True, default=False, help="802.11ax downlink OFDMA (Step 20.E; needs --wifi-phy he): each channel access carries an HE MU PPDU to up to --wifi-ofdma-max-users STAs on equal resource units (26/52/106/242/484/996 tones), each with an A-MPDU (up to --wifi-ampdu MPDUs). Prints a Wi-Fi OFDMA block. Default (unset) = single-user, byte-identical.")
+@click.option("--wifi-spatial-streams", "wifi_spatial_streams", type=click.IntRange(1, 4), default=1, help="Wi-Fi spatial streams (Step 25.C; needs --wifi-phy ht/vht/he): N x the data rate, each stream at the link SINR - 10 log10(N) (power split over the streams, no MIMO channel matrix), one preamble training field per stream. Default 1 = as before.")  # Rashed-Step 25.C-10-20-2026
+@click.option("--wifi-mu-mimo-users", "wifi_mu_mimo_users", type=click.IntRange(1, 4), default=1, help="802.11ax downlink MU-MIMO (Step 25.C; needs --wifi-ofdma, at most --wifi-spatial-streams): up to this many STAs share each resource unit of >= 106 tones, one stream each with the RU power split between them, and each keeps --wifi-mu-mimo-residual-db of every other user's stream as interference. Default 1 = OFDMA only.")  # Rashed-Step 25.C-10-20-2026
+@click.option("--wifi-mu-mimo-residual-db", "wifi_mu_mimo_residual_db", type=float, default=-30.0, help="MU-MIMO residual inter-user interference after precoding, relative to the user's own stream (default -30 dB).")  # Rashed-Step 25.C-10-20-2026
 @click.option("--wifi-ofdma-max-users", "wifi_ofdma_max_users", type=click.IntRange(1, 74), default=8, help="Users per OFDMA PPDU / trigger round (Step 20.E).")
 # Rashed-Step 21.C-10-11-2026-start
 @click.option("--wifi-mu-edca", "wifi_mu_edca", is_flag=True, default=False, help="MU EDCA (Step 21.C; needs --wifi-ul-ofdma): STAs still contend for uplink themselves, but for --wifi-mu-edca-timer-ms after each trigger with MU EDCA parameters (AIFSN 12, CW 255-1023). Default (unset) = triggered STAs never contend.")
@@ -633,6 +636,7 @@ def single_run(
         wifi_management: bool = False, wifi_beacon_interval_ms: float = 102.4, wifi_scan_ms: float = 120.0,
         wifi_roam_threshold_dbm: float = -75.0, wifi_roam_hysteresis_db: float = 6.0,  # 20.D
         wifi_ofdma: bool = False, wifi_ofdma_max_users: int = 8, wifi_ul_ofdma: bool = False,  # 20.E
+        wifi_spatial_streams: int = 1, wifi_mu_mimo_users: int = 1, wifi_mu_mimo_residual_db: float = -30.0,  # 25.C
         wifi_mu_edca: bool = False, wifi_mu_edca_timer_ms: float = 65.536,  # 21.C
         wifi_sta_traffic_model: str = "saturated", wifi_sta_arrival_rate_pps: float = 100.0,  # 20.B
         wifi_stas_per_ap: int = 1,  # 21.A
@@ -907,7 +911,7 @@ def single_run(
     if wifi_phy != "legacy":
         from wifi.phy import validate as _validate_phy
         try:
-            _validate_phy(wifi_phy, int(wifi_channel_width), mcs_value, int(wifi_gi))
+            _validate_phy(wifi_phy, int(wifi_channel_width), mcs_value, int(wifi_gi), wifi_spatial_streams)  # 25.C
         except ValueError as e:
             raise click.BadParameter(str(e))
     elif wifi_channel_width != "20" or wifi_gi != "800":
@@ -916,6 +920,12 @@ def single_run(
     # Rashed-Step 20.E-10-09-2026-start
     if wifi_ofdma and wifi_phy != "he":
         raise click.BadParameter("--wifi-ofdma needs --wifi-phy he.")
+    # Rashed-Step 25.C-10-20-2026-start
+    if wifi_spatial_streams != 1 and wifi_phy == "legacy":
+        raise click.BadParameter("--wifi-spatial-streams needs --wifi-phy ht, vht or he.")
+    if wifi_mu_mimo_users != 1 and not (wifi_ofdma and wifi_mu_mimo_users <= wifi_spatial_streams):
+        raise click.BadParameter("--wifi-mu-mimo-users needs --wifi-ofdma and at most --wifi-spatial-streams users.")
+    # Rashed-Step 25.C-10-20-2026-end
     # Rashed-Step 21.C-10-11-2026-start
     # --wifi-ofdma with --wifi-edca is supported since Step 21.C.
     if wifi_mu_edca and not wifi_ul_ofdma:
@@ -1138,6 +1148,8 @@ def single_run(
                               management=_mgmt_config(wifi_management, wifi_beacon_interval_ms, wifi_scan_ms,
                                                       wifi_roam_threshold_dbm, wifi_roam_hysteresis_db),  # 20.D
                               ofdma=wifi_ofdma, ofdma_max_users=wifi_ofdma_max_users, ul_ofdma=wifi_ul_ofdma,  # 20.E
+                              spatial_streams=wifi_spatial_streams, mu_mimo_users=wifi_mu_mimo_users,  # 25.C
+                              mu_mimo_residual_db=wifi_mu_mimo_residual_db,  # 25.C
                               mu_edca=_mu_edca(wifi_mu_edca, wifi_mu_edca_timer_ms),  # 21.C
                               # Rashed-Step 5.D-02-06-2026-start
                               wifi_sinr_thr_db_override=wifi_sinr_thr_db_override,

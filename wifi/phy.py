@@ -48,28 +48,58 @@ def phy_of(config) -> str:
     return getattr(config, "phy", "legacy") or "legacy"
 
 
+# Rashed-Step 25.C-10-20-2026-start
+# Spatial streams (Step 25.C, Config.spatial_streams 1-4, HT / VHT / HE).
+# Simple per-stream model, no MIMO channel matrix: N streams carry N x the
+# data rate, the transmit power is split over them, so each stream sees the
+# link SINR - 10 log10(N) - i.e. every MCS needs 10 log10(N) dB more link
+# SINR (3 dB for 2 streams, 6 dB for 4). The preamble gets one training
+# field (LTF) per stream (3 streams -> 4 LTFs): HT / VHT 4 us each, HE
+# 2x LTF 6.4 us + GI. 1 (default) = every earlier run.
+MAX_SS = 4
+N_LTF = {1: 1, 2: 2, 3: 4, 4: 4}
+
+
+def n_ss(config) -> int:
+    return int(getattr(config, "spatial_streams", 1) or 1)
+
+
+def ss_penalty_db(nss: int) -> float:
+    return 10.0 * math.log10(nss) if nss > 1 else 0.0
+
+
+def ltf_extra_us(phy: str, nss: int, gi_ns: int) -> float:
+    if nss <= 1:
+        return 0.0
+    ltf = (6.4 + gi_ns / 1000.0) if phy == "he" else 4.0
+    return (N_LTF[nss] - 1) * ltf
+# Rashed-Step 25.C-10-20-2026-end
+
+
 def sinr_table(config) -> dict:
     """MCS -> required SINR (dB) for this config's PHY."""
     p = phy_of(config)
     if p == "legacy":
         return WIFI_MCS_SINR_THRESHOLDS_DB
-    return {m: v for m, v in HT_SINR_THRESHOLDS_DB.items() if m <= MAX_MCS[p]}
+    # Rashed-Step 25.C-10-20-2026: + 10 log10(N) with N spatial streams
+    pen = ss_penalty_db(n_ss(config))
+    return {m: v + pen for m, v in HT_SINR_THRESHOLDS_DB.items() if m <= MAX_MCS[p]}
 
 
 def symbol_us(phy: str, gi_ns: int) -> float:
     return (12.8 if phy == "he" else 3.2) + gi_ns / 1000.0
 
 
-def ndbps(phy: str, width_mhz: int, mcs: int) -> float:
+def ndbps(phy: str, width_mhz: int, mcs: int, nss: int = 1) -> float:  # 25.C: nss
     bpsc, rate = MODULATION[mcs]
-    return N_SD[phy][width_mhz] * bpsc * rate
+    return N_SD[phy][width_mhz] * bpsc * rate * nss
 
 
-def rate_mbps(phy: str, width_mhz: int, mcs: int, gi_ns: int) -> float:
-    return ndbps(phy, width_mhz, mcs) / symbol_us(phy, gi_ns)
+def rate_mbps(phy: str, width_mhz: int, mcs: int, gi_ns: int, nss: int = 1) -> float:  # 25.C: nss
+    return ndbps(phy, width_mhz, mcs, nss) / symbol_us(phy, gi_ns)
 
 
-def validate(phy: str, width_mhz, mcs: int, gi_ns) -> None:
+def validate(phy: str, width_mhz, mcs: int, gi_ns, nss: int = 1) -> None:  # 25.C: nss
     if phy not in PHYS:
         raise ValueError(f"Wi-Fi phy must be one of {PHYS} (got {phy!r})")
     if phy == "legacy":
@@ -80,8 +110,12 @@ def validate(phy: str, width_mhz, mcs: int, gi_ns) -> None:
         raise ValueError(f"{phy.upper()} guard interval must be one of {GI_NS[phy]} ns (got {gi_ns})")
     if not 0 <= mcs <= MAX_MCS[phy]:
         raise ValueError(f"{phy.upper()} MCS must be 0-{MAX_MCS[phy]} (got {mcs})")
-    if phy == "vht" and width_mhz == 20 and mcs == 9:
-        raise ValueError("VHT MCS 9 is not valid at 20 MHz with one spatial stream")
+    # Rashed-Step 25.C-10-20-2026-start
+    if not 1 <= nss <= MAX_SS:
+        raise ValueError(f"spatial streams must be 1-{MAX_SS} (got {nss})")
+    if phy == "vht" and width_mhz == 20 and mcs == 9 and nss != 3:
+        raise ValueError("VHT MCS 9 is not valid at 20 MHz (only with 3 spatial streams)")
+    # Rashed-Step 25.C-10-20-2026-end
 
 
 def ctrl_rate_mbps(config, mcs=None) -> int:
@@ -98,17 +132,17 @@ class PhyTimes(Times):
     time, preamble, data_rate in bits/us, ACK time, IFS constants), so every
     caller (frames, A-MPDU, MAC exchange) works unchanged."""
 
-    def __init__(self, payload: int, mcs: int, phy: str, width_mhz: int, gi_ns: int):
+    def __init__(self, payload: int, mcs: int, phy: str, width_mhz: int, gi_ns: int, nss: int = 1):  # 25.C: nss
         self.payload = payload
         self.mcs = mcs
         self.phy = phy
-        self.n_dbps = ndbps(phy, width_mhz, mcs)
+        self.n_dbps = ndbps(phy, width_mhz, mcs, nss)
         self.t_sym = symbol_us(phy, gi_ns)
         self.data_rate = self.n_dbps / self.t_sym            # [b/us]
         self.ctr_rate = ctrl_rate_mbps(_Cfg(phy, mcs))
         self.phy_data_rate = self.data_rate * 1e-6
         self.phy_ctr_rate = self.ctr_rate * 1e-6
-        self.ofdm_preamble = PREAMBLE_US[phy]
+        self.ofdm_preamble = PREAMBLE_US[phy] + ltf_extra_us(phy, nss, gi_ns)  # 25.C: + LTFs for streams 2..N
         self.ofdm_signal = 0.0                                 # the SIG fields are in PREAMBLE_US
 
     def get_ppdu_frame_time(self, payload_bytes=None):
@@ -128,5 +162,5 @@ def make_times(config, payload: int, mcs: int):
     p = phy_of(config)
     if p == "legacy":
         return Times(payload, mcs)
-    return PhyTimes(payload, mcs, p, config.channel_width_mhz, config.guard_interval_ns)
+    return PhyTimes(payload, mcs, p, config.channel_width_mhz, config.guard_interval_ns, n_ss(config))  # 25.C
 # Rashed-Step 20.C-10-08-2026-end

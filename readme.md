@@ -321,6 +321,7 @@ Is NR-U fair to Wi-Fi, and what fixes it? Scored with the 3GPP replacement test 
 | Batched backoff countdown (24.C, default) | - | Where nothing can change what a node senses between channel events (no `--fading`, no mobility, no OFDMA) a DCF / NR-U LBT backoff countdown waits once for all its slots instead of once per 9 us slot: ~1.8x faster. Same slot counting; only the order of two countdowns ending in the same microsecond can differ, so results are statistically equivalent rather than byte-identical to before |
 | Spatial reuse / OBSS-PD (25.A) | `--wifi-obss-pd-dbm N\|auto`, `--wifi-obss-pd-margin-db` | 802.11ax BSS colouring + OBSS-PD (needs `--wifi-phy he --wifi-preamble-detect`): an inter-BSS frame received below the OBSS-PD level no longer blocks (energy detection at -62 dBm still does), and the node then transmits at most 21 - (OBSS_PD + 82) dBm until that frame ends. `auto` = per AP: weakest associated STA's RSSI - margin, clamped to -82..-62. Prints a Spatial Reuse block |
 | Minstrel rate adaptation (25.B) | `--wifi-rate-adapt --wifi-rate-algo minstrel` | Per link and MCS an EWMA success probability (updated every 100 ms), the MCS with the best expected throughput (rate x probability), 10 % of transmissions probe a faster MCS. Unlike ARF (the default), collisions don't walk the MCS down step by step |
+| Spatial streams / DL MU-MIMO (25.C) | `--wifi-spatial-streams N`, `--wifi-mu-mimo-users K`, `--wifi-mu-mimo-residual-db` | N streams (1-4, HT/VHT/HE): N x rate, each stream at link SINR - 10 log10(N), one LTF per stream. MU-MIMO (needs `--wifi-ofdma`, K <= N): up to K STAs share each RU of >= 106 tones, one stream each, RU power split; each user keeps the residual (default -30 dB) of every other user's stream as interference |
 | Reference-slot feedback | `--nru-ref-nack-threshold`, `--nru-adaptive-cot` | contention window grows when this share of the reference slot's blocks fail (TS 37.213 Z, default 0.8); adaptive COT halves the next COT after a failed reference slot |
 
 Findings in short: the unfairness is a sensing problem - between about 32 and 45 m neither side hears the other by energy detection while NR-U still breaks Wi-Fi frames (network A latency 75.6 vs 7.5 ms next to Wi-Fi). Priority classes, the standard 37.213 threshold and reference-slot feedback don't fix it (feedback can't see it at all: NR-U's own reference slots never fail there). A lower NR-U threshold (-82 dBm, non-standard) plus CTS-to-self passes the replacement test at every distance up to 60 m with ~0 Wi-Fi frame failures.
@@ -381,7 +382,7 @@ Assert-based regression suite (no print-and-eyeball scripts for anything added s
 pip install pytest
 pytest test/
 ```
-698 tests passing as of Step 25.B. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
+703 tests passing as of Step 25.C. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
 
 ## Current Work Status
 

@@ -90,5 +90,6 @@ def nominal_rates(config) -> Dict[int, float]:
     if p == "legacy":
         from Times import MCS
         return {m: float(MCS[m][0]) for m in table}
-    return {m: wifi_phy.rate_mbps(p, int(config.channel_width_mhz), m, int(config.guard_interval_ns)) for m in table}
+    return {m: wifi_phy.rate_mbps(p, int(config.channel_width_mhz), m, int(config.guard_interval_ns),
+                                  wifi_phy.n_ss(config)) for m in table}  # 25.C: x spatial streams
 # Rashed-Step 25.B-10-20-2026-end

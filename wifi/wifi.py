@@ -133,13 +133,35 @@ class Config:
     # each trigger. None (default) = triggered STAs never contend (20.E).
     mu_edca: Any = None
     # Rashed-Step 21.C-10-11-2026-end
+    # Rashed-Step 25.C-10-20-2026-start
+    # Spatial streams (wifi/phy.py, HT / VHT / HE): N x rate, each stream at
+    # the link SINR - 10 log10(N), one LTF per stream. 1 = as before.
+    spatial_streams: int = 1
+    # Downlink MU-MIMO (wifi/ofdma.py, needs ofdma): up to mu_mimo_users
+    # STAs (<= spatial_streams, the AP's antennas) share each RU of >= 106
+    # tones, one stream each, the RU power split between them; precoding
+    # leaves each user mu_mimo_residual_db of every other user's stream as
+    # interference. 1 = OFDMA only, as before.
+    mu_mimo_users: int = 1
+    mu_mimo_residual_db: float = -30.0
+    # Rashed-Step 25.C-10-20-2026-end
     # Rashed-Step 20.E-10-09-2026-end
     # Rashed-Step 20.D-10-08-2026-end
 
     def __post_init__(self):
         if self.phy != "legacy":
-            wifi_phy.validate(self.phy, self.channel_width_mhz, self.mcs, self.guard_interval_ns)
+            wifi_phy.validate(self.phy, self.channel_width_mhz, self.mcs, self.guard_interval_ns,
+                              self.spatial_streams)  # 25.C
             self.bandwidth_mhz = float(self.channel_width_mhz)
+        # Rashed-Step 25.C-10-20-2026-start
+        elif self.spatial_streams != 1:
+            raise ValueError("Config.spatial_streams needs phy ht, vht or he.")
+        if self.mu_mimo_users != 1:
+            if not self.ofdma:
+                raise ValueError("Config.mu_mimo_users needs ofdma=True.")
+            if not 2 <= self.mu_mimo_users <= self.spatial_streams:
+                raise ValueError("Config.mu_mimo_users must be 2..spatial_streams.")
+        # Rashed-Step 25.C-10-20-2026-end
         # Rashed-Step 20.E-10-09-2026-start
         if self.ofdma and self.phy != "he":
             raise ValueError("Config.ofdma needs phy='he' (802.11ax).")
