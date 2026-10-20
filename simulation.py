@@ -269,6 +269,10 @@ def run_simulation(
         # Rashed-Step 22.D-10-15-2026-end
         cca_detect_us: float = 0.0,  # Rashed-Step 23.A-10-17-2026: collision window (0 = instant sensing)
         compact_packet_log: bool = False,  # Rashed-Step 24.B-10-19-2026: CompactPacketLog for every node
+        # Rashed-Step 25.A-10-20-2026: 802.11ax spatial reuse - None (off), an OBSS-PD level in dBm
+        # (-82..-62) for every BSS, or "auto" (per AP: weakest associated STA's RSSI - margin).
+        wifi_obss_pd=None,
+        wifi_obss_pd_margin_db: float = 20.0,
 ):
     # Rashed-Step 24.B-10-19-2026-start
     from common.packet_log import set_compact_packet_log
@@ -543,6 +547,24 @@ def run_simulation(
     # Rashed-Step 1.D_3-12-26-2025-end
 
     # Rashed-Step 1.E-12-26-2025-start
+    # Rashed-Step 25.A-10-20-2026-start
+    sr_levels = {}
+    if wifi_obss_pd is not None:
+        for idx, ap in enumerate(wifi_aps):
+            color = idx % 63 + 1                                     # BSS colour 1..63
+            stas = list(getattr(ap, "sta_list", []))
+            for n in [ap] + stas:
+                channel.bss_color_of[n.name] = color
+            if wifi_obss_pd == "auto":
+                rssi = [channel.link_rx_power_dbm(ap.name, ap.current_pos(), s.current_pos(), ap.config.tx_power_dbm,
+                                                  ap.config.f_ghz, ap.config.pl_exp, rx_infra=False) for s in stas]
+                level = min(-62.0, max(-82.0, min(rssi) - wifi_obss_pd_margin_db)) if rssi else -82.0
+            else:
+                level = float(wifi_obss_pd)
+            for n in [ap] + stas:
+                n._obss_pd = level
+            sr_levels[ap.name] = (color, level)
+    # Rashed-Step 25.A-10-20-2026-end
     print("=== Wi-Fi Topology ===")
     for ap in wifi_aps:
         print(ap.name, ap.pos)
@@ -994,6 +1016,15 @@ def run_simulation(
         print(f'Wifi MAC ACK/Block Acks sent: {m["acks"]}, lost: {m["acks_lost"]}, duplicate retransmissions: {m["duplicates"]}')
         print(f'Wifi MAC EIFS deferrals: {m["eifs"]}')
     # Rashed-Step 20.A-10-08-2026-end
+    # Rashed-Step 25.A-10-20-2026-start
+    if sr_levels:
+        print("=== Wi-Fi Spatial Reuse (OBSS-PD) ===")
+        for name, (color, level) in sr_levels.items():
+            print(f"{name}: BSS colour {color}, OBSS-PD {level:.1f} dBm, "
+                  f"TX power cap when reusing {21.0 - (level + 82.0):.1f} dBm")
+        print(f"Channel checks found idle thanks to OBSS-PD: {channel.sr_stats['ignored_checks']}, "
+              f"power-capped transmissions: {channel.sr_stats['capped_tx']}")
+    # Rashed-Step 25.A-10-20-2026-end
     fairness_stats = None  # (not "fairness": a legacy occupancy metric below uses that name)
     if fairness_report:
         from common.fairness import compute_fairness, print_fairness

@@ -413,6 +413,8 @@ def _cell_freqs(explicit, positions, reuse, n):
 # Rashed-Step 21.C-10-11-2026-end
 @click.option("--wifi-ul-ofdma", "wifi_ul_ofdma", is_flag=True, default=False, help="Trigger-based uplink OFDMA (Step 20.E; needs --wifi-ofdma and --wifi-sta-uplink-enabled): the AP sends Trigger frames, STAs answer together on their resource units and then send only when triggered.")
 # Rashed-Step 20.E-10-09-2026-end
+@click.option("--wifi-obss-pd-dbm", "wifi_obss_pd_dbm", type=str, default=None, help="802.11ax spatial reuse (Step 25.A; needs --wifi-phy he and --wifi-preamble-detect): every AP gets a BSS colour; an inter-BSS frame received below this OBSS-PD level (-82..-62 dBm) no longer blocks the AP / its STAs (energy detection at -62 dBm still applies), which then transmit at most 21 - (OBSS_PD + 82) dBm until that frame ends. 'auto' = per AP: its weakest associated STA's RSSI minus --wifi-obss-pd-margin-db, clamped to -82..-62. Default (unset) = no spatial reuse, byte-identical.")  # Rashed-Step 25.A-10-20-2026
+@click.option("--wifi-obss-pd-margin-db", "wifi_obss_pd_margin_db", type=float, default=20.0, help="--wifi-obss-pd-dbm auto: margin (dB) below the weakest associated STA's RSSI (default 20).")  # Rashed-Step 25.A-10-20-2026
 @click.option("--wifi-preamble-detect", "wifi_preamble_detect", is_flag=True, default=False, help="802.11 preamble detection (Step pre_20.A): Wi-Fi defers to Wi-Fi frames from -82 dBm and to other signals (NR-U, licensed NR) from its -62 dBm energy-detection threshold - the asymmetry behind LAA coexistence. Default (unset) = one -62 dBm rule for everything, byte-identical.")
 @click.option("--fairness-report", "fairness_report", is_flag=True, default=False, help="Print a Coexistence Fairness block (Step pre_20.A): per technology the share of airtime it occupied (failed transmissions included), transmissions and their failure ratio, throughput and latency, and Jain's index over the airtime shares. Default (unset) = not printed.")
 # Rashed-Step pre_20.A-10-08-2026-end
@@ -673,6 +675,7 @@ def single_run(
         ftp_file_bytes: int = 500000,  # 23.C
         log_file: bool = False, log_level: str = "INFO",  # 24.A
         compact_packet_log: bool = False,  # 24.B
+        wifi_obss_pd_dbm: Optional[str] = None, wifi_obss_pd_margin_db: float = 20.0,  # 25.A
 ):
     # Rashed-Step 24.A-10-19-2026-start
     if log_file:
@@ -721,6 +724,24 @@ def single_run(
         if ap_number is None or gnb_number is None:
             raise click.UsageError("--ap-number and --gnb-number are required (or use --layout)")
     # Rashed-Step 22.D-10-15-2026-end
+    # Rashed-Step 25.A-10-20-2026-start
+    obss_pd = None
+    if wifi_obss_pd_dbm is not None:
+        if wifi_phy != "he" or not wifi_preamble_detect:
+            raise click.UsageError("--wifi-obss-pd-dbm needs --wifi-phy he and --wifi-preamble-detect")
+        if wifi_obss_pd_dbm.strip().lower() == "auto":
+            obss_pd = "auto"
+        else:
+            try:
+                obss_pd = float(wifi_obss_pd_dbm)
+            except ValueError:
+                raise click.UsageError("--wifi-obss-pd-dbm must be a number (-82..-62) or 'auto'")
+            if not -82.0 <= obss_pd <= -62.0:
+                raise click.UsageError("--wifi-obss-pd-dbm must be between -82 and -62 dBm")
+    elif any(p is not None and p.get_parameter_source('wifi_obss_pd_margin_db').name != 'DEFAULT'
+             for p in [click.get_current_context(silent=True)]):
+        raise click.UsageError("--wifi-obss-pd-margin-db needs --wifi-obss-pd-dbm auto")
+    # Rashed-Step 25.A-10-20-2026-end
     if ftp_file_bytes <= 0:  # Rashed-Step 23.C-10-17-2026
         raise click.UsageError("--ftp-file-bytes must be > 0")
     if cca_detect_us is not None and not 0.0 < cca_detect_us <= 20.0:  # Rashed-Step 23.A-10-17-2026
@@ -1256,6 +1277,7 @@ def single_run(
                        wifi_ap_freqs_hz=ap_freqs, nru_gnb_freqs_hz=gnb_freqs, cell_report=cell_report,  # 22.D
                        cca_detect_us=cca_detect_us or 0.0,  # 23.A
                        compact_packet_log=compact_packet_log,  # 24.B
+                       wifi_obss_pd=obss_pd, wifi_obss_pd_margin_db=wifi_obss_pd_margin_db,  # 25.A
                        # Rashed-Step 19.E.2-10-07-2026-end
                        # Rashed-Step 16.F-10-02-2026-end
                        )

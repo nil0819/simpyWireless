@@ -328,7 +328,8 @@ class DcfChannelAccess:
         pd = getattr(cfg, "preamble_detect_dbm", None)
         if pd is not None:
             return node.channel.is_busy_wifi(node.current_pos(), cfg.ed_threshold_dbm, pd, exclude_tx_id=node.name,
-                                             sense_f_hz=cfg.f_ghz, sense_bw_mhz=cfg.bandwidth_mhz)
+                                             sense_f_hz=cfg.f_ghz, sense_bw_mhz=cfg.bandwidth_mhz,
+                                             obss_pd_dbm=getattr(node, "_obss_pd", None))  # 25.A
         # Rashed-Step pre_20.A-10-08-2026-end
         # Rashed-Step 20.A-10-08-2026-start
         # MAC exchange without preamble detection: still honour NAVs

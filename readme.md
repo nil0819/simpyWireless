@@ -319,6 +319,7 @@ Is NR-U fair to Wi-Fi, and what fixes it? Scored with the 3GPP replacement test 
 | Debug log file (24.A) | `--log-file`, `--log-level INFO\|DEBUG` | The per-event debug log (`log/<timestamp>.log`) is now OFF by default - it took ~45 % of a run's time and 20-30 MB per 100 simulated seconds; printed results don't depend on it. All five CLIs take the flags |
 | Compact packet log (24.B) | `--compact-packet-log` | Older finished packets are kept in typed column arrays instead of objects (the latest 10 000 per node stay objects): identical printed statistics and CSV export with ~2.7x less memory, for long runs. The end-of-run statistics now read the logs in one pass instead of copying them |
 | Batched backoff countdown (24.C, default) | - | Where nothing can change what a node senses between channel events (no `--fading`, no mobility, no OFDMA) a DCF / NR-U LBT backoff countdown waits once for all its slots instead of once per 9 us slot: ~1.8x faster. Same slot counting; only the order of two countdowns ending in the same microsecond can differ, so results are statistically equivalent rather than byte-identical to before |
+| Spatial reuse / OBSS-PD (25.A) | `--wifi-obss-pd-dbm N\|auto`, `--wifi-obss-pd-margin-db` | 802.11ax BSS colouring + OBSS-PD (needs `--wifi-phy he --wifi-preamble-detect`): an inter-BSS frame received below the OBSS-PD level no longer blocks (energy detection at -62 dBm still does), and the node then transmits at most 21 - (OBSS_PD + 82) dBm until that frame ends. `auto` = per AP: weakest associated STA's RSSI - margin, clamped to -82..-62. Prints a Spatial Reuse block |
 | Reference-slot feedback | `--nru-ref-nack-threshold`, `--nru-adaptive-cot` | contention window grows when this share of the reference slot's blocks fail (TS 37.213 Z, default 0.8); adaptive COT halves the next COT after a failed reference slot |
 
 Findings in short: the unfairness is a sensing problem - between about 32 and 45 m neither side hears the other by energy detection while NR-U still breaks Wi-Fi frames (network A latency 75.6 vs 7.5 ms next to Wi-Fi). Priority classes, the standard 37.213 threshold and reference-slot feedback don't fix it (feedback can't see it at all: NR-U's own reference slots never fail there). A lower NR-U threshold (-82 dBm, non-standard) plus CTS-to-self passes the replacement test at every distance up to 60 m with ~0 Wi-Fi frame failures.
@@ -379,7 +380,7 @@ Assert-based regression suite (no print-and-eyeball scripts for anything added s
 pip install pytest
 pytest test/
 ```
-688 tests passing as of Step 24.D. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
+692 tests passing as of Step 25.A. Most files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
 
 ## Current Work Status
 

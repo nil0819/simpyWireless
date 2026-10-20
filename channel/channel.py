@@ -88,6 +88,7 @@ class ActiveTx:
     # already skips a gNB's own per-UE downlink allocations by tx_id.
     # Set on licensed NR uplink (several UEs per slot, different tx_ids).
     ofdma_cell: Optional[str] = field(default=None, compare=False)
+    bss_color: Optional[int] = field(default=None, compare=False)  # Rashed-Step 25.A-10-20-2026: 802.11ax BSS colour
     # Rashed-Step pre_18.F-10-06-2026-end
 # Rashed-Step 3.B-01-12-2026-end
 
@@ -248,6 +249,15 @@ class Channel:
     # False (default): one wait per slot, re-checking at every boundary.
     static_sensing: bool = False
     # Rashed-Step 24.C-10-19-2026-end
+    # Rashed-Step 25.A-10-20-2026-start
+    # 802.11ax spatial reuse (--wifi-obss-pd-dbm): BSS colour per Wi-Fi node
+    # name (an AP and its STAs share one), stamped on their transmissions in
+    # register_tx; a node that ignores an inter-BSS frame under OBSS-PD is
+    # power-capped until that frame ends (sr_cap: name -> (until, max dBm)).
+    bss_color_of: Dict[str, int] = field(default_factory=dict)
+    sr_cap: Dict[str, Tuple[float, float]] = field(default_factory=dict)
+    sr_stats: Dict[str, int] = field(default_factory=lambda: {"ignored_checks": 0, "capped_tx": 0})
+    # Rashed-Step 25.A-10-20-2026-end
 
      # Rashed-Step 3.B-01-12-2026-start
     def __post_init__(self):
@@ -270,6 +280,15 @@ class Channel:
 
 
     def register_tx(self, tx: ActiveTx):
+         # Rashed-Step 25.A-10-20-2026-start
+         if self.bss_color_of and tx.tech == "WiFi":
+              if tx.bss_color is None:
+                   tx.bss_color = self.bss_color_of.get(tx.tx_id)
+              cap = self.sr_cap.get(tx.tx_id)
+              if cap is not None and self.env.now < cap[0] and tx.tx_power_dbm > cap[1]:
+                   tx.tx_power_dbm = cap[1]       # OBSS-PD transmit-power restriction
+                   self.sr_stats["capped_tx"] += 1
+         # Rashed-Step 25.A-10-20-2026-end
          # Rashed-Step pre_18.A-10-04-2026-start
          self._tx_serial = getattr(self, "_tx_serial", 0) + 1
          tx.uid = self._tx_serial
@@ -443,7 +462,7 @@ class Channel:
     # Rashed-Step pre_20.A-10-08-2026-start
     def is_busy_wifi(self, sense_pos: Pos, ed_threshold_dbm: float, preamble_detect_dbm: float,
                      exclude_tx_id: Optional[str] = None, sense_f_hz: Optional[float] = None,
-                     sense_bw_mhz: Optional[float] = None) -> bool:
+                     sense_bw_mhz: Optional[float] = None, obss_pd_dbm: Optional[float] = None) -> bool:
         """802.11 clear channel assessment with preamble detection: busy
         when the energy of Wi-Fi-decodable transmissions (Wi-Fi, or another
         technology sending a Wi-Fi preamble, tx.wifi_preamble) reaches
@@ -453,9 +472,39 @@ class Channel:
         if self.is_busy(sense_pos, ed_threshold_dbm, exclude_tx_id, sense_f_hz, sense_bw_mhz):
             return True
         wifi_like = lambda t: t.tech == "WiFi" or getattr(t, "wifi_preamble", False)
+        # Rashed-Step 25.A-10-20-2026-start
+        # OBSS-PD (802.11ax spatial reuse): an inter-BSS frame (another BSS
+        # colour) received below the node's OBSS-PD level doesn't count for
+        # preamble detection or NAV - energy detection above still counts
+        # every signal. If the node then finds the channel idle, it may go
+        # ahead, at TX_PWR_ref - (OBSS_PD - OBSS_PD_min) = 21 - (OBSS_PD + 82)
+        # dBm until the ignored frames end (sr_cap, applied in register_tx).
+        ignored = []
+        if obss_pd_dbm is not None and self.bss_color_of:
+            own = self.bss_color_of.get(exclude_tx_id)
+            infra = is_infrastructure(exclude_tx_id)
+
+            def ignorable(t):
+                if t.bss_color is None or own is None or t.bss_color == own:
+                    return False
+                if self.rx_power_at(t, sense_pos, infra) >= obss_pd_dbm:
+                    return False
+                ignored.append(t)
+                return True
+            base = wifi_like
+            wifi_like = lambda t: base(t) and not ignorable(t)
         if self.sensed_energy_dbm(sense_pos, exclude_tx_id, sense_f_hz, sense_bw_mhz,
                                   tx_filter=wifi_like) >= preamble_detect_dbm:
             return True
+        if ignored:
+            if self.nav_busy(sense_pos, preamble_detect_dbm, exclude_tx_id, sense_f_hz, sense_bw_mhz,
+                             skip=set(id(t) for t in ignored) | {t.tx_id for t in ignored}):
+                return True
+            until = max(t.t_end for t in ignored)
+            self.sr_cap[exclude_tx_id] = (until, 21.0 - (obss_pd_dbm + 82.0))
+            self.sr_stats["ignored_checks"] += 1
+            return False
+        # Rashed-Step 25.A-10-20-2026-end
         # Rashed-Step pre_20.D.3-10-08-2026-start
         return self.nav_busy(sense_pos, preamble_detect_dbm, exclude_tx_id, sense_f_hz, sense_bw_mhz)
         # Rashed-Step pre_20.D.3-10-08-2026-end
@@ -473,7 +522,8 @@ class Channel:
         self.env.process(expire())
 
     def nav_busy(self, sense_pos: Pos, preamble_detect_dbm: float, exclude_tx_id: Optional[str] = None,
-                 sense_f_hz: Optional[float] = None, sense_bw_mhz: Optional[float] = None) -> bool:
+                 sense_f_hz: Optional[float] = None, sense_bw_mhz: Optional[float] = None,
+                 skip=None) -> bool:  # Rashed-Step 25.A-10-20-2026: skip = NAVs set by ignored inter-BSS frames
         """True while a NAV reservation is running whose frame reached
         sense_pos at preamble_detect_dbm or more (it could be decoded there).
         Simplification: every node in range honours it, including one that
@@ -484,6 +534,8 @@ class Channel:
         self.nav_reservations = [r for r in self.nav_reservations if r.t_end > now]
         for r in self.nav_reservations:
             if exclude_tx_id is not None and r.tx_id == exclude_tx_id:
+                continue
+            if skip and r.tx_id in skip:  # Rashed-Step 25.A-10-20-2026
                 continue
             if sense_f_hz is not None and spectral_overlap_fraction(sense_f_hz, sense_bw_mhz, r.f_hz, r.bandwidth_mhz) <= 0.0:
                 continue
