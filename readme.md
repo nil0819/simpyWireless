@@ -48,6 +48,7 @@ common/layouts.py, cell_report.py - Step 22.D: multi-cell layouts, per-cell repo
 common/ftp.py          - Step 23.C: FTP Model 3 file statistics (UPT)
 analysis/parallel.py   - Step 23.D: seed sweeps in parallel, mean +- 95% CI
 common/packet_log.py   - Step 24.B: compact packet log (--compact-packet-log)
+analysis/dtmc_validation.py - Step 24.E: benign DTMC validation (seeds / 10 000 s)
 wifi/wifi.py, wifi/sta.py       - Wi-Fi AP + STA (CSMA/CA)
 wifi/mac.py, ampdu.py, phy.py,  - Step 20: frame exchange (ACK/NAV/RTS/EIFS),
 wifi/mgmt.py, ofdma.py            A-MPDU, HT/VHT/HE rates, beacons /
@@ -419,6 +420,7 @@ pytest test/
 ----> Step pre_22 (A-E) - the LAA study and the CCNC validation re-run on the Step 20-21 Wi-Fi stack (`analysis/laa_revalidation.py`, `analysis/occupancy_revalidation.py`): the diagnosis holds on every stack (the failing band widens to 50 m with HE + A-MPDU); the DTMC over-predicts Wi-Fi occupancy by 2-6 points with the full 802.11 exchange (EIFS, real collision rate); `compare_dtmc` counts the model's Wi-Fi occupancy the simulator's way (pre_22.G). NR-U `--nru-cts-power-dbm` (a 20 dBm CTS removes the 70-80 m over-protection) and `--nru-reservation-signal` (closes the sync-slot gap). See docs/laa_fairness_study.md section 7
 ----> Step 22 (22.A-22.E) - Phase D realism, all opt-in: 3GPP TR 38.901 InH-Office / UMi / UMa and TGax path loss (`--pathloss-model`), reciprocal spatially correlated shadowing (`--pathloss-shadowing`, `--shadowing-correlated`), flat block fading (`--fading`), multi-cell layouts with per-cell channels and a Cell Report (`--layout`, `--channel-reuse`, `--cell-report`). On a realistic channel the 35-40 m failing band of the LAA test moves with the propagation model, and NR-U passes the replacement test on the TR 38.889 indoor layout (`analysis/realism_study.py`). See docs/laa_fairness_study.md section 8
 ----> Step 23 (23.A-23.F) - coexistence fidelity: collision window (`--cca-detect-us`), NR-U burst-model COTs carry their real payload (pre_23.B, default), FTP Model 3 traffic with user-perceived throughput (`ftp3`, `--ftp-file-bytes`), parallel seed sweeps with 95 % CIs (`analysis/parallel.py`). On the TR 38.889 layout with FTP Model 3 NR-U passes the replacement test at low, medium and high load; the DTMC comparison is unchanged under the defaults (`analysis/coexistence_study.py`). See docs/laa_fairness_study.md section 9
+----> Step 24 (24.A-24.E) - speed and memory: debug log file off by default (`--log-file`), compact packet log (`--compact-packet-log`, ~2.7x less memory) with one-pass statistics, batched backoff countdown (default; ~1.8x faster, same-instant tie order can differ), start-up 6.4 -> 1.7 s. A 48-run sweep: ~168 s -> 43 s serial, 37 s -> 9 s on 8 processes. Benign DTMC validation re-run with 100 seeds x 100 s and as 10 000 s runs (`analysis/dtmc_validation.py`): mean deviation ~0.6-0.7 points Wi-Fi, ~1.0 NR-U
 
 Full detail (design rationale, exact verified numbers, what was deliberately left out) for every sub-step above is in `Project details/Step N.txt`; `Project details/STATUS - resume context.txt` is the current single-file "start here" summary.
 
