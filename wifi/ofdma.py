@@ -89,6 +89,75 @@ def ru_plan(width_mhz: int, n_users: int):
             for k in range(n_users)]
 
 
+# Rashed-Step 25.D-10-20-2026-start
+# Demand-based RU plan (Step 25.D, Config.ofdma_ru_alloc = "demand"). The
+# equal plan gives every user the same RU size, so 3 users in 20 MHz get
+# 3 x 52 tones and a third of the channel is unused, and a user with one
+# small frame gets as much as one with a full A-MPDU. Here the channel is
+# split along the 802.11ax RU tree (1992 -> 2 x 996 -> 2 x 484 -> 2 x 242
+# -> 2 x 106 -> 2 x 52 -> 2 x 26; the centre 26-tone RUs stay unused): a
+# node with one user is that user's RU; otherwise its users are shared out
+# between the two halves, largest demand first, each to the half with the
+# smaller total demand (as long as it has room). A heavy user so ends up
+# alone on a large RU while light users share the other half in smaller
+# ones, and the PPDU - as long as the longest user - gets shorter. Demand
+# = bytes waiting for the user (queued + retries; the access category's
+# only with EDCA); saturated traffic = equal demand. More users than the
+# tree holds (e.g. 9 in 20 MHz) -> the equal plan.
+RU_CHILD = {1992: 996, 996: 484, 484: 242, 242: 106, 106: 52, 52: 26}
+RU_CAP = {26: 1, 52: 2, 106: 4, 242: 8, 484: 16, 996: 32, 1992: 64}
+
+
+def demand_plan(width_mhz: int, demands):
+    """[(tones, centre offset Hz, bandwidth MHz)] per user (in the order of
+    demands), or None when there are more users than the RU tree holds."""
+    n = len(demands)
+    root = FULL_TONES[width_mhz]
+    if n == 0 or n > RU_CAP[root]:
+        return None
+    out = [None] * n
+
+    def alloc(tones, centre_mhz, span_mhz, idx):
+        if len(idx) == 1:
+            out[idx[0]] = (tones, centre_mhz * 1e6, tones * SUBCARRIER_MHZ)
+            return
+        child = RU_CHILD[tones]
+        halves, load = ([], []), [0.0, 0.0]
+        for i in sorted(idx, key=lambda i: (-demands[i], i)):
+            h = 0 if load[0] <= load[1] else 1
+            if len(halves[h]) >= RU_CAP[child]:
+                h = 1 - h
+            halves[h].append(i)
+            load[h] += demands[i]
+        alloc(child, centre_mhz - span_mhz / 4.0, span_mhz / 2.0, halves[0])
+        alloc(child, centre_mhz + span_mhz / 4.0, span_mhz / 2.0, halves[1])
+
+    alloc(root, 0.0, float(width_mhz), list(range(n)))
+    return out
+
+
+def dl_demand(ap, sta, ac=None) -> float:
+    if ap.traffic_config.mode == "saturated":
+        return 1.0
+    pk = list(ap.ofdma_dl[sta.name]) + list(ap.ofdma_dl_pending[sta.name])
+    return float(sum(p.payload_bytes for p in pk if ac is None or p.traffic_class == ac))
+
+
+def ul_demand(sta) -> float:
+    if sta.traffic_config.mode == "saturated":
+        return 1.0
+    return float(sum(p.payload_bytes for p in list(sta.packet_queue.items) + list(sta.ofdma_ul_pending)))
+
+
+def _plan(cfg, width, users, demand):
+    if getattr(cfg, "ofdma_ru_alloc", "equal") == "demand":
+        plan = demand_plan(width, [demand(s) for s in users])
+        if plan is not None:
+            return plan
+    return ru_plan(width, len(users))
+# Rashed-Step 25.D-10-20-2026-end
+
+
 def ru_rate_mbps(tones: int, mcs: int, gi_ns: int, nss: int = 1) -> float:  # 25.C: nss
     bpsc, rate = wifi_phy.MODULATION[mcs]
     return RU_NSD[tones] * bpsc * rate * nss / wifi_phy.symbol_us("he", gi_ns)
@@ -200,7 +269,7 @@ def downlink_round(ap, users, ac=None):  # 21.C: ac = the EDCA access category t
     nss = wifi_phy.n_ss(cfg)
     groups = mu_groups(width, len(users), cfg.mu_mimo_users) if getattr(cfg, "mu_mimo_users", 1) > 1 else None
     if groups is None:
-        plan = ru_plan(width, len(users))
+        plan = _plan(cfg, width, users, lambda s: dl_demand(ap, s, ac))  # 25.D: = ru_plan(width, len(users)) by default
         ks = [1] * len(users)
     else:                                   # MU-MIMO: users of one group share an RU, one stream each
         rus = ru_plan(width, len(groups))
@@ -321,7 +390,7 @@ def uplink_round(ap, users):
     finally:
         ch.unregister_control_tx(t, ch.airtime_control, account_to=ap.name)
     yield env.timeout(wifi_mac.SIFS_US)
-    plan = ru_plan(width, n)
+    plan = _plan(cfg, width, users, ul_demand)                   # 25.D: = ru_plan(width, n) by default
     nss = wifi_phy.n_ss(cfg)                                     # 25.C
     budget = cfg.ampdu_max_ppdu_us - TB_PREAMBLE_US - wifi_phy.ltf_extra_us("he", nss, gi)
     per_user = []

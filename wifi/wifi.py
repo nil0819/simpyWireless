@@ -145,6 +145,10 @@ class Config:
     mu_mimo_users: int = 1
     mu_mimo_residual_db: float = -30.0
     # Rashed-Step 25.C-10-20-2026-end
+    # Rashed-Step 25.D-10-20-2026: OFDMA RU plan - "equal" (default, equal
+    # RUs as in 20.E) or "demand" (wifi.ofdma.demand_plan: mixed RU sizes
+    # along the RU tree by each user's queued bytes).
+    ofdma_ru_alloc: str = "equal"
     # Rashed-Step 20.E-10-09-2026-end
     # Rashed-Step 20.D-10-08-2026-end
 
@@ -156,6 +160,8 @@ class Config:
         # Rashed-Step 25.C-10-20-2026-start
         elif self.spatial_streams != 1:
             raise ValueError("Config.spatial_streams needs phy ht, vht or he.")
+        if self.ofdma_ru_alloc not in ("equal", "demand") or (self.ofdma_ru_alloc != "equal" and not self.ofdma):
+            raise ValueError("Config.ofdma_ru_alloc must be 'equal' or 'demand' (the latter needs ofdma).")  # 25.D
         if self.mu_mimo_users != 1:
             if not self.ofdma:
                 raise ValueError("Config.mu_mimo_users needs ofdma=True.")

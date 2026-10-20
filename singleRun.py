@@ -410,6 +410,7 @@ def _cell_freqs(explicit, positions, reuse, n):
 @click.option("--wifi-spatial-streams", "wifi_spatial_streams", type=click.IntRange(1, 4), default=1, help="Wi-Fi spatial streams (Step 25.C; needs --wifi-phy ht/vht/he): N x the data rate, each stream at the link SINR - 10 log10(N) (power split over the streams, no MIMO channel matrix), one preamble training field per stream. Default 1 = as before.")  # Rashed-Step 25.C-10-20-2026
 @click.option("--wifi-mu-mimo-users", "wifi_mu_mimo_users", type=click.IntRange(1, 4), default=1, help="802.11ax downlink MU-MIMO (Step 25.C; needs --wifi-ofdma, at most --wifi-spatial-streams): up to this many STAs share each resource unit of >= 106 tones, one stream each with the RU power split between them, and each keeps --wifi-mu-mimo-residual-db of every other user's stream as interference. Default 1 = OFDMA only.")  # Rashed-Step 25.C-10-20-2026
 @click.option("--wifi-mu-mimo-residual-db", "wifi_mu_mimo_residual_db", type=float, default=-30.0, help="MU-MIMO residual inter-user interference after precoding, relative to the user's own stream (default -30 dB).")  # Rashed-Step 25.C-10-20-2026
+@click.option("--wifi-ofdma-ru-alloc", "wifi_ofdma_ru_alloc", type=click.Choice(["equal", "demand"]), default="equal", help="OFDMA resource-unit plan (Step 25.D; needs --wifi-ofdma): equal (default) = every user the same RU size; demand = mixed sizes along the 802.11ax RU tree, the channel split by each user's queued bytes (a heavy user alone on a large RU, light users sharing smaller ones), downlink and uplink. With MU-MIMO groups the equal plan is kept.")  # Rashed-Step 25.D-10-20-2026
 @click.option("--wifi-ofdma-max-users", "wifi_ofdma_max_users", type=click.IntRange(1, 74), default=8, help="Users per OFDMA PPDU / trigger round (Step 20.E).")
 # Rashed-Step 21.C-10-11-2026-start
 @click.option("--wifi-mu-edca", "wifi_mu_edca", is_flag=True, default=False, help="MU EDCA (Step 21.C; needs --wifi-ul-ofdma): STAs still contend for uplink themselves, but for --wifi-mu-edca-timer-ms after each trigger with MU EDCA parameters (AIFSN 12, CW 255-1023). Default (unset) = triggered STAs never contend.")
@@ -637,6 +638,7 @@ def single_run(
         wifi_roam_threshold_dbm: float = -75.0, wifi_roam_hysteresis_db: float = 6.0,  # 20.D
         wifi_ofdma: bool = False, wifi_ofdma_max_users: int = 8, wifi_ul_ofdma: bool = False,  # 20.E
         wifi_spatial_streams: int = 1, wifi_mu_mimo_users: int = 1, wifi_mu_mimo_residual_db: float = -30.0,  # 25.C
+        wifi_ofdma_ru_alloc: str = "equal",  # 25.D
         wifi_mu_edca: bool = False, wifi_mu_edca_timer_ms: float = 65.536,  # 21.C
         wifi_sta_traffic_model: str = "saturated", wifi_sta_arrival_rate_pps: float = 100.0,  # 20.B
         wifi_stas_per_ap: int = 1,  # 21.A
@@ -923,6 +925,8 @@ def single_run(
     # Rashed-Step 25.C-10-20-2026-start
     if wifi_spatial_streams != 1 and wifi_phy == "legacy":
         raise click.BadParameter("--wifi-spatial-streams needs --wifi-phy ht, vht or he.")
+    if wifi_ofdma_ru_alloc != "equal" and not wifi_ofdma:  # Rashed-Step 25.D-10-20-2026
+        raise click.BadParameter("--wifi-ofdma-ru-alloc needs --wifi-ofdma.")
     if wifi_mu_mimo_users != 1 and not (wifi_ofdma and wifi_mu_mimo_users <= wifi_spatial_streams):
         raise click.BadParameter("--wifi-mu-mimo-users needs --wifi-ofdma and at most --wifi-spatial-streams users.")
     # Rashed-Step 25.C-10-20-2026-end
@@ -1150,6 +1154,7 @@ def single_run(
                               ofdma=wifi_ofdma, ofdma_max_users=wifi_ofdma_max_users, ul_ofdma=wifi_ul_ofdma,  # 20.E
                               spatial_streams=wifi_spatial_streams, mu_mimo_users=wifi_mu_mimo_users,  # 25.C
                               mu_mimo_residual_db=wifi_mu_mimo_residual_db,  # 25.C
+                              ofdma_ru_alloc=wifi_ofdma_ru_alloc,  # 25.D
                               mu_edca=_mu_edca(wifi_mu_edca, wifi_mu_edca_timer_ms),  # 21.C
                               # Rashed-Step 5.D-02-06-2026-start
                               wifi_sinr_thr_db_override=wifi_sinr_thr_db_override,
