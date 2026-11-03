@@ -72,7 +72,7 @@ def user_mcs(ap, sta, floor=None, key=None):  # 26.B: key (default the STA name 
     if not getattr(ap.config, "rate_adapt_enabled", False):
         return ap.config.mcs
     key = sta.name if key is None else key
-    m = ap.current_mcs_for_link(key)
+    m = ap.current_mcs_for_link(key, ofdma=True)   # 26.D: Minstrel's chain without the lowest-rate step
     if floor is not None and m < floor:
         m = floor
         if getattr(ap, "_minstrel", None) is not None:
@@ -243,12 +243,25 @@ def ul_demand(sta) -> float:
     return float(sum(p.payload_bytes for p in list(sta.packet_queue.items) + list(sta.ofdma_ul_pending)))
 
 
-def _plan(cfg, width, users, demand):
+def _plan(cfg, width, users, demand, ap=None, key=None):  # 26.D: ap / key
     if getattr(cfg, "ofdma_ru_alloc", "equal") == "demand":
-        plan = demand_plan(width, [demand(s) for s in users])
+        d = [demand(s) for s in users]
+        # Rashed-Step 26.D-11-03-2026-start: with per-user rates, demand in airtime
+        # (bytes / the user's rate per tone at its current MCS) - one PPDU lasts as long
+        # as its slowest user, so a slow user needs the bigger RU, not just a heavy one
+        if ap is not None and getattr(cfg, "rate_adapt_enabled", False):
+            d = [x / tone_rate(cfg, peek_mcs(ap, key(s))) for x, s in zip(d, users)]
+        # Rashed-Step 26.D-11-03-2026-end
+        plan = demand_plan(width, d)
         if plan is not None:
             return plan
     return ru_plan(width, len(users))
+
+
+def tone_rate(cfg, mcs):
+    """Rashed-Step 26.D: data bits per subcarrier per symbol at mcs, all streams."""
+    bpsc, rate = wifi_phy.MODULATION[mcs]
+    return bpsc * rate * wifi_phy.n_ss(cfg)
 # Rashed-Step 25.D-10-20-2026-end
 
 
@@ -364,13 +377,13 @@ def downlink_round(ap, users, ac=None):  # 21.C: ac = the EDCA access category t
     groups = mu_groups(width, len(users), cfg.mu_mimo_users) if getattr(cfg, "mu_mimo_users", 1) > 1 else None
     # Rashed-Step 26.C-11-03-2026-start: with rate adaptation, MU-MIMO only when it beats plain OFDMA
     if groups is not None and getattr(cfg, "rate_adapt_enabled", False):
-        ofdma_plan = _plan(cfg, width, users, lambda s: dl_demand(ap, s, ac))
+        ofdma_plan = _plan(cfg, width, users, lambda s: dl_demand(ap, s, ac), ap, lambda s: s.name)
         if not mu_worth_it(ap, users, groups, ofdma_plan, width, gi, nss):
             groups = None
             ap.ofdma_stats["mu_fallbacks"] = ap.ofdma_stats.get("mu_fallbacks", 0) + 1
     # Rashed-Step 26.C-11-03-2026-end
     if groups is None:
-        plan = _plan(cfg, width, users, lambda s: dl_demand(ap, s, ac))  # 25.D: = ru_plan(width, len(users)) by default
+        plan = _plan(cfg, width, users, lambda s: dl_demand(ap, s, ac), ap, lambda s: s.name)  # 25.D: = ru_plan(width, len(users)) by default; 26.D: airtime
         ks = [1] * len(users)
     else:                                   # MU-MIMO: users of one group share an RU, one stream each
         rus = ru_plan(width, len(groups))
@@ -506,7 +519,7 @@ def uplink_round(ap, users):
     finally:
         ch.unregister_control_tx(t, ch.airtime_control, account_to=ap.name)
     yield env.timeout(wifi_mac.SIFS_US)
-    plan = _plan(cfg, width, users, ul_demand)                   # 25.D: = ru_plan(width, n) by default
+    plan = _plan(cfg, width, users, ul_demand, ap, ul_key)       # 25.D: = ru_plan(width, n) by default; 26.D: airtime
     nss = wifi_phy.n_ss(cfg)                                     # 25.C
     budget = cfg.ampdu_max_ppdu_us - TB_PREAMBLE_US - wifi_phy.ltf_extra_us("he", nss, gi)
     # Rashed-Step 26.B-11-03-2026-start: the MCS the AP asks each STA for (cfg.mcs without rate adaptation)

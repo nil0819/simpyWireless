@@ -1837,7 +1837,7 @@ class WiFi:
         return self.sta_list[0] if self.sta_list else None
 
     # Rashed-Step 20.D-10-08-2026-end
-    def current_mcs_for_link(self, link_key: Optional[str]) -> int:
+    def current_mcs_for_link(self, link_key: Optional[str], ofdma: bool = False) -> int:  # 26.D: ofdma
         """
         The MCS to use RIGHT NOW for `link_key`. Returns config.mcs
         unchanged when rate adaptation is disabled, the link has no
@@ -1871,7 +1871,7 @@ class WiFi:
         if not self.config.rate_adapt_enabled or link_key is None:
             return self.config.mcs
         if self._minstrel is not None:  # Rashed-Step 25.B-10-20-2026
-            return self._minstrel.choose(link_key, self.env.now)
+            return self._minstrel.choose(link_key, self.env.now, chain_lowest=not ofdma)  # 26.D
         state = self.link_rate_state.get(link_key)
         # Rashed-Step 13.E.1-08-23-2026-start
         predictor = self.config.sinr_predictor

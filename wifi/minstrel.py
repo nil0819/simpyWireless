@@ -82,13 +82,21 @@ class Minstrel:
             st["maxp"] = max(st["prob"], key=lambda m: (st["prob"][m], self.rates[m]))
         # Rashed-Step 25.E-10-20-2026-end
 
-    def choose(self, key: str, now: float) -> int:
+    def choose(self, key: str, now: float, chain_lowest: bool = True) -> int:
+        """chain_lowest=False (Rashed-Step 26.D, OFDMA users): the retry
+        chain stops at the most reliable MCS if that one is usable (p >=
+        MIN_PROB) - in an OFDMA PPDU the lowest rate would stretch the
+        shared PPDU for every user; with no usable MCS still the lowest
+        (else a link failing everywhere would never get out of the chain)."""
         st = self._link(key)
         if st["pending"] is None:
             self._update(st, now)
             # Rashed-Step 25.E-10-20-2026: retry chain after failures (no look-around then)
             if st["fails"] > 0:
-                chain = (st["second"], st["maxp"], min(self.rates, key=lambda m: self.rates[m]))
+                lowest = min(self.rates, key=lambda m: self.rates[m])
+                usable = st["prob"].get(st["maxp"], 0.0) >= MIN_PROB
+                last = st["maxp"] if (not chain_lowest and usable) else lowest  # 26.D
+                chain = (st["second"], st["maxp"], last)
                 st["pending"] = chain[min(st["fails"], 3) - 1]
                 return st["pending"]
             mcs = st["best"]

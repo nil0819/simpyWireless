@@ -57,6 +57,8 @@ LADDER = [
                            "--wifi-mu-mimo-users", "2", "--wifi-ofdma-max-users", "4"]),
     ("OFDMA, 4 users/round", MIN + ["--wifi-spatial-streams", "2", "--wifi-ofdma", "--wifi-ofdma-ru-alloc", "demand",
                                     "--wifi-ofdma-max-users", "4"]),
+    # Rashed-Step 26.D-11-03-2026: since Step 26 the OFDMA rows run per-user rates (Minstrel); the same with ARF
+    ("OFDMA, ARF per user", RA + ["--wifi-spatial-streams", "2", "--wifi-ofdma", "--wifi-ofdma-ru-alloc", "demand"]),
     ("ARF + OBSS-PD", RA + ["--wifi-obss-pd-dbm", "-72"]),
     ("Minstrel + OBSS-PD", MIN + ["--wifi-obss-pd-dbm", "-72"]),
 ]
@@ -121,6 +123,7 @@ def study_ladder():
               "+ demand RUs": "+ demand\nRUs",
               "+ MU-MIMO 2": "+ MU-MIMO\n2 users",
               "OFDMA, 4 users/round": "OFDMA,\n4/round",
+              "OFDMA, ARF per user": "OFDMA,\nARF/user",
               "ARF + OBSS-PD": "ARF +\nOBSS-PD",
               "Minstrel + OBSS-PD": "Minstrel +\nOBSS-PD"}
     names = [short.get(r["case"], r["case"]) for r in rows]

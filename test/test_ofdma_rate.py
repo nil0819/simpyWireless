@@ -27,7 +27,7 @@ class _Ap:
     def __init__(self, cfg, per_sta, minstrel=None):
         self.config, self.per_sta, self._minstrel, self.fed = cfg, per_sta, minstrel, []
 
-    def current_mcs_for_link(self, key):
+    def current_mcs_for_link(self, key, ofdma=False):
         return self.per_sta[key]
 
     def rate_adapt_record_result(self, key, ok, measured_sinr_db=None):
@@ -170,3 +170,29 @@ def test_ofdma_report_with_lazy_mu_counters():
     assert r.exit_code == 0, r.output[-600:]
     assert "Wifi OFDMA MU-MIMO groups:" in r.output
 # Rashed-Step 26.C-11-03-2026-end
+
+
+# Rashed-Step 26.D-11-03-2026-start
+def test_ofdma_retry_chain_stops_at_most_reliable():
+    ms = Minstrel({m: 10.0 * (m + 1) for m in range(8)}, 0, seed=7)
+    for u in range(10):                                   # learn: MCS <= 5 decode
+        now = (u + 1) * 100_000.0
+        for _ in range(200):
+            m = ms.choose("A", now)
+            ms.record("A", m <= 5, now)
+    st = ms.links["A"]
+    st["fails"] = 3
+    assert ms.choose("A", 2e6, chain_lowest=False) == st["maxp"] != 0      # OFDMA: no lowest-rate step
+    ms.override("A", st["pending"]); st["pending"] = None
+    assert ms.choose("A", 2e6) == 0                                         # single-user: lowest, as 25.E
+
+
+def test_demand_plan_in_airtime_with_rate_adaptation():
+    users = [_Sta(n) for n in "ABC"]
+    cfg = Config(phy="he", ofdma=True, ofdma_ru_alloc="demand", rate_adapt_enabled=True, mcs=7)
+    ap = _ArfAp(cfg, {"A": {"mcs": 1}, "B": {"mcs": 9}, "C": {"mcs": 9}})   # A is slow
+    plan = ofdma._plan(cfg, 20, users, lambda s: 1.0, ap, lambda s: s.name)
+    assert plan[0][0] == 106 and plan[1][0] == plan[2][0] == 52             # the slow user gets the big RU
+    off = Config(phy="he", ofdma=True, ofdma_ru_alloc="demand", mcs=7)      # no rate adaptation: bytes only
+    assert ofdma._plan(off, 20, users, lambda s: 1.0, _ArfAp(off, {}), lambda s: s.name) == ofdma.demand_plan(20, [1.0] * 3)
+# Rashed-Step 26.D-11-03-2026-end
