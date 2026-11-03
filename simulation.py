@@ -976,7 +976,9 @@ def run_simulation(
     # Rashed-Step 20.D-10-08-2026-start
     # Rashed-Step 20.E-10-09-2026-start
     if getattr(config, "ofdma", False) and wifi_aps:
-        o = {k: sum(ap.ofdma_stats[k] for ap in wifi_aps) for k in wifi_aps[0].ofdma_stats if k != "ru_tones"}
+        # Rashed-Step 26.C-11-03-2026: union of keys, .get - MU-MIMO counters are created lazily per AP
+        o = {k: sum(ap.ofdma_stats.get(k, 0) for ap in wifi_aps)
+             for k in dict.fromkeys(k for ap in wifi_aps for k in ap.ofdma_stats) if k != "ru_tones"}
         ru = {}
         for ap in wifi_aps:
             for t, c in ap.ofdma_stats["ru_tones"].items():
@@ -987,6 +989,9 @@ def run_simulation(
         print(f'Wifi OFDMA UL trigger rounds: {o["ul_rounds"]}, mean users per round: {(o["ul_users"] / o["ul_rounds"]) if o["ul_rounds"] else None}, '
               f'MPDU success ratio: {(o["ul_mpdus_ok"] / o["ul_mpdus"]) if o["ul_mpdus"] else None}')
         print(f'Wifi OFDMA RU sizes used (tones: count): {dict(sorted(ru.items()))}')
+        if getattr(config, "mu_mimo_users", 1) > 1:  # Rashed-Step 26.C-11-03-2026
+            print(f'Wifi OFDMA MU-MIMO groups: {o.get("mu_groups", 0)}, rounds that fell back to plain OFDMA: '
+                  f'{o.get("mu_fallbacks", 0)}')
         # Rashed-Step 21.C-10-11-2026-start
         if getattr(config, "mu_edca", None) is not None:
             own = sum(getattr(s, "succeeded_transmissions", 0) + getattr(s, "failed_transmissions", 0) for s in wifi_stas)

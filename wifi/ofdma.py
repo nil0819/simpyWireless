@@ -104,6 +104,44 @@ def rate_feedback(ap, sta, ok, sinr, key=None):  # 26.B: key
         ap.rate_adapt_record_result(sta.name if key is None else key, ok, measured_sinr_db=sinr)
 
 
+def mu_key(sta):
+    """Rashed-Step 26.C: the AP's rate state for a STA served by MU-MIMO
+    (one stream, a share of the RU power, the other users' residual) -
+    separate from its plain-OFDMA / single-user downlink state."""
+    return sta.name + "/MU"
+
+
+MU_PROBE_EVERY = 10   # 26.C: every 10th MU-capable round tries MU-MIMO anyway, so its rates keep learning
+
+
+def peek_mcs(ap, key):
+    """The MCS the rate state for key would use now, without making a
+    choice (no Minstrel pending, no look-around draw)."""
+    ms = getattr(ap, "_minstrel", None)
+    if ms is not None:
+        st = ms.links.get(key)
+        if st is None:
+            return ms.start
+        return st["pending"] if st["pending"] is not None else st["best"]
+    st = ap.link_rate_state.get(key)
+    return st["mcs"] if st is not None else ap.config.mcs
+
+
+def mu_worth_it(ap, users, groups, ofdma_plan, width, gi, nss):
+    """Rashed-Step 26.C: MU-MIMO or plain OFDMA for this round - the larger
+    estimated sum rate, each user at its current MCS for that mode (MU:
+    one stream on the group's RU; OFDMA: all streams on its own RU); every
+    MU_PROBE_EVERY-th round MU-MIMO regardless."""
+    ap._mu_rounds = getattr(ap, "_mu_rounds", 0) + 1
+    if ap._mu_rounds % MU_PROBE_EVERY == 0:
+        return True
+    rus = ru_plan(width, len(groups))
+    mu_tones = [ru[0] for ru, k in zip(rus, groups) for _ in range(k)]
+    mu = sum(ru_rate_mbps(t, peek_mcs(ap, mu_key(s)), gi, 1) for s, t in zip(users, mu_tones))
+    of = sum(ru_rate_mbps(t, peek_mcs(ap, s.name), gi, nss) for s, (t, _, _) in zip(users, ofdma_plan))
+    return mu > of
+
+
 def ul_key(sta):
     """Rashed-Step 26.B: the AP's rate state for a STA's trigger-based
     uplink - the AP picks that MCS (it is in the Trigger frame) from the
@@ -324,6 +362,13 @@ def downlink_round(ap, users, ac=None):  # 21.C: ac = the EDCA access category t
     # Rashed-Step 25.C-10-20-2026-start
     nss = wifi_phy.n_ss(cfg)
     groups = mu_groups(width, len(users), cfg.mu_mimo_users) if getattr(cfg, "mu_mimo_users", 1) > 1 else None
+    # Rashed-Step 26.C-11-03-2026-start: with rate adaptation, MU-MIMO only when it beats plain OFDMA
+    if groups is not None and getattr(cfg, "rate_adapt_enabled", False):
+        ofdma_plan = _plan(cfg, width, users, lambda s: dl_demand(ap, s, ac))
+        if not mu_worth_it(ap, users, groups, ofdma_plan, width, gi, nss):
+            groups = None
+            ap.ofdma_stats["mu_fallbacks"] = ap.ofdma_stats.get("mu_fallbacks", 0) + 1
+    # Rashed-Step 26.C-11-03-2026-end
     if groups is None:
         plan = _plan(cfg, width, users, lambda s: dl_demand(ap, s, ac))  # 25.D: = ru_plan(width, len(users)) by default
         ks = [1] * len(users)
@@ -339,9 +384,10 @@ def downlink_round(ap, users, ac=None):  # 21.C: ac = the EDCA access category t
     # Rashed-Step 26.A-11-03-2026-start: per-user MCS / threshold (all = cfg.mcs without rate adaptation)
     adapt = getattr(cfg, "rate_adapt_enabled", False)
     if adapt:
+        keys_u = [mu_key(sta) if k > 1 else sta.name for sta, k in zip(users, ks)]   # 26.C: MU users' own state
         mcs_u = [user_mcs(ap, sta, mcs_floor(cfg, tones, nss if k == 1 else 1, gi, cfg.data_size,
-                                             wifi_ampdu.ppdu_budget_us(ap, ac) - pre))
-                 for sta, (tones, _, _), k in zip(users, plan, ks)]
+                                             wifi_ampdu.ppdu_budget_us(ap, ac) - pre), key=key)
+                 for sta, (tones, _, _), k, key in zip(users, plan, ks, keys_u)]
         req_u = [user_required_db(cfg, m, single_stream=k > 1) for m, k in zip(mcs_u, ks)]
     else:
         required = ap.required_sinr_db()
@@ -377,7 +423,7 @@ def downlink_round(ap, users, ac=None):  # 21.C: ac = the EDCA access category t
     results = []
     try:
         yield env.timeout(dur)
-        for tx, (sta, tones, off, bw, per, mpdus, used), k, req in zip(txs, per_user, ks, req_u):
+        for i, (tx, (sta, tones, off, bw, per, mpdus, used), k, req) in enumerate(zip(txs, per_user, ks, req_u)):
             # Rashed-Step 25.C-10-20-2026-start
             mu = (k, cfg.mu_mimo_residual_db) if k > 1 else None
             sinr_h = mu_sinr_db(ch.sinr_db(tx, window=(start, start + pre)), *(mu or (1, 0.0)))
@@ -385,7 +431,7 @@ def downlink_round(ap, users, ac=None):  # 21.C: ac = the EDCA access category t
             results.append(_decode_user(ch, em, tx, start + pre, mpdus, per, req, header_ok, mu))
             # Rashed-Step 25.C-10-20-2026-end
             if adapt and mpdus:                                       # Rashed-Step 26.A-11-03-2026
-                rate_feedback(ap, sta, bool(results[-1]), sinr_h)
+                rate_feedback(ap, sta, bool(results[-1]), sinr_h, key=keys_u[i])   # 26.C: per-mode state
         yield env.timeout(0)
     finally:
         # Rashed-Step pre_21.E-10-11-2026-start

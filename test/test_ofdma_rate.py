@@ -110,3 +110,63 @@ def test_cli_uplink_rates_adapt():
     # STAs send at full power on small RUs: MCS 7 is conservative, per-user rates go higher
     assert _ul(["--wifi-rate-adapt"]) > 1.05 * _ul([])
 # Rashed-Step 26.B-11-03-2026-end
+
+
+# Rashed-Step 26.C-11-03-2026-start
+class _ArfAp:
+    def __init__(self, cfg, states):
+        self.config, self.link_rate_state, self._minstrel = cfg, states, None
+
+
+def test_peek_has_no_side_effects():
+    ms = Minstrel({m: 10.0 * (m + 1) for m in range(8)}, 5, seed=1)
+    ap = _ArfAp(Config(phy="he", ofdma=True, mcs=5), {})
+    ap._minstrel = ms
+    assert ofdma.peek_mcs(ap, "A/MU") == 5 and ms.links == {}         # no state created, no draw
+    arf = _ArfAp(Config(phy="he", ofdma=True, mcs=7), {"A": {"mcs": 3}})
+    assert ofdma.peek_mcs(arf, "A") == 3 and ofdma.peek_mcs(arf, "B") == 7
+    assert ofdma.mu_key(_Sta("A")) == "A/MU"
+
+
+def test_mu_worth_it_compares_sum_rates_and_probes():
+    users = [_Sta(n) for n in "ABCD"]
+    cfg = Config(phy="he", channel_width_mhz=80, ofdma=True, spatial_streams=2, mu_mimo_users=2, mcs=7)
+    plan = ofdma.ru_plan(80, 4)                                       # 4 x 242 tones
+    good = _ArfAp(cfg, {f"{n}/MU": {"mcs": 7} for n in "ABCD"} | {n: {"mcs": 2} for n in "ABCD"})
+    bad = _ArfAp(cfg, {f"{n}/MU": {"mcs": 0} for n in "ABCD"} | {n: {"mcs": 7} for n in "ABCD"})
+    picks = [ofdma.mu_worth_it(bad, users, [2, 2], plan, 80, 800, 2) for _ in range(20)]
+    assert picks.count(True) == 2 and picks[9] and picks[19]          # only the every-10th probes
+    assert all(ofdma.mu_worth_it(good, users, [2, 2], plan, 80, 800, 2) for _ in range(5))
+
+
+def _mu(args):
+    from singleRun import single_run
+    base = ["--seed", "1", "-t", "0.5", "-r", "1", "--ap-number", "1", "--gnb-number", "0", "--ap-pos", "0,0",
+            "--area-w", "20", "--area-h", "20", "--wifi-stas-per-ap", "8", "--wifi-phy", "he",
+            "--wifi-channel-width", "80", "-m", "7", "--wifi-ofdma", "--wifi-ampdu", "64",
+            "--wifi-spatial-streams", "4", "--wifi-mu-mimo-users", "4", "--wifi-rate-adapt"]
+    with CliRunner().isolated_filesystem():
+        r = CliRunner().invoke(single_run, base + args)
+    assert r.exit_code == 0, r.output[-600:]
+    line = [l for l in r.output.splitlines() if l.startswith("Wifi OFDMA MU-MIMO groups:")][0]
+    groups = int(line.split("groups: ")[1].split(",")[0])
+    return groups, int(line.rsplit(": ", 1)[1])
+
+
+def test_cli_mu_only_when_it_pays():
+    g_bad, fb_bad = _mu(["--wifi-mu-mimo-residual-db", "-20"])        # leaky precoding: mostly plain OFDMA
+    g_good, fb_good = _mu(["--wifi-mu-mimo-residual-db", "-40"])      # clean precoding: MU-MIMO
+    assert fb_bad > g_bad and fb_good == 0 and g_good > 0
+
+
+def test_ofdma_report_with_lazy_mu_counters():
+    # two APs, only some rounds group: the OFDMA report must not need every AP to have every counter
+    from singleRun import single_run
+    args = ["--seed", "2", "-t", "0.3", "-r", "1", "--ap-number", "2", "--gnb-number", "0", "--wifi-stas-per-ap", "3",
+            "--wifi-phy", "he", "--wifi-channel-width", "40", "--wifi-ofdma", "--wifi-spatial-streams", "2",
+            "--wifi-mu-mimo-users", "2", "--wifi-rate-adapt"]
+    with CliRunner().isolated_filesystem():
+        r = CliRunner().invoke(single_run, args)
+    assert r.exit_code == 0, r.output[-600:]
+    assert "Wifi OFDMA MU-MIMO groups:" in r.output
+# Rashed-Step 26.C-11-03-2026-end
