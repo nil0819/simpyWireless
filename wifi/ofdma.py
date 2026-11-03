@@ -16,7 +16,9 @@ RUs in the channel - the 802.11ax RU layout):
 Each RU is its own transmission (ActiveTx) at its own centre frequency and
 bandwidth, so users don't interfere with each other and other networks see
 the right in-band power (Step pre_20.C0). Rate per RU = data subcarriers x
-bits/subcarrier x code rate / (12.8 us + GI) at the configured MCS. In the
+bits/subcarrier x code rate / (12.8 us + GI) at the configured MCS - or,
+with --wifi-rate-adapt (Step 26.A), at each user's own ARF / Minstrel MCS,
+no lower than what fits one MPDU in the PPDU on its RU. In the
 downlink the AP's power is split over the RUs by tone count (constant power
 spectral density); in the uplink each STA transmits at its own power on
 its RU.
@@ -54,6 +56,52 @@ from wifi import phy as wifi_phy
 # Rashed-Step 21.C-10-11-2026-start
 from dataclasses import dataclass
 from wifi import ampdu as wifi_ampdu
+from common.common_phy import mcs_sinr_threshold_db  # Rashed-Step 26.A-11-03-2026
+
+
+# Rashed-Step 26.A-11-03-2026-start
+def user_mcs(ap, sta, floor=None):
+    """Per-user MCS (Step 26.A): with rate adaptation on, the AP's own
+    ARF / Minstrel state for that STA (the same per-STA state single-user
+    transmissions use, keyed by the STA name); else the configured MCS
+    for every user, as before. floor: the lowest MCS at which one MPDU
+    still fits in the PPDU on this user's RU - below it nothing could be
+    sent (MCS 0 on a 26-tone RU: 0.9 Mbps, a 1500-byte MPDU ~14 ms), no
+    result would come back and the rate would never recover. Minstrel is
+    told the MCS actually used."""
+    if not getattr(ap.config, "rate_adapt_enabled", False):
+        return ap.config.mcs
+    m = ap.current_mcs_for_link(sta.name)
+    if floor is not None and m < floor:
+        m = floor
+        if getattr(ap, "_minstrel", None) is not None:
+            ap._minstrel.override(sta.name, m)
+    return m
+
+
+def mcs_floor(cfg, tones, nss, gi, payload_bytes, budget_us):
+    """Lowest MCS whose rate on this RU fits one MPDU of payload_bytes in
+    budget_us (the highest MCS when none does)."""
+    table = sorted(wifi_phy.sinr_table(cfg))
+    for m in table:
+        if (Times.mac_overhead + payload_bytes * 8 + 32) / ru_rate_mbps(tones, m, gi, nss) <= budget_us:
+            return m
+    return table[-1]
+
+
+def user_required_db(cfg, mcs, single_stream=False):
+    """Decode threshold at mcs for this PHY (+ 10 log10(N) for N spatial
+    streams unless the user gets one stream, as in MU-MIMO)."""
+    req = mcs_sinr_threshold_db(wifi_phy.sinr_table(cfg), mcs)
+    return req - wifi_phy.ss_penalty_db(wifi_phy.n_ss(cfg)) if single_stream else req
+
+
+def rate_feedback(ap, sta, ok, sinr):
+    """One result per user per PPDU, as single-user A-MPDUs (wifi/ampdu.py):
+    ok = at least one of its MPDUs decoded, with the preamble SINR."""
+    if getattr(ap.config, "rate_adapt_enabled", False):
+        ap.rate_adapt_record_result(sta.name, ok, measured_sinr_db=sinr)
+# Rashed-Step 26.A-11-03-2026-end
 
 
 @dataclass
@@ -280,11 +328,22 @@ def downlink_round(ap, users, ac=None):  # 21.C: ac = the EDCA access category t
     # Rashed-Step 25.C-10-20-2026-end
     budget = wifi_ampdu.ppdu_budget_us(ap, ac) - pre   # 21.C: TXOP limit of the AC (= aPPDUMaxTime without EDCA)
     em = getattr(cfg, "error_model", None)
-    required = ap.required_sinr_db()
-    required_mu = required - wifi_phy.ss_penalty_db(nss)   # 25.C: an MU-MIMO user gets one stream
+    # Rashed-Step 26.A-11-03-2026-start: per-user MCS / threshold (all = cfg.mcs without rate adaptation)
+    adapt = getattr(cfg, "rate_adapt_enabled", False)
+    if adapt:
+        mcs_u = [user_mcs(ap, sta, mcs_floor(cfg, tones, nss if k == 1 else 1, gi, cfg.data_size,
+                                             wifi_ampdu.ppdu_budget_us(ap, ac) - pre))
+                 for sta, (tones, _, _), k in zip(users, plan, ks)]
+        req_u = [user_required_db(cfg, m, single_stream=k > 1) for m, k in zip(mcs_u, ks)]
+    else:
+        required = ap.required_sinr_db()
+        required_mu = required - wifi_phy.ss_penalty_db(nss)   # 25.C: an MU-MIMO user gets one stream
+        mcs_u = [mcs] * len(users)
+        req_u = [required_mu if k > 1 else required for k in ks]
+    # Rashed-Step 26.A-11-03-2026-end
     per_user = []
-    for sta, (tones, off, bw), k in zip(users, plan, ks):
-        rate = ru_rate_mbps(tones, mcs, gi, nss if k == 1 else 1)  # 25.C
+    for sta, (tones, off, bw), k, m_u in zip(users, plan, ks, mcs_u):
+        rate = ru_rate_mbps(tones, m_u, gi, nss if k == 1 else 1)  # 25.C; 26.A: the user's MCS
         per = (lambda r: (lambda payload: (Times.mac_overhead + payload * 8 + 32) / r))(rate)
         q = ap.ofdma_dl[sta.name]
         # Rashed-Step 21.C-10-11-2026-start
@@ -310,13 +369,15 @@ def downlink_round(ap, users, ac=None):  # 21.C: ac = the EDCA access category t
     results = []
     try:
         yield env.timeout(dur)
-        for tx, (sta, tones, off, bw, per, mpdus, used), k in zip(txs, per_user, ks):
+        for tx, (sta, tones, off, bw, per, mpdus, used), k, req in zip(txs, per_user, ks, req_u):
             # Rashed-Step 25.C-10-20-2026-start
             mu = (k, cfg.mu_mimo_residual_db) if k > 1 else None
-            req = required_mu if k > 1 else required
-            header_ok = decode_ok(em, mu_sinr_db(ch.sinr_db(tx, window=(start, start + pre)), *(mu or (1, 0.0))), req)
+            sinr_h = mu_sinr_db(ch.sinr_db(tx, window=(start, start + pre)), *(mu or (1, 0.0)))
+            header_ok = decode_ok(em, sinr_h, req)
             results.append(_decode_user(ch, em, tx, start + pre, mpdus, per, req, header_ok, mu))
             # Rashed-Step 25.C-10-20-2026-end
+            if adapt and mpdus:                                       # Rashed-Step 26.A-11-03-2026
+                rate_feedback(ap, sta, bool(results[-1]), sinr_h)
         yield env.timeout(0)
     finally:
         # Rashed-Step pre_21.E-10-11-2026-start

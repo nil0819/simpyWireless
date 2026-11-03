@@ -101,6 +101,14 @@ class Minstrel:
             st["pending"] = mcs
         return st["pending"]
 
+    def override(self, key: str, mcs: int) -> None:
+        """The pending choice could not be used as such (Rashed-Step 26.A:
+        OFDMA raised it to the lowest MCS that fits an MPDU on the RU) -
+        the result then counts for the MCS actually sent."""
+        st = self._link(key)
+        if st["pending"] is not None:
+            st["pending"] = mcs
+
     def record(self, key: str, success: bool, now: float) -> None:
         st = self._link(key)
         if st["pending"] is not None:
