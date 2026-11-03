@@ -82,3 +82,31 @@ def test_cli_far_users_get_served():
     assert _wifi_line(["--wifi-rate-adapt"]) > 1.0
     assert _wifi_line(["--wifi-rate-adapt", "--wifi-rate-algo", "minstrel"]) > 0.5
 # Rashed-Step 26.A-11-03-2026-end
+
+
+# Rashed-Step 26.B-11-03-2026-start
+def test_uplink_has_its_own_state():
+    ap = _Ap(Config(phy="he", ofdma=True, mcs=7, rate_adapt_enabled=True), {"A": 2, "A/UL": 9})
+    sta = _Sta("A")
+    assert ofdma.ul_key(sta) == "A/UL"
+    assert ofdma.user_mcs(ap, sta) == 2 and ofdma.user_mcs(ap, sta, key=ofdma.ul_key(sta)) == 9
+    ofdma.rate_feedback(ap, sta, True, 30.0, key=ofdma.ul_key(sta))
+    assert ap.fed == [("A/UL", True, 30.0)]
+
+
+def _ul(args):
+    from singleRun import single_run
+    base = ["--seed", "1", "-t", "0.5", "-r", "1", "--ap-number", "1", "--gnb-number", "0", "--ap-pos", "50,50",
+            "--area-w", "100", "--area-h", "100", "--sta-radius", "40", "--wifi-stas-per-ap", "6",
+            "--wifi-phy", "he", "-m", "7", "--wifi-ofdma", "--wifi-ampdu", "32",
+            "--wifi-sta-uplink-enabled", "--wifi-ul-ofdma"]
+    with CliRunner().isolated_filesystem():
+        r = CliRunner().invoke(single_run, base + args)
+    assert r.exit_code == 0, r.output[-600:]
+    return float([l for l in r.output.splitlines() if l.startswith("Wifi uplink packet throughput (Mbps)")][0].split(":")[1])
+
+
+def test_cli_uplink_rates_adapt():
+    # STAs send at full power on small RUs: MCS 7 is conservative, per-user rates go higher
+    assert _ul(["--wifi-rate-adapt"]) > 1.05 * _ul([])
+# Rashed-Step 26.B-11-03-2026-end

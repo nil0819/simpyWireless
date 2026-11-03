@@ -60,7 +60,7 @@ from common.common_phy import mcs_sinr_threshold_db  # Rashed-Step 26.A-11-03-20
 
 
 # Rashed-Step 26.A-11-03-2026-start
-def user_mcs(ap, sta, floor=None):
+def user_mcs(ap, sta, floor=None, key=None):  # 26.B: key (default the STA name = downlink)
     """Per-user MCS (Step 26.A): with rate adaptation on, the AP's own
     ARF / Minstrel state for that STA (the same per-STA state single-user
     transmissions use, keyed by the STA name); else the configured MCS
@@ -71,11 +71,12 @@ def user_mcs(ap, sta, floor=None):
     told the MCS actually used."""
     if not getattr(ap.config, "rate_adapt_enabled", False):
         return ap.config.mcs
-    m = ap.current_mcs_for_link(sta.name)
+    key = sta.name if key is None else key
+    m = ap.current_mcs_for_link(key)
     if floor is not None and m < floor:
         m = floor
         if getattr(ap, "_minstrel", None) is not None:
-            ap._minstrel.override(sta.name, m)
+            ap._minstrel.override(key, m)
     return m
 
 
@@ -96,11 +97,18 @@ def user_required_db(cfg, mcs, single_stream=False):
     return req - wifi_phy.ss_penalty_db(wifi_phy.n_ss(cfg)) if single_stream else req
 
 
-def rate_feedback(ap, sta, ok, sinr):
+def rate_feedback(ap, sta, ok, sinr, key=None):  # 26.B: key
     """One result per user per PPDU, as single-user A-MPDUs (wifi/ampdu.py):
     ok = at least one of its MPDUs decoded, with the preamble SINR."""
     if getattr(ap.config, "rate_adapt_enabled", False):
-        ap.rate_adapt_record_result(sta.name, ok, measured_sinr_db=sinr)
+        ap.rate_adapt_record_result(sta.name if key is None else key, ok, measured_sinr_db=sinr)
+
+
+def ul_key(sta):
+    """Rashed-Step 26.B: the AP's rate state for a STA's trigger-based
+    uplink - the AP picks that MCS (it is in the Trigger frame) from the
+    uplink results it sees, separate from its downlink state to the STA."""
+    return sta.name + "/UL"
 # Rashed-Step 26.A-11-03-2026-end
 
 
@@ -434,7 +442,8 @@ def uplink_round(ap, users):
     cfg, env, ch = ap.config, ap.env, ap.channel
     width, gi, mcs = cfg.channel_width_mhz, cfg.guard_interval_ns, cfg.mcs
     em = getattr(cfg, "error_model", None)
-    required = ap.required_sinr_db()
+    adapt = getattr(cfg, "rate_adapt_enabled", False)        # Rashed-Step 26.B-11-03-2026
+    required = None if adapt else ap.required_sinr_db()
     ctrl = wifi_phy.ctrl_rate_mbps(cfg)
     n = len(users)
     # Trigger frame (non-HT)
@@ -454,9 +463,17 @@ def uplink_round(ap, users):
     plan = _plan(cfg, width, users, ul_demand)                   # 25.D: = ru_plan(width, n) by default
     nss = wifi_phy.n_ss(cfg)                                     # 25.C
     budget = cfg.ampdu_max_ppdu_us - TB_PREAMBLE_US - wifi_phy.ltf_extra_us("he", nss, gi)
+    # Rashed-Step 26.B-11-03-2026-start: the MCS the AP asks each STA for (cfg.mcs without rate adaptation)
+    if adapt:
+        mcs_u = [user_mcs(ap, sta, mcs_floor(cfg, tones, nss, gi, cfg.data_size, budget), key=ul_key(sta))
+                 for sta, (tones, _, _) in zip(users, plan)]
+        req_u = [user_required_db(cfg, m) for m in mcs_u]
+    else:
+        mcs_u, req_u = [mcs] * n, [required] * n
+    # Rashed-Step 26.B-11-03-2026-end
     per_user = []
-    for sta, (tones, off, bw) in zip(users, plan):
-        rate = ru_rate_mbps(tones, mcs, gi, nss)                 # 25.C
+    for sta, (tones, off, bw), m_u in zip(users, plan, mcs_u):
+        rate = ru_rate_mbps(tones, m_u, gi, nss)                 # 25.C; 26.B: the user's MCS
         per = (lambda r: (lambda payload: (Times.mac_overhead + payload * 8 + 32) / r))(rate)
         mpdus, used = _fill(sta._take_queued_packet, sta._put_back_packet, per, budget, cfg.ampdu_max_mpdus,
                             sta.ofdma_ul_pending)
@@ -483,12 +500,15 @@ def uplink_round(ap, users):
     results = []
     try:
         yield env.timeout(dur)
-        for (sta, tx), (_, tones, off, bw, per, mpdus, used) in zip(txs, per_user):
+        for (sta, tx), (_, tones, off, bw, per, mpdus, used), req in zip(txs, per_user, req_u):
             if tx is None:
                 results.append([])
                 continue
-            header_ok = decode_ok(em, ch.sinr_db(tx, window=(start, start + TB_PREAMBLE_US)), required)
-            results.append(_decode_user(ch, em, tx, start + TB_PREAMBLE_US, mpdus, per, required, header_ok))
+            sinr_h = ch.sinr_db(tx, window=(start, start + TB_PREAMBLE_US))
+            header_ok = decode_ok(em, sinr_h, req)
+            results.append(_decode_user(ch, em, tx, start + TB_PREAMBLE_US, mpdus, per, req, header_ok))
+            if adapt:                                             # Rashed-Step 26.B-11-03-2026
+                rate_feedback(ap, sta, bool(results[-1]), sinr_h, key=ul_key(sta))
         yield env.timeout(0)
     finally:
         for (sta, tx), res in zip(txs, results + [[]] * (len(txs) - len(results))):
